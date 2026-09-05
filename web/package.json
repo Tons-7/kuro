@@ -1,0 +1,43 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsgo --noEmit",
+    "build": "tsgo --noEmit && vite build",
+    "lint": "oxlint src",
+    "verify": "node scripts/e2e.mjs",
+    "preview": "vite preview",
+    "e2e:player": "node scripts/run-player-check.mjs",
+    "e2e:features": "node scripts/run-player-check.mjs features-check.mjs",
+    "e2e:recovery": "node scripts/run-player-check.mjs recovery-check.mjs",
+    "e2e:thumbs": "node scripts/run-player-check.mjs thumbs-check.mjs",
+    "e2e:prefs": "node scripts/run-player-check.mjs prefs-scope-check.mjs",
+    "test": "node scripts/run-player-check.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "anime4k-webgpu": "^1.0.0",
+    "hls.js": "^1.6.17",
+    "jassub": "^2.5.14",
+    "motion": "^13.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "@vitejs/plugin-react": "^6.0.4",
+    "oxlint": "^1.75.0",
+    "playwright": "^1.62.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  }
+}
