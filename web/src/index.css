@@ -1,0 +1,211 @@
+@import 'tailwindcss';
+
+/* Dark, but not black: a true black background makes poster art look like it
+   is floating and crushes the shadows the cards rely on for depth. */
+@theme {
+  --color-base-950: #0b0d12;
+  --color-base-900: #11141b;
+  --color-base-850: #161a23;
+  --color-base-800: #1c212c;
+  --color-base-750: #232937;
+  --color-base-700: #2c3342;
+  /* 600 and 500 carry the small print — a character's role, an episode count, a
+     release filename — and against this background they measured 1.96:1 and
+     3.27:1, which is text you have to go looking for. Raised to 3:1 and 4.5:1
+     against the card surface, keeping the same blue-grey. Anything below 600 is
+     a surface rather than a colour to read, so the rest of the scale stands. */
+  --color-base-600: #55627e;
+  --color-base-500: #717e97;
+  --color-base-400: #8891a5;
+  --color-base-300: #b3bbcc;
+  --color-base-200: #d6dbe6;
+  --color-base-100: #eef1f6;
+
+  --color-accent-400: #8b7cff;
+  --color-accent-500: #6f5cff;
+  --color-accent-600: #5a45f0;
+
+  /* Episode kinds. Filler and recap have to be told apart at a glance in a
+     list of fifty rows, so they get hue rather than a label alone. */
+  --color-filler: #f59e0b;
+  --color-recap: #ef4444;
+
+  --radius-card: 0.75rem;
+
+  /* Depth comes from shadow rather than borders. A hairline on every surface
+     draws a grid over the page and flattens it; a shadow lets art sit on top
+     of the background instead of being fenced off from it. */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.7);
+  --shadow-lift: 0 4px 12px rgb(0 0 0 / 0.45), 0 24px 48px -20px rgb(0 0 0 / 0.85);
+  --shadow-panel: 0 1px 3px rgb(0 0 0 / 0.35), 0 12px 32px -16px rgb(0 0 0 / 0.6);
+
+  --animate-fade-in: fade-in 0.15s ease-out;
+  --animate-rise: rise 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-enter: enter 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-shimmer: shimmer 1.6s linear infinite;
+
+  --ease-out-quint: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Opacity only. A page that slides in also moves everything already on screen
+   — the header, the tabs — which reads as the layout shaking rather than as a
+   page arriving. Menus and popovers can move because nothing else does. */
+@keyframes enter {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A sweep rather than a pulse: a pulsing block reads as a broken image, a
+   moving highlight reads as loading. */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    /* Reserve the scrollbar's width whether or not the page needs one. A short
+       page has no scrollbar and a long one does, so navigating between them
+       shifted everything sideways. */
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-base-950 text-base-100 antialiased;
+    font-family:
+      'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+      'Helvetica Neue', system-ui, sans-serif;
+    /* Playback controls and card overlays are tap targets; the highlight flash
+       on mobile makes every press look like a mis-tap. */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* clip, not hidden: overflow-x:hidden makes body a scroll container of its
+     own, which on top of the gutter above produced two scrollbars. clip stops
+     a rail from bouncing the page sideways without creating one. */
+  body,
+  #root {
+    @apply min-h-dvh;
+    overflow-x: clip;
+  }
+
+  /* A faint accent glow at the top so the page has an atmosphere rather than
+     being a flat slab; fixed, so it stays put as the page scrolls. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: radial-gradient(70% 45% at 50% -8%, rgb(111 92 255 / 0.16), transparent 65%);
+  }
+
+  ::selection {
+    @apply bg-accent-500/40;
+  }
+}
+
+@layer components {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-base-700) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--color-base-700);
+    border-radius: 999px;
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A section heading should be readable at a glance from across the row it
+     labels; tiny uppercase grey is legible only if you go looking for it. */
+  .section-title {
+    @apply flex items-center gap-2.5 text-lg font-semibold tracking-tight text-base-100;
+  }
+
+  .section-title::before {
+    content: '';
+    @apply h-4 w-1 shrink-0 rounded-full bg-accent-500;
+  }
+
+  /* One card surface for every panel and list, so pages share a depth. */
+  .surface {
+    @apply rounded-xl bg-base-900/70 shadow-panel ring-1 ring-white/[0.06];
+  }
+
+  .page-title {
+    @apply text-2xl font-semibold tracking-tight text-white;
+  }
+
+  /* Every anime carries its own dominant colour. Using it as a wash behind the
+     art ties a page to what is on it, instead of the same grey everywhere. */
+  .tinted {
+    background-image: radial-gradient(
+      120% 80% at 50% 0%,
+      var(--tint, transparent) 0%,
+      transparent 70%
+    );
+  }
+}
+
+/* Respect the system setting rather than animating regardless: the rotating
+   hero and the card lifts are exactly what this preference is about. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Rounded corners belong to the player sitting in a page. Filling a screen or a
+   floating window, they only shave slivers off the picture — and the rounding
+   is keyed to viewport width, which says nothing about either state. */
+:fullscreen,
+:fullscreen video,
+:fullscreen canvas {
+  border-radius: 0;
+}

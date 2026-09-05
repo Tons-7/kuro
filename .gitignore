@@ -1,0 +1,28 @@
+# sidecar binaries — fetched by scripts/fetch-deps.ps1, ~550 MB
+/bin/
+
+# media cache and runtime state
+/cache/
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# build output
+/kuro.exe
+/e2e-seed.exe
+/dist/
+/web/dist/
+/web/node_modules/
+
+# local config with the AniList client secret
+config.toml
+.env
+.env.local
+
+# runtime logs
+*.log
+*.err
+*.pid
+
+.idea
