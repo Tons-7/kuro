@@ -372,6 +372,8 @@ func (r *Result) applyLadder(rel parse.Release, prefs Preferences) bool {
 
 // Ranks by the user's ladder, not absolute pixel count, so a resolution they
 // never asked for (2160p is usually an upscale) can't outrank one they did.
+// The lowest tier naming the resolution: an unlabelled release sits under every
+// labelled one at that resolution, above the next resolution down.
 func resolutionRank(res string, prefs Preferences) float64 {
 	res = strings.ToLower(res)
 	if res == "" {
@@ -379,14 +381,18 @@ func resolutionRank(res string, prefs Preferences) float64 {
 	}
 
 	var seen int
+	var rank float64
 	for i, tier := range prefs.Ladder {
 		if tier.Resolution == "" {
 			continue
 		}
 		seen++
 		if tier.Resolution == res {
-			return float64(len(prefs.Ladder) - i)
+			rank = float64(len(prefs.Ladder) - i)
 		}
+	}
+	if rank > 0 {
+		return rank
 	}
 	if seen == 0 {
 		return 0

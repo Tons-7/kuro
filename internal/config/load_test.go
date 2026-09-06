@@ -87,6 +87,31 @@ client_secret = "shh"
 	}
 }
 
+// A root under the temp directory is what an exe opened from inside a zip gets,
+// and the page has to be able to say so.
+func TestLoadKnowsATemporaryRoot(t *testing.T) {
+	dir := inTempDir(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Temporary() {
+		t.Errorf("%s is under %s and should count as temporary", dir, os.TempDir())
+	}
+	if cfg.ConfigPath() != filepath.Join(dir, "config.toml") {
+		t.Errorf("config path = %q", cfg.ConfigPath())
+	}
+	if cfg.StrayConfig() != "" {
+		t.Errorf("no stray file, got %q", cfg.StrayConfig())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StrayConfig() != filepath.Join(dir, "config.toml.txt") {
+		t.Errorf("stray = %q", cfg.StrayConfig())
+	}
+}
+
 // Sites are the user's to name: a fresh config has none, a written one keeps
 // its order.
 func TestLoadReadsIndexersInOrder(t *testing.T) {

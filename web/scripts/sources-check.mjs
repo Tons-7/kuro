@@ -50,8 +50,8 @@ const until = async (fn, ms = 10000) => {
   }
   return false
 }
-const api = async (p) => {
-  const res = await fetch(URL + p)
+const api = async (p, init) => {
+  const res = await fetch(URL + p, { ...init, headers: { 'content-type': 'application/json' } })
   let body
   try {
     body = await res.json()
@@ -203,16 +203,37 @@ try {
     check(results.length > 0, 'configured: the search finds releases', `${results.length} results`)
     check(/kashin|calamity|42\b/i.test(best) && !/soukoku|conflict/i.test(best), 'configured: the best is this cour\'s episode', best)
 
-    await page.goto(`${URL}/watch/${ANIME}/${EPISODE}`, { waitUntil: 'domcontentloaded' })
-    const video = page.locator('video')
-    const playing = await until(() => video.evaluate((v) => v.readyState >= 1).catch(() => false), 300000)
-    check(playing, 'configured: the episode streams from a real release',
-      await video.evaluate((v) => `ready=${v.readyState} t=${v.currentTime.toFixed(1)}`).catch(() => 'no video'))
-    check(
-      !(await page.getByText(/no release/i).first().isVisible().catch(() => false)),
-      'configured: no failure shown',
-    )
-    await page.screenshot({ path: join(shots, 'configured-watch.png') })
+    if (process.env.SKIP_STREAM !== '1') {
+      await page.goto(`${URL}/watch/${ANIME}/${EPISODE}`, { waitUntil: 'domcontentloaded' })
+      const video = page.locator('video')
+      const playing = await until(() => video.evaluate((v) => v.readyState >= 1).catch(() => false), 300000)
+      check(playing, 'configured: the episode streams from a real release',
+        await video.evaluate((v) => `ready=${v.readyState} t=${v.currentTime.toFixed(1)}`).catch(() => 'no video'))
+      check(
+        !(await page.getByText(/no release/i).first().isVisible().catch(() => false)),
+        'configured: no failure shown',
+      )
+      await page.screenshot({ path: join(shots, 'configured-watch.png') })
+    }
+    await stop()
+
+    // D: closed and opened again. Everything set up has to still be there.
+    stage('restarted: settings, library and sites survive')
+    await start('restart-prep')
+    // Not the default, or the check proves nothing.
+    await api('/api/prefs', { method: 'POST', body: JSON.stringify({ key: 'playback.autonext', value: 'true' }) })
+    const set = await api('/api/local/paths', { method: 'POST', body: JSON.stringify({ paths: [scratch] }) })
+    check(set.ok, 'restart-prep: a library folder is accepted', JSON.stringify(set.body))
+    await stop()
+    await start('restarted')
+    const prefs = (await api('/api/prefs')).body?.effective ?? {}
+    check(prefs['playback.autonext'] === 'true', 'restart: a changed setting is remembered', String(prefs['playback.autonext']))
+    const after = (await api('/api/setup')).body ?? {}
+    check((after.libraryPaths ?? []).includes(scratch), 'restart: the library folder is remembered', JSON.stringify(after.libraryPaths))
+    check(after.indexers === 2, 'restart: the sites are still configured')
+    await page.goto(`${URL}/`, { waitUntil: 'domcontentloaded' })
+    await sleep(3000)
+    check(!page.url().endsWith('/setup'), 'restart: not sent back to setup', page.url())
     await stop()
   }
 

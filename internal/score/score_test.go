@@ -244,6 +244,24 @@ func TestFullTierBeatsPartialCredit(t *testing.T) {
 	}
 }
 
+// An unlabelled source is worth less than any labelled tier at its resolution:
+// a bare "1080p HEVC" pack must not outrank a 1080p WEB-DL.
+func TestUnlabelledSourceSitsUnderEveryTierOfItsResolution(t *testing.T) {
+	prefs := DefaultPreferences()
+	prefs.HardwareTranscode = true
+	bare := candidate("[DKB] Show - 42 [1080p][HEVC x265 10bit][Multi-Subs]", 139, 1<<30)
+	web := candidate("[ToonsHub] Show S01E42 1080p HULU WEB-DL AAC2.0 H.264 (English-Sub)", 764, 1<<30)
+	sd := candidate("[Group] Show - 42 [720p][WEB][Multi-Subs]", 900, 1<<29)
+
+	ranked := Rank([]Candidate{bare, web, sd}, prefs)
+	if ranked[0].Torrent.Title != web.Torrent.Title {
+		t.Errorf("ranked first: %s, want the labelled WEB-DL", ranked[0].Torrent.Title)
+	}
+	if ranked[1].Torrent.Title != bare.Torrent.Title {
+		t.Errorf("ranked second: %s, want the unlabelled 1080p above 720p", ranked[1].Torrent.Title)
+	}
+}
+
 // 2160p anime is nearly always an upscale of a 1080p master, so a resolution
 // absent from the ladder must not outrank one that is on it.
 func TestResolutionRankFollowsTheLadder(t *testing.T) {

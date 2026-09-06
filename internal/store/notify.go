@@ -163,11 +163,14 @@ func (f Follow) Aired(episode int, now int64) bool {
 	return aired(episode, f.NextEpisode, f.NextAiringAt, now)
 }
 
-// aired reports whether an episode has broadcast: anything at or past the one
-// the catalogue is still waiting for has not.
+// aired reports whether an episode has broadcast. Only the next one's time is
+// known; anything past it airs later still, however stale the row.
 func aired(episode, nextEpisode int, airingAt, now int64) bool {
 	if nextEpisode <= 0 || airingAt <= 0 || episode < nextEpisode {
 		return true
+	}
+	if episode > nextEpisode {
+		return false
 	}
 	return airingAt <= now
 }

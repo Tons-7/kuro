@@ -87,10 +87,11 @@ function Header() {
     <header
       className={cx(
         'sticky top-0 z-40 transition-colors duration-200',
-        scrolled ? 'border-b border-base-800 bg-base-950/85 backdrop-blur-md' : 'bg-transparent',
+        scrolled ? 'bg-base-950/85 backdrop-blur-md' : 'bg-transparent',
       )}
     >
       <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-4 px-4 sm:px-6">
+        <BackButton />
         <Link to="/" className="group flex shrink-0 items-baseline gap-1">
           <span className="text-xl font-bold tracking-tight text-white">kuro</span>
           <span className="size-1.5 rounded-full bg-accent-500 transition-colors group-hover:bg-accent-400" />
@@ -118,6 +119,37 @@ function Header() {
         <Tabs />
       </nav>
     </header>
+  )
+}
+
+// The app window has no browser chrome, so back and forward live here.
+function BackButton() {
+  const navigate = useNavigate()
+  useLocation()
+  const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+  const arrow = (d: string) => (
+    <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
+  )
+  const cls =
+    'grid size-9 shrink-0 place-items-center rounded-full text-base-300 transition-colors hover:bg-base-800 hover:text-white disabled:opacity-25 disabled:hover:bg-transparent'
+  return (
+    <div className="flex shrink-0 items-center">
+      <button type="button" onClick={() => navigate(-1)} disabled={idx === 0} aria-label="Back" title="Back" className={cls}>
+        {arrow('M15 5l-7 7 7 7')}
+      </button>
+      <button
+        type="button"
+        onClick={() => navigate(1)}
+        disabled={idx >= window.history.length - 1}
+        aria-label="Forward"
+        title="Forward"
+        className={cls}
+      >
+        {arrow('M9 5l7 7-7 7')}
+      </button>
+    </div>
   )
 }
 

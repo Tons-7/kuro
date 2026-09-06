@@ -118,7 +118,50 @@ ${cues.join('\n')}
     '-metadata:s:s:0', 'language=eng', '-disposition:s:0', 'default',
     out,
   ])
+  makeMarkerEpisode()
   return out
+}
+
+// Episode 3: a subtitle track of 90 position-coded markers, cue i a block at
+// x = 40 + 12i shown from 2i to 2i+1.9s, so a check can read which cue is
+// painted and compare it with the clock.
+function makeMarkerEpisode() {
+  const cues = []
+  for (let i = 0; i < 90; i++) {
+    const at = (s) => new Date(s * 1000).toISOString().substr(11, 11).replace(/0$/, '')
+    cues.push(
+      `Dialogue: 0,${at(2 * i)},${at(2 * i + 1.9)},Default,,0,0,0,,{\\an7\\pos(${40 + 12 * i},300)\\p1}m 0 0 l 10 0 l 10 40 l 0 40{\\p0}`,
+    )
+  }
+  const assPath = join(scratch, 'markers.ass')
+  writeFileSync(
+    assPath,
+    `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+${cues.join('\n')}
+`,
+  )
+  run(ffmpeg, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    // Not a flat colour: the scanner ignores files under 20 MB as not episodes.
+    '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=180',
+    '-i', assPath,
+    '-map', '0:v', '-map', '1:a', '-map', '2:s',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48',
+    '-c:a', 'aac', '-c:s', 'ass',
+    '-metadata:s:s:0', 'language=eng', '-disposition:s:0', 'default',
+    join(lib, 'Kuro Test Show - 03.mkv'),
+  ])
 }
 
 async function waitForServer() {

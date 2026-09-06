@@ -262,6 +262,11 @@ export interface SetupState {
   ready: boolean
   /** Torrent sites in config.toml. None ship with kuro. */
   indexers: number
+  configPath: string
+  /** A config.toml.txt beside the real file, which kuro never reads. */
+  strayConfig?: string
+  /** Running from the OS temp folder, as an exe opened from inside a zip does. */
+  temporary: boolean
   binDir: string
   cacheDir: string
   cacheBudget: number

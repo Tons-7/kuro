@@ -218,9 +218,13 @@ func run(log *slog.Logger) error {
 	var sources indexer.Source
 	if len(sites) > 0 {
 		sources = indexer.Multi{Sources: sites}
+		log.Info("release sources", "sites", len(sites), "adult", len(adultSites), "config", cfg.ConfigPath())
 	} else {
 		log.Warn("no release sources configured; nothing can be searched",
-			"add", "[[indexer]] blocks to config.toml")
+			"add", "[[indexer]] blocks", "config", cfg.ConfigPath())
+	}
+	if stray := cfg.StrayConfig(); stray != "" {
+		log.Warn("config.toml.txt found; kuro reads only config.toml", "path", stray)
 	}
 	finder := library.NewFinder(st, sources, log)
 	if len(adultSites) > 0 {
@@ -307,8 +311,10 @@ func run(log *slog.Logger) error {
 		Name: "anilist-sync", Every: interval(st, "sync.poll_seconds", 15*time.Minute),
 		Run: func(ctx context.Context) error { _, err := sync.Run(ctx); return err },
 	})
+	// On start too: opened to watch tonight's episode, the bell should already
+	// know about it rather than half an hour later.
 	scheduler.Add(jobs.Job{
-		Name: "release-watch", Every: interval(st, "notify.poll_seconds", 30*time.Minute),
+		Name: "release-watch", Every: interval(st, "notify.poll_seconds", 30*time.Minute), OnStart: true,
 		Run: func(ctx context.Context) error { _, err := watcher.Poll(ctx); return err },
 	})
 	// Whole-database mirrors on long timers: the startup run is almost always

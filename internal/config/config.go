@@ -22,8 +22,26 @@ type Config struct {
 	Torrent  Torrent   `toml:"torrent"`
 	Indexers []Indexer `toml:"indexer"`
 
-	dataDir string
+	dataDir   string
+	root      string
+	temporary bool
 }
+
+func (c Config) ConfigPath() string { return filepath.Join(c.root, "config.toml") }
+
+// StrayConfig is a "config.toml.txt" beside the real file: what Notepad's
+// Save As produces, and what kuro will never read.
+func (c Config) StrayConfig() string {
+	p := c.ConfigPath() + ".txt"
+	if exists(p) {
+		return p
+	}
+	return ""
+}
+
+// Temporary reports a root inside the OS temp directory: an exe run from
+// inside a zip lands there, and nothing written beside it survives.
+func (c Config) Temporary() bool { return c.temporary }
 
 // Indexer is one torrent search site. None ship with kuro.
 type Indexer struct {
@@ -164,6 +182,7 @@ func Load() (Config, error) {
 	}
 
 	cfg.dataDir = dataDir()
+	cfg.root, cfg.temporary = root, underTemp(root)
 	for _, dir := range []string{cfg.dataDir, cfg.CacheDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Config{}, err
@@ -187,14 +206,23 @@ func rootDir() (string, error) {
 
 	// `go run` and `go test` build into the system temp directory, where a
 	// config file would vanish. Fall back to the working tree instead.
-	if tmp, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
-		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-			if rel, err := filepath.Rel(tmp, resolved); err == nil && !strings.HasPrefix(rel, "..") {
-				return os.Getwd()
-			}
-		}
+	if underTemp(dir) {
+		return os.Getwd()
 	}
 	return dir, nil
+}
+
+func underTemp(dir string) bool {
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(tmp, resolved)
+	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
 // os.UserConfigDir resolves to Roaming on Windows, where a live WAL database

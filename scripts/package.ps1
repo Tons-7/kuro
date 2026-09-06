@@ -62,9 +62,13 @@ New-Item -ItemType Directory -Force -Path $staging | Out-Null
 $readme = @"
 kuro $Version
 
-Run kuro.exe. It opens its own window and, on first run, asks to download the
-programs it needs — a torrent engine and ffmpeg, about 430 MB. Nothing is
-installed anywhere else: everything lives beside kuro.exe.
+Extract this zip to a folder of its own first. Run kuro.exe from there, never
+from inside the zip: Windows would put it in a temporary folder and throw your
+settings away every time it closes.
+
+kuro.exe opens its own window and, on first run, asks to download the programs
+it needs — a torrent engine and ffmpeg, about 430 MB. Nothing is installed
+anywhere else: everything lives beside kuro.exe.
 
 kuro ships with no torrent sites. The setup screen shows the block to add to
 config.toml (written beside kuro.exe on first run); add your sites and restart.
