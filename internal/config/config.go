@@ -113,10 +113,13 @@ func exists(path string) bool {
 
 // ResolveDataDir is where a data_dir setting points: AppData when empty,
 // otherwise the path, relative to the exe folder.
-func (c Config) ResolveDataDir(dir string) string {
+func (c Config) ResolveDataDir(dir string) string { return c.resolve(dir, dataDir()) }
+
+// resolve reads a folder setting; relative paths are beside the exe.
+func (c Config) resolve(dir, fallback string) string {
 	switch {
 	case dir == "":
-		return dataDir()
+		return fallback
 	case filepath.IsAbs(dir):
 		return filepath.Clean(dir)
 	}
@@ -208,12 +211,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	cfg := Config{
-		Addr:     "127.0.0.1:4321",
-		CacheDir: filepath.Join(root, "cache"),
-		BinDir:   filepath.Join(root, "bin"),
-		dataDir:  dataDir(),
-	}
+	cfg := Config{Addr: "127.0.0.1:4321", dataDir: dataDir()}
 	// The engine defaults this too, but on its own copy; anything reading the
 	// address from the config would otherwise see an empty string.
 	cfg.Torrent.APIAddr = DefaultTorrentAPIAddr
@@ -230,6 +228,8 @@ func Load() (Config, error) {
 
 	cfg.root, cfg.temporary = root, underTemp(root)
 	cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
+	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(root, "cache"))
+	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(root, "bin"))
 	for _, dir := range []string{cfg.dataDir, cfg.CacheDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Config{}, err
@@ -301,9 +301,14 @@ client_secret = ""
 client_id = ""
 client_secret = ""
 
-# Where the database and window profile live. Default: %LOCALAPPDATA%\kuro.
-# Change it from the Setup page, or here; relative paths are beside kuro.exe.
+# Folders. Relative paths are beside kuro.exe; quote Windows paths with single
+# quotes ('D:\kuro\cache'). Restart after editing.
+# data_dir: database and window profile (default %LOCALAPPDATA%\kuro)
+# cache_dir: downloaded episodes, transcodes, thumbnails, updates
+# bin_dir: rqbit, ffmpeg, mpv, shaders
 # data_dir = ""
+# cache_dir = "cache"
+# bin_dir = "bin"
 
 # Torrent search sites, one block each. kuro ships with none. type is the feed
 # format ("nyaa" or "tokyotosho"); adult = true marks a site searched only for

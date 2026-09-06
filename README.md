@@ -88,6 +88,15 @@ where a synced or moved folder cannot corrupt them. To keep kuro self-contained
 Where things go** (or set `data_dir` in `config.toml`). kuro copies the
 database there and uses it from the next start.
 
+Every folder kuro writes to is a `config.toml` setting; relative paths are
+beside the binary, and a restart applies them:
+
+```toml
+data_dir = "data"        # database and window profile
+cache_dir = "cache"      # downloaded episodes, transcodes, thumbnails, updates
+bin_dir = "bin"          # rqbit, ffmpeg, mpv, shaders
+```
+
 ### Watching on a phone or TV
 
 Set `addr = "0.0.0.0:4321"` in `config.toml` and restart. Anything off this

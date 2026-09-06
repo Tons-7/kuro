@@ -39,6 +39,29 @@ func TestLoadWritesTemplateOnFirstRun(t *testing.T) {
 	}
 }
 
+func TestFolderSettingsResolveAgainstTheExe(t *testing.T) {
+	dir := inTempDir(t)
+	abs := filepath.Join(dir, "elsewhere", "tools")
+	toml := "cache_dir = \"store\"\nbin_dir = '" + abs + "'\ndata_dir = \"data\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for got, want := range map[string]string{
+		cfg.CacheDir:  filepath.Join(dir, "store"),
+		cfg.BinDir:    abs,
+		cfg.DataDir(): filepath.Join(dir, "data"),
+	} {
+		if got != want {
+			t.Errorf("got %s, want %s", got, want)
+		}
+	}
+}
+
 func TestLoadCreatesDataAndCacheDirs(t *testing.T) {
 	inTempDir(t)
 

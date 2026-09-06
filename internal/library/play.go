@@ -17,8 +17,8 @@ import (
 	"kuro/internal/transcode"
 )
 
-// Player is the local playback backend. Only mpv implements it today; the
-// browser path needs no process, just the stream URL.
+// Player is a desktop playback backend (mpv, VLC); the browser path needs no
+// process, just the stream URL.
 type Player interface {
 	Play(ctx context.Context, opts player.Options) error
 	Events() <-chan player.Event
@@ -27,10 +27,12 @@ type Player interface {
 }
 
 type Playback struct {
-	store    *store.Store
-	finder   *Finder
-	torrent  *torrent.Client
-	player   Player
+	store   *store.Store
+	finder  *Finder
+	torrent *torrent.Client
+	player  Player
+	// Other desktop players, by the name playback.player chooses them with.
+	players  map[string]Player
 	sync     *Sync
 	enricher *Enricher
 	prefetch *Prefetcher
@@ -69,6 +71,37 @@ func (p *Playback) WithPrefetcher(f *Prefetcher) *Playback { p.prefetch = f; ret
 func (p *Playback) WithCache(c *Cache) *Playback           { p.cache = c; return p }
 func (p *Playback) WithProber(pr Prober) *Playback         { p.prober = pr; return p }
 func (p *Playback) WithRelations(r *Relations) *Playback   { p.relations = r; return p }
+func (p *Playback) WithPlayer(name string, pl Player) *Playback {
+	if p.players == nil {
+		p.players = map[string]Player{}
+	}
+	p.players[name] = pl
+	return p
+}
+
+// external is the desktop player the preference names, mpv unless another
+// was registered under that name.
+func (p *Playback) external(ctx context.Context) (string, Player) {
+	prefs, err := p.store.Prefs(ctx, 0)
+	if err == nil {
+		if name := prefs.String("playback.player"); name != "" {
+			if pl, ok := p.players[name]; ok {
+				return name, pl
+			}
+		}
+	}
+	return "mpv", p.player
+}
+
+// StopPlayers ends whatever desktop player is running.
+func (p *Playback) StopPlayers() {
+	if p.player != nil {
+		p.player.Stop()
+	}
+	for _, pl := range p.players {
+		pl.Stop()
+	}
+}
 
 type PlayRequest struct {
 	AnimeID  int
@@ -158,7 +191,6 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 		if err := p.launch(ctx, req, session); err != nil {
 			return nil, err
 		}
-		session.Player = "mpv"
 	}
 
 	p.prefetchAfter(req)
@@ -201,7 +233,6 @@ func (p *Playback) startLocal(ctx context.Context, req PlayRequest) (*Session, b
 		if err := p.launch(ctx, req, session); err != nil {
 			return nil, false, err
 		}
-		session.Player = "mpv"
 	}
 
 	p.log.Info("playing local file", "anime", req.AnimeID, "episode", req.Episode, "path", f.Path)
@@ -271,7 +302,6 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 		if err := p.launch(ctx, req, session); err != nil {
 			return nil, false
 		}
-		session.Player = "mpv"
 	}
 
 	p.log.Info("resumed the release already held", "anime", req.AnimeID, "episode", req.Episode)
@@ -758,10 +788,15 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		}
 	}
 
-	if err := p.player.Play(ctx, opts); err != nil {
-		return fmt.Errorf("start mpv: %w", err)
+	name, pl := p.external(ctx)
+	if pl == nil {
+		return fmt.Errorf("no desktop player")
 	}
-	go p.track(req.AnimeID, req.Episode, req.Season, p.trackGen.Add(1))
+	if err := pl.Play(ctx, opts); err != nil {
+		return fmt.Errorf("start %s: %w", name, err)
+	}
+	s.Player = name
+	go p.track(pl, req.AnimeID, req.Episode, req.Season, p.trackGen.Add(1))
 	return nil
 }
 
@@ -817,18 +852,18 @@ func hasKind(ranges []player.SkipRange, kind string) bool {
 	return false
 }
 
-func (p *Playback) track(animeID, episode, season int, gen uint64) {
+func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 	const saveEvery = 5 * time.Second
 
 	var last time.Time
-	var reported bool
+	var reported, positioned bool
 
 	// Media time actually played since the last save. mpv reports position ~1/s,
 	// so a jump larger than a few seconds is a seek and does not count.
 	var played, lastPos float64
 	const maxStep = 5.0
 
-	for ev := range p.player.Events() {
+	for ev := range pl.Events() {
 		// A newer episode owns the player now; this one must not write its
 		// positions under the previous episode's number.
 		if p.trackGen.Load() != gen {
@@ -836,6 +871,7 @@ func (p *Playback) track(animeID, episode, season int, gen uint64) {
 		}
 		switch ev.Kind {
 		case player.EventPosition:
+			positioned = true
 			if step := ev.Position - lastPos; step > 0 && step <= maxStep {
 				played += step
 			}
@@ -857,11 +893,15 @@ func (p *Playback) track(animeID, episode, season int, gen uint64) {
 			if ev.Position == 0 {
 				ev.Position = lastPos
 			}
-			// The threshold can be crossed within the last save interval before a
-			// quit, so the final save is the last chance to record it watched.
-			if p.save(animeID, episode, ev, played) && !reported {
-				reported = true
-				p.watched(animeID, episode)
+			// A player that never reported one must not save zero over the
+			// resume point either.
+			if positioned || ev.Position > 0 {
+				// The threshold can be crossed within the last save interval before
+				// a quit, so the final save is the last chance to record it watched.
+				if p.save(animeID, episode, ev, played) && !reported {
+					reported = true
+					p.watched(animeID, episode)
+				}
 			}
 			played = 0
 			// A short episode can end before any position event crosses the

@@ -119,6 +119,18 @@ function useFlag() {
   }
 }
 
+// Only when chosen and missing: kuro does not install VLC.
+function VLCNote() {
+  const f = useFlag()
+  const setup = useSetup()
+  if (f.value('playback.player') !== 'vlc' || !setup.data || setup.data.vlc) return null
+  return (
+    <p className="text-xs text-recap">
+      VLC was not found. Install it from videolan.org, or put it on PATH, then restart kuro.
+    </p>
+  )
+}
+
 function PlaybackTab() {
   const f = useFlag()
   if (f.loading) return <Skeleton className="h-64 w-full" />
@@ -144,15 +156,17 @@ function PlaybackTab() {
       </Section>
 
       <Section title="Player">
-        <Row label="Default player" hint="mpv is desktop only; a phone or TV needs the browser">
+        <Row label="Default player" hint="Desktop players only work on this machine; a phone or TV needs the browser. Progress, skips and auto-next work in all three.">
           <Select
             value={f.value('playback.player')}
             onChange={(v) => f.set('playback.player', v)}
           >
             <option value="browser">In browser</option>
             <option value="mpv">mpv</option>
+            <option value="vlc">VLC</option>
           </Select>
         </Row>
+        <VLCNote />
         <Row label="Anime4K upscaling" hint="Needs mpv, or a browser with WebGPU">
           <Switch on={f.get('playback.anime4k')} onChange={(v) => f.set('playback.anime4k', String(v))} />
         </Row>

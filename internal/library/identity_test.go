@@ -145,11 +145,11 @@ func TestSequelsNamedByTheirBaseTitleMatch(t *testing.T) {
 
 func TestBaseOf(t *testing.T) {
 	tests := map[string]string{
-		"Made in Abyss: Retsujitsu no Ougonkyou":            "Made in Abyss",
+		"Made in Abyss: Retsujitsu no Ougonkyou":              "Made in Abyss",
 		"Shingeki no Kyojin: The Final Season - Kanketsu-hen": "Shingeki no Kyojin",
-		"Bleach - Sennen Kessen-hen":                         "Bleach",
-		"Monster":                                            "Monster",
-		": odd":                                              ": odd",
+		"Bleach - Sennen Kessen-hen":                          "Bleach",
+		"Monster":                                             "Monster",
+		": odd":                                               ": odd",
 	}
 	for in, want := range tests {
 		if got := baseOf(in); got != want {

@@ -268,7 +268,8 @@ func run(log *slog.Logger) error {
 		WithEnricher(enricher).
 		WithPrefetcher(prefetcher).
 		WithProber(transcode.NewProber(cfg.Tool("ffprobe"))).
-		WithRelations(relations)
+		WithRelations(relations).
+		WithPlayer("vlc", player.NewVLC(player.FindVLC(), log))
 
 	// Downloads run one at a time: parallel ones share the connection, so each
 	// finishes later and the awaited one finishes last.

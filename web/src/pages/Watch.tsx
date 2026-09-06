@@ -35,7 +35,7 @@ export function Watch() {
 
   const effective = prefs.data?.effective ?? {}
   const flag = (key: string) => effective[key] === 'true'
-  const external = effective['playback.player'] === 'mpv'
+  const external = effective['playback.player'] !== 'browser' && !!effective['playback.player']
 
   // Write where the shown value came from, or a per-show override keeps
   // winning and the switch looks stuck.
@@ -78,7 +78,7 @@ export function Watch() {
     gcTime: 0,
   })
 
-  const playingInMpv = play.data?.player === 'mpv'
+  const playingInMpv = !!play.data && play.data.player !== 'browser'
 
   // mpv opens the file itself and reports over its own IPC socket, so there is
   // nothing here to transcode for.
@@ -258,7 +258,7 @@ export function Watch() {
               ) : play.isPending && !streamed ? (
                 <Searching />
               ) : playingInMpv ? (
-                <MpvPanel title={play.data?.title ?? showTitle} episode={ep} />
+                <MpvPanel title={play.data?.title ?? showTitle} episode={ep} player={play.data?.player ?? 'mpv'} />
               ) : (
                 <Player
                   stream={stream.data}
@@ -606,13 +606,13 @@ function NoRelease({
  * mpv plays in its own window and reports over IPC, so this page renders only a
  * way to stop it and a reminder of which player is in charge.
  */
-function MpvPanel({ title, episode }: { title: string; episode: number }) {
+function MpvPanel({ title, episode, player }: { title: string; episode: number; player: string }) {
   const stop = useMutation({ mutationFn: () => api.post('/api/stop') })
 
   return (
     <div className="grid aspect-video place-items-center bg-base-900 p-6 text-center">
       <div>
-        <p className="text-sm font-medium text-base-100">Playing in mpv</p>
+        <p className="text-sm font-medium text-base-100">Playing in {player === 'vlc' ? 'VLC' : 'mpv'}</p>
         <p className="mt-1 max-w-md truncate text-xs text-base-500">
           Episode {episode} · {title}
         </p>

@@ -265,6 +265,8 @@ export interface SetupState {
   configPath: string
   /** Database and window profile: AppData, or a data folder beside the exe. */
   dataDir: string
+  /** Where VLC was found, or empty. */
+  vlc?: string
   /** A config.toml.txt beside the real file, which kuro never reads. */
   strayConfig?: string
   /** Running from the OS temp folder, as an exe opened from inside a zip does. */

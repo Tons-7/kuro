@@ -4,24 +4,20 @@ import { api } from '../lib/api'
 import { bytes } from '../lib/format'
 import type { SetupState } from '../lib/queries'
 
-/** Every folder kuro uses, and the one the user can move. */
+/** Every folder kuro uses and its config.toml key. */
 export function WhereThingsGo({ setup }: { setup: SetupState }) {
   const libraryPaths = setup.libraryPaths ?? []
   return (
     <>
       <dl className="space-y-1.5 text-sm text-base-400">
-        <div className="flex justify-between gap-4">
-          <dt>Episode cache</dt>
-          <dd className="truncate text-base-300" title={setup.cacheDir}>
-            {setup.cacheDir} · up to {bytes(setup.cacheBudget)}
-          </dd>
-        </div>
-        <div className="flex justify-between gap-4">
-          <dt>History and settings</dt>
-          <dd className="truncate text-base-300" title={setup.dataDir}>
-            {setup.dataDir}
-          </dd>
-        </div>
+        <Folder label="History and settings" path={setup.dataDir} setting="data_dir" />
+        <Folder
+          label="Episode cache"
+          path={setup.cacheDir}
+          setting="cache_dir"
+          note={`up to ${bytes(setup.cacheBudget)}`}
+        />
+        <Folder label="Programs" path={setup.binDir} setting="bin_dir" />
         <div className="flex justify-between gap-4">
           <dt>Your own files</dt>
           <dd className="text-base-300">
@@ -31,8 +27,36 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
           </dd>
         </div>
       </dl>
+      <p className="mt-2 text-xs text-base-500">
+        Each folder is a setting in <code className="text-base-400">{setup.configPath}</code>; edit it
+        and restart.
+      </p>
       <DataDirPicker current={setup.dataDir} />
     </>
+  )
+}
+
+function Folder({
+  label,
+  path,
+  setting,
+  note,
+}: {
+  label: string
+  path: string
+  setting: string
+  note?: string
+}) {
+  return (
+    <div className="flex justify-between gap-4">
+      <dt>
+        <span>{label}</span> <code className="text-xs text-base-500">{setting}</code>
+      </dt>
+      <dd className="truncate text-base-300" title={path}>
+        {path}
+        {note ? ` · ${note}` : ''}
+      </dd>
+    </div>
   )
 }
 

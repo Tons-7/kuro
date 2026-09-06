@@ -75,7 +75,7 @@ var (
 	Anime4KSizes = []string{"S", "M", "L", "VL", "UL"}
 	AudioPrefs   = []string{"sub", "dub", "either"}
 	AutoDeletes  = []string{"off", "now", "keep2"}
-	Players      = []string{"mpv", "browser"}
+	Players      = []string{"mpv", "vlc", "browser"}
 	TitleModes   = []string{TitleRomaji, TitleEnglish}
 )
 

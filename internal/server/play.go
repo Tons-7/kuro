@@ -92,7 +92,9 @@ func (s *Server) sweepCache(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stopPlayback(w http.ResponseWriter, r *http.Request) {
-	if s.player != nil {
+	if s.playback != nil {
+		s.playback.StopPlayers()
+	} else if s.player != nil {
 		s.player.Stop()
 	}
 

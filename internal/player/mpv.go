@@ -233,18 +233,24 @@ func (m *MPV) onPosition(pos, duration float64) {
 	if !opts.AutoSkip {
 		return
 	}
-	for _, r := range opts.SkipRanges {
-		// Skipping to r.End would re-trigger on the boundary; remembering the
-		// last skip keeps a seek from looping.
+	if r, ok := skipTarget(opts.SkipRanges, pos, last); ok {
+		m.mu.Lock()
+		m.lastSkip = r.End
+		m.mu.Unlock()
+		m.log.Info("auto-skip", "kind", r.Kind, "to", r.End)
+		m.Seek(r.End)
+	}
+}
+
+// skipTarget is the range pos falls in, unless it was the last one skipped:
+// landing on r.End would otherwise re-trigger and loop.
+func skipTarget(ranges []SkipRange, pos, last float64) (SkipRange, bool) {
+	for _, r := range ranges {
 		if r.Contains(pos) && last != r.End {
-			m.mu.Lock()
-			m.lastSkip = r.End
-			m.mu.Unlock()
-			m.log.Info("auto-skip", "kind", r.Kind, "to", r.End)
-			m.Seek(r.End)
-			return
+			return r, true
 		}
 	}
+	return SkipRange{}, false
 }
 
 func (m *MPV) Seek(seconds float64) error {

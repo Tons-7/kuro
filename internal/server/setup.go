@@ -13,6 +13,7 @@ import (
 
 	"kuro/internal/config"
 	"kuro/internal/deps"
+	"kuro/internal/player"
 )
 
 // Component is one external program kuro shells out to. None are bundled:
@@ -118,6 +119,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		"configPath":   s.cfg.ConfigPath(),
 		"dataDir":      s.cfg.DataDir(),
 		"strayConfig":  s.cfg.StrayConfig(),
+		"vlc":          player.FindVLC(),
 		"temporary":    s.cfg.Temporary(),
 		"binDir":       s.cfg.BinDir,
 		"cacheDir":     s.cfg.CacheDir,

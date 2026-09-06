@@ -2,7 +2,9 @@ package deps
 
 import (
 	"archive/zip"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,8 +22,7 @@ func TestKnownComponents(t *testing.T) {
 	}
 }
 
-// Git and MSYS both put GNU tar ahead of Windows' own on PATH, and GNU tar
-// cannot read 7-Zip — which is what ffmpeg and mpv ship in.
+// Git and MSYS both put GNU tar ahead of Windows' own on PATH.
 func TestSystemTarIsNotWhateverIsOnPath(t *testing.T) {
 	got := systemTar()
 	if runtime.GOOS != "windows" {
@@ -87,6 +88,43 @@ func TestUnzipWritesNestedEntries(t *testing.T) {
 }
 
 // An archive naming ../ paths would otherwise write anywhere on disk.
+// Windows 10's tar has no LZMA codec; the fixture comes from this machine's bsdtar.
+func TestUn7zReadsLZMAWithoutTar(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("bsdtar writes the 7z fixture")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(filepath.Join(src, "mpv-x86_64", "doc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(src, "mpv-x86_64", "mpv.exe"), []byte("MZ mpv"), 0o755)
+	os.WriteFile(filepath.Join(src, "mpv-x86_64", "doc", "manual.txt"), []byte("manual"), 0o644)
+
+	cmd := exec.Command(systemTar(), "--format", "7zip", "--options", "7zip:compression=lzma1", "-cf", "mpv.7z", "-C", "src", "mpv-x86_64")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fixture: %v: %s", err, out)
+	}
+
+	dest := filepath.Join(dir, "out")
+	if err := extract(context.Background(), filepath.Join(dir, "mpv.7z"), dest); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		filepath.Join(dest, "mpv-x86_64", "mpv.exe"):           "MZ mpv",
+		filepath.Join(dest, "mpv-x86_64", "doc", "manual.txt"): "manual",
+	} {
+		got, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestUnzipRefusesToEscapeTheTarget(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "evil.zip")

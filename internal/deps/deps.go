@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bodgit/sevenzip"
 )
 
 type Release struct {
@@ -376,14 +378,16 @@ func (c *counter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Windows ships bsdtar, which reads 7-Zip: needing a separate 7-Zip install to
-// unpack ffmpeg would defeat the point of fetching it here.
+// zip and 7z unpack in Go: Windows 10's tar has no LZMA codec.
 func extract(ctx context.Context, archive, dest string) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-	if strings.EqualFold(filepath.Ext(archive), ".zip") {
+	switch strings.ToLower(filepath.Ext(archive)) {
+	case ".zip":
 		return unzip(archive, dest)
+	case ".7z":
+		return un7z(archive, dest)
 	}
 
 	// A colon means host:path to tar, so an absolute Windows path reads as a
@@ -403,8 +407,8 @@ func extract(ctx context.Context, archive, dest string) error {
 	return nil
 }
 
-// systemTar names Windows' own bsdtar rather than trusting PATH: Git/MSYS put
-// GNU tar first, and GNU tar cannot read the 7-Zip that ffmpeg and mpv ship in.
+// systemTar names Windows' own bsdtar rather than trusting PATH, where Git/MSYS
+// put GNU tar first.
 func systemTar() string {
 	if runtime.GOOS != "windows" {
 		return "tar"
@@ -451,7 +455,39 @@ func unzip(archive, dest string) error {
 	return nil
 }
 
-func writeEntry(f *zip.File, target string) error {
+func un7z(archive, dest string) error {
+	r, err := sevenzip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		target := filepath.Join(dest, filepath.FromSlash(f.Name))
+		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
+			return fmt.Errorf("archive entry escapes the target directory: %s", f.Name)
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := writeEntry(f, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type entry interface {
+	Open() (io.ReadCloser, error)
+}
+
+func writeEntry(f entry, target string) error {
 	src, err := f.Open()
 	if err != nil {
 		return err
