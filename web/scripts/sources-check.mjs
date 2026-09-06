@@ -141,6 +141,12 @@ async function expectUnconfigured(page, label) {
 }
 
 try {
+  // Another kuro on the port would answer in place of the scratch one, and
+  // every write below would land in it.
+  if (await fetch(`${URL}/api/setup`).then((r) => r.ok).catch(() => false)) {
+    throw new Error(`something already answers on ${URL}; close it or set PORT`)
+  }
+
   stage(`scratch instance at ${scratch}`)
   rmSync(scratch, { recursive: true, force: true })
   for (const d of [scratch, root, appdata, shots]) mkdirSync(d, { recursive: true })
@@ -160,20 +166,27 @@ try {
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 
-  // A: unzipped for the first time. No config at all.
-  stage('fresh download: no config.toml')
-  await start('fresh')
-  check(existsSync(configPath), 'fresh: config.toml is written beside the binary')
-  const written = readFileSync(configPath, 'utf8')
-  check(written.includes('[[indexer]]') && written.includes('type = "nyaa"'), 'fresh: the written config shows the block to fill in')
-  check(!/url\s*=\s*"https?:\/\/[^"]+"/.test(written), 'fresh: and names no site')
-  await expectUnconfigured(page, 'fresh')
-  await stop()
+  // A: unzipped for the first time. No config at all, so the default port:
+  // skipped when the run is on another one.
+  if (PORT === '4321') {
+    stage('fresh download: no config.toml')
+    await start('fresh')
+    check(existsSync(configPath), 'fresh: config.toml is written beside the binary')
+    const written = readFileSync(configPath, 'utf8')
+    check(written.includes('[[indexer]]') && written.includes('type = "nyaa"'), 'fresh: the written config shows the block to fill in')
+    check(!/url\s*=\s*"https?:\/\/[^"]+"/.test(written), 'fresh: and names no site')
+    await expectUnconfigured(page, 'fresh')
+    await stop()
+  } else {
+    console.log(`\nSKIP fresh download: needs the default port, running on ${PORT}`)
+  }
 
   // B: an existing install updating. Its config predates sites; its database
   // is the one from before.
   stage('existing install: old config, existing database')
-  const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n`
+  // Its own engine port: a kuro already running here would otherwise lend its
+  // rqbit to the test.
+  const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n\n[torrent]\napi_addr = "127.0.0.1:3031"\n`
   writeFileSync(configPath, old)
   await start('update')
   check(readFileSync(configPath, 'utf8') === old, "update: the user's config is left untouched")
@@ -234,6 +247,19 @@ try {
     await page.goto(`${URL}/`, { waitUntil: 'domcontentloaded' })
     await sleep(3000)
     check(!page.url().endsWith('/setup'), 'restart: not sent back to setup', page.url())
+
+    // E: the database moved beside the exe from the Setup page, restarted.
+    stage('data folder chosen, restarted')
+    const moved = await api('/api/setup/data-dir', { method: 'POST', body: JSON.stringify({ path: 'data' }) })
+    check(moved.ok && moved.body?.copied === true, 'move: the database is copied to the chosen folder', JSON.stringify(moved.body))
+    await stop()
+    await start('moved')
+    const home = (await api('/api/setup')).body ?? {}
+    check(home.dataDir === join(root, 'data'), 'move: kuro now runs from the chosen folder', home.dataDir)
+    check(existsSync(join(root, 'data', 'kuro.db')), 'move: kuro.db is in it')
+    const kept = (await api('/api/prefs')).body?.effective ?? {}
+    check(kept['playback.autonext'] === 'true', 'move: history and settings came along', String(kept['playback.autonext']))
+    check((home.libraryPaths ?? []).includes(scratch), 'move: the library folder came along')
     await stop()
   }
 

@@ -186,6 +186,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/trackers", s.setTracker)
 	mux.HandleFunc("GET /api/setup", s.setup)
 	mux.HandleFunc("POST /api/setup/install/{name}", s.installComponent)
+	mux.HandleFunc("POST /api/setup/data-dir", s.setDataDir)
 	mux.HandleFunc("GET /api/update", s.updateStatus)
 	mux.HandleFunc("POST /api/update/check", s.updateCheck)
 	mux.HandleFunc("POST /api/update/apply", s.updateApply)

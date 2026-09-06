@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { bytes, cx } from '../lib/format'
+import { cx } from '../lib/format'
 import { useSetup } from '../lib/queries'
 import { ComponentState } from '../components/ComponentState'
+import { WhereThingsGo } from '../components/WhereThingsGo'
 import { Badge, ErrorState, Skeleton } from '../components/ui'
 
 /**
@@ -35,7 +36,6 @@ export function SetupPage() {
   // Defended, not trusted: this is where a first run lands, and an empty list
   // arriving as null took the whole app down to a blank screen.
   const components = data.components ?? []
-  const libraryPaths = data.libraryPaths ?? []
   const missing = components.filter((c) => !c.present)
   // Only ones kuro can actually download drive the bulk button; a manual one
   // shows its package-manager command on its own row.
@@ -181,22 +181,7 @@ export function SetupPage() {
 
       <section className="surface p-4 text-sm">
         <h2 className="mb-2 font-semibold text-base-100">Where things go</h2>
-        <dl className="space-y-1.5 text-base-400">
-          <div className="flex justify-between gap-4">
-            <dt>Episode cache</dt>
-            <dd className="truncate text-base-300" title={data.cacheDir}>
-              {data.cacheDir} · up to {bytes(data.cacheBudget)}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt>Your own files</dt>
-            <dd className="text-base-300">
-              {libraryPaths.length > 0
-                ? `${libraryPaths.length} folder${libraryPaths.length === 1 ? '' : 's'}`
-                : 'none yet'}
-            </dd>
-          </div>
-        </dl>
+        <WhereThingsGo setup={data} />
         <p className="mt-3 text-xs text-base-500">
           Watched episodes stay cached so a rewatch is instant; the oldest are
           removed once the budget is reached. Both are adjustable in{' '}
@@ -209,3 +194,4 @@ export function SetupPage() {
     </div>
   )
 }
+

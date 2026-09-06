@@ -14,7 +14,7 @@ func stubWindow(t *testing.T, window func(context.Context, string) *launched) *a
 	var tabs atomic.Int32
 
 	oldWindow, oldTab := showWindow, showTab
-	showWindow = window
+	showWindow = func(ctx context.Context, url, _ string) *launched { return window(ctx, url) }
 	showTab = func(string) { tabs.Add(1) }
 	t.Cleanup(func() { showWindow, showTab = oldWindow, oldTab })
 

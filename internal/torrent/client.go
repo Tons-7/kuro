@@ -44,6 +44,19 @@ func (c *Client) WithEngine(e Engine) *Client {
 	return c
 }
 
+// setBase repoints the client, for an engine started on a fallback port.
+func (c *Client) setBase(base string) {
+	c.mu.Lock()
+	c.base = strings.TrimRight(base, "/")
+	c.mu.Unlock()
+}
+
+func (c *Client) url(path string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.base + path
+}
+
 // engineGone tells a dead engine from a caller that gave up or an engine that
 // is merely slow; only the first should trigger a restart.
 func engineGone(err error) bool {
@@ -177,7 +190,7 @@ func (c *Client) Add(ctx context.Context, magnet string, file File) (*Torrent, e
 
 func (c *Client) add(ctx context.Context, magnet string, params url.Values) (*Torrent, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.base+"/torrents?"+params.Encode(), strings.NewReader(magnet))
+		c.url("/torrents?"+params.Encode()), strings.NewReader(magnet))
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +220,7 @@ func (c *Client) Stats(ctx context.Context, id int) (Stats, error) {
 // StreamURL is handed straight to mpv or ffmpeg. rqbit serves it with Range
 // support and moves its priority window to wherever the player seeks.
 func (c *Client) StreamURL(id, fileIndex int) string {
-	return fmt.Sprintf("%s/torrents/%d/stream/%d", c.base, id, fileIndex)
+	return c.url(fmt.Sprintf("/torrents/%d/stream/%d", id, fileIndex))
 }
 
 // WaitLive blocks until the torrent leaves the initializing state; streaming
@@ -492,7 +505,7 @@ func (c *Client) Ready(ctx context.Context) bool {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(path), nil)
 	if err != nil {
 		return err
 	}
@@ -500,7 +513,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) post(ctx context.Context, path string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(path), nil)
 	if err != nil {
 		return err
 	}

@@ -520,7 +520,7 @@ func run(log *slog.Logger) error {
 	}
 
 	// Running the executable should show the app, not print a URL to paste.
-	window := &config.Window{}
+	window := &config.Window{Profile: cfg.ProfileDir()}
 	if windowWanted() {
 		go window.Open(ctx, cfg.LocalURL())
 	}

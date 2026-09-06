@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"kuro/internal/config"
@@ -114,6 +116,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		"ready":        ready,
 		"indexers":     len(s.cfg.Indexers),
 		"configPath":   s.cfg.ConfigPath(),
+		"dataDir":      s.cfg.DataDir(),
 		"strayConfig":  s.cfg.StrayConfig(),
 		"temporary":    s.cfg.Temporary(),
 		"binDir":       s.cfg.BinDir,
@@ -126,6 +129,73 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		body["progress"] = s.deps.Status()
 	}
 	send(w, http.StatusOK, body)
+}
+
+// setDataDir moves the database's home. The folder is written to config.toml
+// and the current database copied there, so a restart picks it up with
+// nothing lost. Empty means back to the default.
+func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&body); err != nil {
+		send(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	dir := s.cfg.ResolveDataDir(strings.TrimSpace(body.Path))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		send(w, http.StatusBadRequest, map[string]any{"error": "cannot create folder: " + err.Error()})
+		return
+	}
+	probe, err := os.CreateTemp(dir, ".kuro-*")
+	if err != nil {
+		send(w, http.StatusBadRequest, map[string]any{"error": "folder is not writable"})
+		return
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+
+	// Only into an empty home: a database already there is someone's history.
+	target := filepath.Join(dir, "kuro.db")
+	copied := false
+	if dir != s.cfg.DataDir() && !fileExists(target) && fileExists(s.cfg.DatabasePath()) {
+		if err := s.store.Checkpoint(r.Context()); err != nil {
+			s.fail(w, "checkpoint database", err)
+			return
+		}
+		if err := copyFile(s.cfg.DatabasePath(), target); err != nil {
+			s.fail(w, "copy database", err)
+			return
+		}
+		copied = true
+	}
+	if err := s.cfg.SetDataDir(strings.TrimSpace(body.Path)); err != nil {
+		s.fail(w, "write config", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": copied, "restart": true})
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func copyFile(from, to string) error {
+	in, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(to)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // Long enough that a failing lookup cannot be retried on every poll.

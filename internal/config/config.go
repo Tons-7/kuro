@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"os"
@@ -21,6 +22,9 @@ type Config struct {
 	MAL      MAL       `toml:"mal"`
 	Torrent  Torrent   `toml:"torrent"`
 	Indexers []Indexer `toml:"indexer"`
+	// Data is where the database and window profile go; empty means AppData.
+	// Relative to the exe folder.
+	Data string `toml:"data_dir"`
 
 	dataDir   string
 	root      string
@@ -107,8 +111,51 @@ func exists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// ResolveDataDir is where a data_dir setting points: AppData when empty,
+// otherwise the path, relative to the exe folder.
+func (c Config) ResolveDataDir(dir string) string {
+	switch {
+	case dir == "":
+		return dataDir()
+	case filepath.IsAbs(dir):
+		return filepath.Clean(dir)
+	}
+	return filepath.Join(c.root, dir)
+}
+
+// SetDataDir writes data_dir into config.toml, replacing the line if there is
+// one and otherwise placing it before the first table, where a top-level key
+// has to be. Takes effect on the next start.
+func (c Config) SetDataDir(dir string) error {
+	raw, err := os.ReadFile(c.ConfigPath())
+	if err != nil {
+		return err
+	}
+	line := fmt.Sprintf("data_dir = %q", filepath.ToSlash(dir))
+	lines := strings.Split(string(raw), "\n")
+	placed := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "data_dir") {
+			lines[i], placed = line, true
+			break
+		}
+	}
+	if !placed {
+		at := len(lines)
+		for i, l := range lines {
+			if strings.HasPrefix(strings.TrimSpace(l), "[") {
+				at = i
+				break
+			}
+		}
+		lines = append(lines[:at], append([]string{line, ""}, lines[at:]...)...)
+	}
+	return os.WriteFile(c.ConfigPath(), []byte(strings.Join(lines, "\n")), 0o600)
+}
+
 func (c Config) DataDir() string      { return c.dataDir }
 func (c Config) DatabasePath() string { return filepath.Join(c.dataDir, "kuro.db") }
+func (c Config) ProfileDir() string   { return filepath.Join(c.dataDir, "window") }
 func (c Config) Path(name string) string {
 	return filepath.Join(c.BinDir, name)
 }
@@ -181,8 +228,8 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	cfg.dataDir = dataDir()
 	cfg.root, cfg.temporary = root, underTemp(root)
+	cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
 	for _, dir := range []string{cfg.dataDir, cfg.CacheDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Config{}, err
@@ -253,6 +300,10 @@ client_secret = ""
 [mal]
 client_id = ""
 client_secret = ""
+
+# Where the database and window profile live. Default: %LOCALAPPDATA%\kuro.
+# Change it from the Setup page, or here; relative paths are beside kuro.exe.
+# data_dir = ""
 
 # Torrent search sites, one block each. kuro ships with none. type is the feed
 # format ("nyaa" or "tokyotosho"); adult = true marks a site searched only for

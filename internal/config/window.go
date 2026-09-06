@@ -11,8 +11,18 @@ import (
 // Window is the app window kuro opened. Closing it with kuro frees the browser
 // profile, so a relaunch takes it at once instead of racing a dying window.
 type Window struct {
+	// Profile is the browser profile directory; empty means AppData.
+	Profile string
+
 	mu  sync.Mutex
 	run *launched
+}
+
+func (w *Window) profile() string {
+	if w.Profile != "" {
+		return w.Profile
+	}
+	return appProfileDir()
 }
 
 type launched struct {
@@ -45,7 +55,7 @@ func (w *Window) Open(ctx context.Context, url string) {
 			case <-time.After(retryWindowAfter):
 			}
 		}
-		if l := showWindow(ctx, url); l != nil {
+		if l := showWindow(ctx, url, w.profile()); l != nil {
 			w.mu.Lock()
 			w.run = l
 			w.mu.Unlock()
@@ -83,7 +93,7 @@ var (
 // appWindow starts the chrome-less window and reports what stayed up; one that
 // cannot take the profile exits at once showing nothing. A hand-off to a window
 // another process owns is reported without a command to close.
-func appWindow(ctx context.Context, url string) *launched {
+func appWindow(ctx context.Context, url, profile string) *launched {
 	browser := findChromium()
 	if browser == "" {
 		return nil
@@ -93,7 +103,7 @@ func appWindow(ctx context.Context, url string) *launched {
 		"--app="+url,
 		// Without a profile of its own the window joins an existing
 		// browser session and app mode is ignored.
-		"--user-data-dir="+appProfileDir(),
+		"--user-data-dir="+profile,
 		// Fullscreen from the start (F11 leaves it); the size is the
 		// restore/fallback size if a browser ignores the flag.
 		"--start-fullscreen",

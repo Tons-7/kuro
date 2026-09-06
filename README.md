@@ -80,6 +80,14 @@ To publish a release: `./scripts/package.ps1 -Version 2026.08.27 -Publish`
 (needs `gh auth login` once). It attaches both zips and `SHA256SUMS.txt`,
 which the updater verifies before touching anything.
 
+### Everything in one folder
+
+Watch history, settings and logins live in `%LOCALAPPDATA%\kuro` by default,
+where a synced or moved folder cannot corrupt them. To keep kuro self-contained
+— a folder you can extract anywhere and run — pick a folder under **Setup →
+Where things go** (or set `data_dir` in `config.toml`). kuro copies the
+database there and uses it from the next start.
+
 ### Watching on a phone or TV
 
 Set `addr = "0.0.0.0:4321"` in `config.toml` and restart. Anything off this

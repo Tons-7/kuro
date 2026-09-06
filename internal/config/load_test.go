@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -109,6 +110,46 @@ func TestLoadKnowsATemporaryRoot(t *testing.T) {
 	}
 	if cfg.StrayConfig() != filepath.Join(dir, "config.toml.txt") {
 		t.Errorf("stray = %q", cfg.StrayConfig())
+	}
+}
+
+// data_dir moves the database out of AppData; written by SetDataDir above any
+// table, so it stays a top-level key.
+func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
+	dir := inTempDir(t)
+	cfg, err := Load()
+	if err != nil || cfg.DataDir() != filepath.Join(dir, "appdata", "kuro") {
+		t.Fatalf("default data dir = %q (%v)", cfg.DataDir(), err)
+	}
+
+	const withTable = "addr = \"127.0.0.1:4321\"\n\n[[indexer]]\ntype = \"nyaa\"\nurl = \"https://a.example\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(withTable), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetDataDir("data"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DataDir() != filepath.Join(dir, "data") || cfg.DatabasePath() != filepath.Join(dir, "data", "kuro.db") {
+		t.Errorf("data dir = %q", cfg.DataDir())
+	}
+	if len(cfg.Indexers) != 1 {
+		t.Errorf("the indexer table was disturbed: %+v", cfg.Indexers)
+	}
+
+	// Set again: the line is replaced, not duplicated; empty is the default.
+	if err := cfg.SetDataDir(""); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "config.toml"))
+	if strings.Count(string(raw), "data_dir") != 1 {
+		t.Errorf("data_dir written more than once:\n%s", raw)
+	}
+	if cfg, _ = Load(); cfg.DataDir() != filepath.Join(dir, "appdata", "kuro") {
+		t.Errorf("empty should mean the default, got %q", cfg.DataDir())
 	}
 }
 

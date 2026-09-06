@@ -6,6 +6,7 @@ import { bytes, cx, relativeTime } from '../lib/format'
 import { usePrefs, useSetPref, useSetup } from '../lib/queries'
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../components/Anime4KDialog'
 import { ComponentState } from '../components/ComponentState'
+import { WhereThingsGo } from '../components/WhereThingsGo'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../components/NotificationPanel'
 import { ProgressBar, Segmented, Select, Skeleton, Spinner } from '../components/ui'
 
@@ -1119,6 +1120,7 @@ function AboutTab() {
           <p className="text-sm text-base-400">Built from source.</p>
         </Section>
         <ComponentsSection />
+        <WhereSection />
       </div>
     )
   }
@@ -1175,7 +1177,20 @@ function AboutTab() {
       </Section>
 
       <ComponentsSection />
+      <WhereSection />
     </div>
+  )
+}
+
+// The folders kuro uses, and the one the user can move: only the first-run
+// nudge opens the setup page, so it has to be here too.
+function WhereSection() {
+  const setup = useSetup()
+  if (!setup.data) return null
+  return (
+    <Section title="Where things go" hint="Folders kuro reads and writes.">
+      <WhereThingsGo setup={setup.data} />
+    </Section>
   )
 }
 

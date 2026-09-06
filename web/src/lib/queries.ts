@@ -263,6 +263,8 @@ export interface SetupState {
   /** Torrent sites in config.toml. None ship with kuro. */
   indexers: number
   configPath: string
+  /** Database and window profile: AppData, or a data folder beside the exe. */
+  dataDir: string
   /** A config.toml.txt beside the real file, which kuro never reads. */
   strayConfig?: string
   /** Running from the OS temp folder, as an exe opened from inside a zip does. */

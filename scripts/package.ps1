@@ -77,6 +77,8 @@ Windows will warn that the app is unsigned. More info -> Run anyway.
 
 Your watch history, library and settings are kept in:
     %LOCALAPPDATA%\kuro
+To keep everything in this folder instead, pick a folder under Setup ->
+Where things go.
 
 Updates: kuro checks for a new version on launch and offers it under
 Settings -> About. Only kuro.exe is replaced; the downloaded programs, the

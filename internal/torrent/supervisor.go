@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -250,14 +251,30 @@ func (s *Supervisor) start() error {
 		return err
 	}
 
+	// Nothing rqbit-like answered, so a port in use is another program's.
+	// Falling back beats looping forever on a machine that has one.
+	if !s.Remote() {
+		if addr, moved := freeLoopback(s.opts.APIAddr); moved {
+			s.log.Warn("torrent engine port in use, using another", "wanted", s.opts.APIAddr, "using", addr)
+			s.opts.APIAddr = addr
+			s.probe.setBase(s.BaseURL())
+			if s.client != nil {
+				s.client.setBase(s.BaseURL())
+			}
+		}
+	}
+
 	cmd := exec.Command(binary, s.rqbitArgs(cacheDir)...)
 	cmd.Dir = filepath.Dir(binary)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	// Kept, not shown: a windowed app has no console, and what rqbit says
+	// when it cannot start is the whole diagnosis.
+	output := &tail{}
+	cmd.Stdout, cmd.Stderr = output, output
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start rqbit: %w", err)
 	}
-	s.log.Info("started rqbit", "pid", cmd.Process.Pid, "cache", s.opts.CacheDir)
+	s.log.Info("started rqbit", "pid", cmd.Process.Pid, "cache", s.opts.CacheDir, "api", s.opts.APIAddr)
 
 	exited := make(chan struct{})
 	go func() {
@@ -268,14 +285,17 @@ func (s *Supervisor) start() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
-	if err := waitReady(ctx, s.probe, startTimeout); err != nil {
+	if err := waitReady(ctx, s.probe, startTimeout, exited); err != nil {
+		if said := output.String(); said != "" {
+			err = fmt.Errorf("%w; rqbit said: %s", err, said)
+		}
 		s.stopLocked()
 		return err
 	}
 	return nil
 }
 
-func waitReady(ctx context.Context, c *Client, timeout time.Duration) error {
+func waitReady(ctx context.Context, c *Client, timeout time.Duration, exited <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
@@ -290,9 +310,53 @@ func waitReady(ctx context.Context, c *Client, timeout time.Duration) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-exited:
+			return errors.New("rqbit exited before answering")
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// freeLoopback reports another loopback port to use when addr cannot be bound.
+func freeLoopback(addr string) (string, bool) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, false
+	}
+	if l, err := net.Listen("tcp", addr); err == nil {
+		l.Close()
+		return addr, false
+	}
+	l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return addr, false
+	}
+	defer l.Close()
+	return l.Addr().String(), true
+}
+
+// tail keeps the last of what a process printed.
+type tail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const tailBytes = 2048
+
+func (t *tail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > tailBytes {
+		t.buf = t.buf[len(t.buf)-tailBytes:]
+	}
+	return len(p), nil
+}
+
+func (t *tail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.buf))
 }
 
 func (s *Supervisor) Stop() {

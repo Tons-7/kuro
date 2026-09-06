@@ -194,7 +194,7 @@ try {
   // refused for want of a site, and the first-run nudge stays off.
   writeFileSync(
     join(root, 'config.toml'),
-    `addr = "127.0.0.1:${PORT}"\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
+    `addr = "127.0.0.1:${PORT}"\n\n[torrent]\napi_addr = "127.0.0.1:3031"\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
   )
 
   if (!SKIP_BUILD) {

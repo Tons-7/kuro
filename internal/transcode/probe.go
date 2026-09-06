@@ -137,8 +137,10 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 		"-show_format",
 		"-show_streams",
 		"-show_chapters",
-		"-analyzeduration", "20M",
-		"-probesize", "20M",
+		// Everything read below is in the headers; twenty seconds' worth meant
+		// tens of megabytes, a minute through the engine on a fresh swarm.
+		"-analyzeduration", "2M",
+		"-probesize", "8M",
 		url,
 	)
 
