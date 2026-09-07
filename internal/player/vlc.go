@@ -18,7 +18,7 @@ import (
 )
 
 // VLC is the other desktop player, driven through its HTTP interface on a
-// loopback port: kuro polls the playhead the way it reads mpv's socket.
+// loopback port the way mpv is driven through its socket.
 type VLC struct {
 	binary string
 	log    *slog.Logger
@@ -43,6 +43,32 @@ func NewVLC(binary string, log *slog.Logger) *VLC {
 		http:   &http.Client{Timeout: 2 * time.Second},
 		events: make(chan Event),
 	}
+}
+
+// ResolveVLC is the VLC vlc_path names — its folder or its binary — else
+// wherever it is installed. Empty when the setting points at nothing.
+func ResolveVLC(configured string) string {
+	if configured == "" {
+		return FindVLC()
+	}
+	if info, err := os.Stat(configured); err == nil && info.IsDir() {
+		configured = insideInstall(configured)
+	}
+	if _, err := os.Stat(configured); err != nil {
+		return ""
+	}
+	return configured
+}
+
+func insideInstall(dir string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(dir, "Contents", "MacOS", "VLC")
+	}
+	name := "vlc"
+	if runtime.GOOS == "windows" {
+		name = "vlc.exe"
+	}
+	return filepath.Join(dir, name)
 }
 
 // FindVLC is where VLC is on this machine, or empty. PATH first, then the
@@ -70,9 +96,8 @@ func FindVLC() string {
 	return ""
 }
 
-// args: no --play-and-exit, since the end of the episode is read from the
-// interface; --no-one-instance keeps a VLC the user already has open from
-// swallowing the launch.
+// No --play-and-exit: the end is read from the interface. --no-one-instance
+// keeps a VLC the user already has open from swallowing the launch.
 func (v *VLC) args(opts Options, ctl control) []string {
 	args := []string{
 		"--no-one-instance",
@@ -123,8 +148,8 @@ func (v *VLC) Play(_ context.Context, opts Options) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start VLC: %w", err)
 	}
-	// Each instance gets its own channel: a tracker still draining the old
-	// one never sees the new episode's events.
+	// Own channel per instance: a tracker still draining the old one never
+	// sees the new episode's events.
 	events := make(chan Event, 8)
 	v.mu.Lock()
 	v.cmd, v.ctl, v.events = cmd, ctl, events
@@ -209,8 +234,7 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 				}
 			}
 		case "stopped":
-			// Stopped after playing: the episode ended, or the user pressed
-			// stop. Within a few seconds of the end counts as finished.
+			// Stopped after playing: the end, or the user's own stop.
 			if !started {
 				continue
 			}

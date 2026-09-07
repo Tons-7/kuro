@@ -59,7 +59,11 @@ for (const f of files) {
   await post('/api/local/assign', { id: f.id, animeId: ANIME, episode: f.path.includes('01') ? 1 : 2 })
 }
 
-check(!!(await api('/api/setup')).body?.vlc, 'VLC was found on this machine')
+const found = (await api('/api/setup')).body?.vlc
+check(!!found, 'VLC was found on this machine', found)
+if (process.env.KURO_VLC_EXPECT) {
+  check(found === process.env.KURO_VLC_EXPECT, 'vlc_path decided which VLC is used', found)
+}
 check(!vlcRunning(), 'no VLC running before the test')
 await post('/api/prefs', { key: 'playback.player', value: 'vlc' })
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })

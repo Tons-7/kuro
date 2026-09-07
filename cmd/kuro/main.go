@@ -260,6 +260,10 @@ func run(log *slog.Logger) error {
 	}
 
 	mpv := player.New(cfg.Tool("mpv"), "", log)
+	vlcBinary := player.ResolveVLC(cfg.VLCPath())
+	if want := cfg.VLCPath(); want != "" && vlcBinary == "" {
+		log.Warn("vlc_path does not exist", "path", want)
+	}
 	prefetcher := library.NewPrefetcher(st, finder, torrents, log)
 	relations := library.NewRelations(st, al, log)
 
@@ -269,7 +273,7 @@ func run(log *slog.Logger) error {
 		WithPrefetcher(prefetcher).
 		WithProber(transcode.NewProber(cfg.Tool("ffprobe"))).
 		WithRelations(relations).
-		WithPlayer("vlc", player.NewVLC(player.FindVLC(), log))
+		WithPlayer("vlc", player.NewVLC(vlcBinary, log))
 
 	// Downloads run one at a time: parallel ones share the connection, so each
 	// finishes later and the awaited one finishes last.

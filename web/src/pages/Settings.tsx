@@ -126,7 +126,8 @@ function VLCNote() {
   if (f.value('playback.player') !== 'vlc' || !setup.data || setup.data.vlc) return null
   return (
     <p className="text-xs text-recap">
-      VLC was not found. Install it from videolan.org, or put it on PATH, then restart kuro.
+      VLC was not found. Install it from videolan.org, or if it is installed somewhere unusual set{' '}
+      <code>vlc_path</code> in {setup.data.configPath} to its folder, then restart kuro.
     </p>
   )
 }

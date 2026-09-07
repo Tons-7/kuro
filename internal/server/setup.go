@@ -119,7 +119,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		"configPath":   s.cfg.ConfigPath(),
 		"dataDir":      s.cfg.DataDir(),
 		"strayConfig":  s.cfg.StrayConfig(),
-		"vlc":          player.FindVLC(),
+		"vlc":          player.ResolveVLC(s.cfg.VLCPath()),
 		"temporary":    s.cfg.Temporary(),
 		"binDir":       s.cfg.BinDir,
 		"cacheDir":     s.cfg.CacheDir,

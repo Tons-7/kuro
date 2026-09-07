@@ -25,6 +25,8 @@ type Config struct {
 	// Data is where the database and window profile go; empty means AppData.
 	// Relative to the exe folder.
 	Data string `toml:"data_dir"`
+	// VLC is the player's binary or install folder; empty means the usual places.
+	VLC string `toml:"vlc_path"`
 
 	dataDir   string
 	root      string
@@ -154,6 +156,14 @@ func (c Config) SetDataDir(dir string) error {
 		lines = append(lines[:at], append([]string{line, ""}, lines[at:]...)...)
 	}
 	return os.WriteFile(c.ConfigPath(), []byte(strings.Join(lines, "\n")), 0o600)
+}
+
+// VLCPath is the vlc_path setting, empty when unset.
+func (c Config) VLCPath() string {
+	if c.VLC == "" {
+		return ""
+	}
+	return c.resolve(c.VLC, "")
 }
 
 func (c Config) DataDir() string      { return c.dataDir }
@@ -309,6 +319,9 @@ client_secret = ""
 # data_dir = ""
 # cache_dir = "cache"
 # bin_dir = "bin"
+
+# VLC, when it is not on PATH or in Program Files: its folder or its binary.
+# vlc_path = 'E:\VideoLAN\VLC'
 
 # Torrent search sites, one block each. kuro ships with none. type is the feed
 # format ("nyaa" or "tokyotosho"); adult = true marks a site searched only for

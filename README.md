@@ -97,6 +97,13 @@ cache_dir = "cache"      # downloaded episodes, transcodes, thumbnails, updates
 bin_dir = "bin"          # rqbit, ffmpeg, mpv, shaders
 ```
 
+VLC is found on PATH or in Program Files. An install anywhere else — another
+drive, a portable copy — is named with `vlc_path`, its folder or its binary:
+
+```toml
+vlc_path = 'E:\VideoLAN\VLC'
+```
+
 ### Watching on a phone or TV
 
 Set `addr = "0.0.0.0:4321"` in `config.toml` and restart. Anything off this

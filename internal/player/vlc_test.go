@@ -4,6 +4,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -42,6 +45,31 @@ func TestVLCRefusesToStartWhenMissing(t *testing.T) {
 	}
 	if v.Running() {
 		t.Error("nothing should be running")
+	}
+}
+
+func TestResolveVLCTakesAFolderOrABinary(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the install layout differs per OS")
+	}
+	dir := t.TempDir()
+	install := filepath.Join(dir, "VideoLAN", "VLC")
+	if err := os.MkdirAll(install, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(install, "vlc.exe")
+	if err := os.WriteFile(binary, []byte("MZ"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ResolveVLC(install); got != binary {
+		t.Errorf("folder: got %q, want %q", got, binary)
+	}
+	if got := ResolveVLC(binary); got != binary {
+		t.Errorf("binary: got %q", got)
+	}
+	if got := ResolveVLC(filepath.Join(dir, "nope")); got != "" {
+		t.Errorf("a path that is not there must report nothing, got %q", got)
 	}
 }
 
