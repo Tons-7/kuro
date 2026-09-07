@@ -301,16 +301,6 @@ const template = `# Register an application at https://anilist.co/settings/devel
 # /api/access/qr.svg renders it as a QR code.
 addr = "127.0.0.1:4321"
 
-[anilist]
-client_id = ""
-client_secret = ""
-
-# Optional second tracker. Register at https://myanimelist.net/apiconfig
-# with redirect URL exactly: http://localhost:4321/mal/callback
-[mal]
-client_id = ""
-client_secret = ""
-
 # Folders. Relative paths are beside kuro.exe; quote Windows paths with single
 # quotes ('D:\kuro\cache'). Restart after editing.
 # data_dir: database and window profile (default %LOCALAPPDATA%\kuro)
@@ -322,6 +312,16 @@ client_secret = ""
 
 # VLC, when it is not on PATH or in Program Files: its folder or its binary.
 # vlc_path = 'E:\VideoLAN\VLC'
+
+[anilist]
+client_id = ""
+client_secret = ""
+
+# Optional second tracker. Register at https://myanimelist.net/apiconfig
+# with redirect URL exactly: http://localhost:4321/mal/callback
+[mal]
+client_id = ""
+client_secret = ""
 
 # Torrent search sites, one block each. kuro ships with none. type is the feed
 # format ("nyaa" or "tokyotosho"); adult = true marks a site searched only for

@@ -63,6 +63,36 @@ func TestFolderSettingsResolveAgainstTheExe(t *testing.T) {
 	}
 }
 
+// A setting uncommented where it sits in the template must take effect, not
+// land in the table above it.
+func TestTemplateSettingsAreNotInsideATable(t *testing.T) {
+	dir := inTempDir(t)
+	body := strings.NewReplacer(
+		`# data_dir = ""`, `data_dir = "data"`,
+		`# cache_dir = "cache"`, `cache_dir = "store"`,
+		`# bin_dir = "bin"`, `bin_dir = "tools"`,
+		`# vlc_path = 'E:\VideoLAN\VLC'`, `vlc_path = 'E:\VLC'`,
+	).Replace(template)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for got, want := range map[string]string{
+		cfg.DataDir(): filepath.Join(dir, "data"),
+		cfg.CacheDir:  filepath.Join(dir, "store"),
+		cfg.BinDir:    filepath.Join(dir, "tools"),
+		cfg.VLCPath(): `E:\VLC`,
+	} {
+		if got != want {
+			t.Errorf("got %s, want %s", got, want)
+		}
+	}
+}
+
 func TestLoadCreatesDataAndCacheDirs(t *testing.T) {
 	inTempDir(t)
 
