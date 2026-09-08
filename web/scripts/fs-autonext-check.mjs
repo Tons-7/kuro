@@ -7,7 +7,8 @@ import { chromium } from 'playwright'
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
 const LIB = process.env.KURO_LIB
 const ANIME = Number(process.env.KURO_ANIME ?? 127230)
-const SHOTS = process.env.MANUAL_SHOTS ?? '.'
+// SHOTS is the harness's scratch folder; '.' would drop images in the repo.
+const SHOTS = process.env.MANUAL_SHOTS ?? process.env.SHOTS ?? '.'
 
 const api = async (p, init) => {
   const res = await fetch(BASE + p, {

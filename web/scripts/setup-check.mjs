@@ -2,11 +2,13 @@
 // with something missing, press the button, watch it land.
 import { chromium } from 'playwright'
 
+const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4321'
+
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message.slice(0, 200)))
 
-await page.goto('http://127.0.0.1:4321/setup', { waitUntil: 'load', timeout: 60000 })
+await page.goto(BASE + '/setup', { waitUntil: 'load', timeout: 60000 })
 await page.waitForTimeout(4000)
 
 const rowFor = (label) => page.locator('li').filter({ hasText: label }).first()

@@ -1,10 +1,11 @@
 // The new controls, exercised the way a person would.
 import { chromium } from 'playwright'
+const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4321'
 const b = await chromium.launch()
 const p = await b.newPage({ viewport: { width: 1600, height: 1000 } })
 p.on('pageerror', e => console.log('PAGE ERROR:', e.message.slice(0,200)))
 
-await p.goto('http://127.0.0.1:4321/', { waitUntil:'load', timeout:60000 })
+await p.goto(BASE + '/', { waitUntil:'load', timeout:60000 })
 await p.waitForTimeout(9000)
 
 // Notification panel: opens in place rather than navigating.
@@ -26,7 +27,7 @@ console.log('profile items     :', (await menu.getByRole('menuitem').count()))
 await p.keyboard.press('Escape')
 
 // Genre filter: two columns, searchable.
-await p.goto('http://127.0.0.1:4321/browse', { waitUntil:'load', timeout:60000 })
+await p.goto(BASE + '/browse', { waitUntil:'load', timeout:60000 })
 await p.waitForTimeout(7000)
 await p.getByRole('button', { name: /^Genre/ }).click()
 await p.waitForTimeout(700)

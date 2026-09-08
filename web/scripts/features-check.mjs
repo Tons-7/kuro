@@ -95,7 +95,8 @@ await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
 const packRow = page.locator('li', { hasText: 'Batch' })
 check(await until(() => packRow.count().then((n) => n === 1)), 'a season pack is one row')
 check(
-  await until(() => packRow.innerText().then((t) => /episodes 4, 5/.test(t) && /1\.4 GB of 1\.4 GB/.test(t))),
+  // A finished row states its size once; "of" belongs to what is still arriving.
+  await until(() => packRow.innerText().then((t) => /episodes 4, 5/.test(t) && /1\.4 GB/.test(t))),
   'the pack row names every episode and sums their size',
   (await packRow.innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120),
 )
