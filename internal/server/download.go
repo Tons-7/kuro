@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -183,6 +184,25 @@ func (s *Server) downloadQueue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	send(w, http.StatusOK, map[string]any{"items": items, "waiting": waiting})
+}
+
+// prioritiseQueued moves a waiting episode to the front of the queue.
+func (s *Server) prioritiseQueued(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AnimeID int    `json:"animeId"`
+		EpKey   string `json:"epKey"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.AnimeID == 0 {
+		send(w, http.StatusBadRequest, map[string]any{"error": "animeId and epKey are required"})
+		return
+	}
+
+	moved, err := s.store.Prioritise(r.Context(), body.AnimeID, body.EpKey)
+	if err != nil {
+		s.fail(w, "prioritise download", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"moved": moved})
 }
 
 // downloads reports what the torrent engine currently holds, so the UI can

@@ -6,32 +6,49 @@ import type { SetupState } from '../lib/queries'
 
 /** Every folder kuro uses and its config.toml key. */
 export function WhereThingsGo({ setup }: { setup: SetupState }) {
+  const [picking, setPicking] = useState(false)
   const libraryPaths = setup.libraryPaths ?? []
   return (
     <>
-      <dl className="space-y-1.5 text-sm text-base-400">
-        <Folder label="History and settings" path={setup.dataDir} setting="data_dir" />
+      {/* The path is what you read: its own line, full width. */}
+      <dl className="divide-y divide-white/5">
+        <Folder
+          label="History and settings"
+          path={setup.dataDir}
+          setting="data_dir"
+          aside={
+            <button
+              onClick={() => setPicking((v) => !v)}
+              className="text-accent-400 transition-colors hover:text-accent-300"
+            >
+              Change…
+            </button>
+          }
+        >
+          {picking && <DataDirPicker current={setup.dataDir} />}
+        </Folder>
         <Folder
           label="Episode cache"
           path={setup.cacheDir}
           setting="cache_dir"
-          note={`up to ${bytes(setup.cacheBudget)}`}
+          aside={`up to ${bytes(setup.cacheBudget)}`}
         />
         <Folder label="Programs" path={setup.binDir} setting="bin_dir" />
-        <div className="flex justify-between gap-4">
-          <dt>Your own files</dt>
-          <dd className="text-base-300">
-            {libraryPaths.length > 0
-              ? `${libraryPaths.length} folder${libraryPaths.length === 1 ? '' : 's'}`
-              : 'none yet'}
-          </dd>
+        <div className="py-2.5">
+          <dt className="flex items-baseline justify-between gap-4 text-sm text-base-200">
+            Your own files
+            <span className="text-xs text-base-500">
+              {libraryPaths.length > 0
+                ? `${libraryPaths.length} folder${libraryPaths.length === 1 ? '' : 's'}`
+                : 'none yet'}
+            </span>
+          </dt>
         </div>
       </dl>
       <p className="mt-2 text-xs text-base-500">
         Each folder is a setting in <code className="text-base-400">{setup.configPath}</code>; edit it
         and restart.
       </p>
-      <DataDirPicker current={setup.dataDir} />
     </>
   )
 }
@@ -40,21 +57,26 @@ function Folder({
   label,
   path,
   setting,
-  note,
+  aside,
+  children,
 }: {
   label: string
   path: string
   setting: string
-  note?: string
+  aside?: React.ReactNode
+  children?: React.ReactNode
 }) {
   return (
-    <div className="flex justify-between gap-4">
-      <dt>
-        <span>{label}</span> <code className="text-xs text-base-500">{setting}</code>
+    <div className="py-2.5">
+      <dt className="flex items-baseline justify-between gap-4 text-sm text-base-200">
+        <span>
+          {label} <code className="text-[11px] text-base-500">{setting}</code>
+        </span>
+        <span className="shrink-0 text-xs text-base-500">{aside}</span>
       </dt>
-      <dd className="truncate text-base-300" title={path}>
-        {path}
-        {note ? ` · ${note}` : ''}
+      <dd className="mt-0.5">
+        <p className="font-mono text-xs break-all text-base-400">{path}</p>
+        {children}
       </dd>
     </div>
   )
@@ -63,7 +85,6 @@ function Folder({
 // Where history and settings live. Written to config.toml and the database
 // copied over, so it takes effect on the next start with nothing lost.
 function DataDirPicker({ current }: { current: string }) {
-  const [open, setOpen] = useState(false)
   const [path, setPath] = useState('')
   const move = useMutation({
     mutationFn: (p: string) =>
@@ -76,16 +97,6 @@ function DataDirPicker({ current }: { current: string }) {
         Saved: {move.data.dataDir}. Restart kuro to use it
         {move.data.copied ? ' — your history has been copied there.' : '.'}
       </p>
-    )
-  }
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-2 text-xs text-base-400 transition-colors hover:text-base-100"
-      >
-        Keep history and settings somewhere else…
-      </button>
     )
   }
   return (

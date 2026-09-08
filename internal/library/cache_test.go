@@ -12,10 +12,11 @@ import (
 	"kuro/internal/store"
 )
 
+// Finished, since only a download that has arrived is space to reclaim.
 func entry(hash string, bytes int64, lastPlayed int64, pinned, protected bool) store.CacheEntry {
 	return store.CacheEntry{
 		InfoHash: hash, Bytes: bytes, LastPlayed: lastPlayed,
-		Pinned: pinned, Protected: protected,
+		Pinned: pinned, Protected: protected, Complete: true,
 	}
 }
 
@@ -111,6 +112,11 @@ func newCache(t *testing.T) (*Cache, *store.Store) {
 
 func cache(t *testing.T, s *store.Store, hash string, index int, bytes int64, pinned bool) {
 	t.Helper()
+	cacheState(t, s, hash, index, bytes, pinned, true)
+}
+
+func cacheState(t *testing.T, s *store.Store, hash string, index int, bytes int64, pinned, complete bool) {
+	t.Helper()
 
 	ctx := context.Background()
 	if err := s.RecordTorrent(ctx, store.TorrentRecord{
@@ -119,7 +125,7 @@ func cache(t *testing.T, s *store.Store, hash string, index int, bytes int64, pi
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetCacheBytes(ctx, hash, index, bytes, true); err != nil {
+	if err := s.SetCacheBytes(ctx, hash, index, bytes, complete); err != nil {
 		t.Fatal(err)
 	}
 	// Recording pins unconditionally, so unpinning is what makes an entry a
@@ -165,6 +171,28 @@ func TestSweepCountsATorrentOnce(t *testing.T) {
 	}
 }
 
+// A download still arriving is not spare space.
+func TestEvictionOrderNeverOffersAnUnfinishedDownload(t *testing.T) {
+	downloading := entry("downloading", 8<<30, 0, false, false)
+	downloading.Complete = false
+
+	got := evictionOrder([]store.CacheEntry{downloading, entry("watched", 1<<30, 500, false, false)})
+	if len(got) != 1 || got[0].InfoHash != "watched" {
+		t.Fatalf("order = %+v, want only the finished download", got)
+	}
+}
+
+// Both files of a batch are spared while any of it is still downloading.
+func TestEvictionOrderSparesEverySiblingOfAnUnfinishedTorrent(t *testing.T) {
+	first := entry("batch", 4<<30, 10, false, false)
+	second := entry("batch", 4<<30, 20, false, false)
+	second.Complete = false
+
+	if got := evictionOrder([]store.CacheEntry{first, second}); len(got) != 0 {
+		t.Fatalf("order = %+v, want nothing evictable", got)
+	}
+}
+
 func TestEvictionOrderNeverOffersKept(t *testing.T) {
 	kept := entry("kept", 1<<30, 10, false, false)
 	kept.Kept = true
@@ -177,6 +205,39 @@ func TestEvictionOrderNeverOffersKept(t *testing.T) {
 
 // A kept download is outside the budget: it neither fills the cache nor is taken
 // to make room, however large it is.
+// A slow download left running is the oldest entry there is, so it used to be
+// evicted first — deleted mid-transfer, on the connection least able to redo it.
+func TestSweepSparesADownloadStillArriving(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+
+	cacheState(t, st, "downloading", 1, 6<<30, false, false)
+	cache(t, st, "watched", 2, 3<<30, false)
+	if err := st.SetSetting(ctx, "cache.budget_bytes", "5368709120"); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := c.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Evicted != 1 || rep.Freed != 3<<30 {
+		t.Errorf("evicted %d freeing %d; only the finished download should go", rep.Evicted, rep.Freed)
+	}
+
+	left, err := st.CacheEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].InfoHash != "downloading" {
+		t.Fatalf("remaining = %+v, want the download still in progress", left)
+	}
+	// Still over budget, and that is the right answer: the rest is arriving.
+	if rep.After <= rep.Budget {
+		t.Errorf("after = %d, expected to stay over the %d budget", rep.After, rep.Budget)
+	}
+}
+
 func TestSweepNeverEvictsKeptDownloads(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()

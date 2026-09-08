@@ -35,6 +35,38 @@ func TestBrowseHentaiGenreIncludesAdultTitles(t *testing.T) {
 	}
 }
 
+func sortVar(t *testing.T, vars map[string]any) string {
+	t.Helper()
+	list, ok := vars["sort"].([]any)
+	if !ok || len(list) != 1 {
+		t.Fatalf("sort = %#v", vars["sort"])
+	}
+	return list[0].(string)
+}
+
+// Choosing a sort used to be dropped whenever a search term was present, so
+// the Browse page ignored every sort once something was typed.
+func TestBrowseKeepsTheSortTheUserChose(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		b    Browse
+		want string
+	}{
+		{"nothing chosen", Browse{}, "POPULARITY_DESC"},
+		{"a sort alone", Browse{Sort: "score"}, "SCORE_DESC"},
+		{"a search alone falls back to relevance", Browse{Search: "conan"}, "SEARCH_MATCH"},
+		{"searching and sorting", Browse{Search: "conan", Sort: "score"}, "SCORE_DESC"},
+		{"with the other filters", Browse{Search: "conan", Formats: []string{"MOVIE"}, Sort: "newest"}, "START_DATE_DESC"},
+		{"an unknown sort is not honoured", Browse{Search: "conan", Sort: "nonsense"}, "SEARCH_MATCH"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sortVar(t, browseVars(t, tc.b)); got != tc.want {
+				t.Errorf("sort = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRandomSendsFiltersAsVariables(t *testing.T) {
 	var vars map[string]any
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

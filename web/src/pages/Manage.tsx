@@ -332,6 +332,12 @@ export function Downloads() {
     onSuccess: done,
   })
 
+  const next = useMutation({
+    mutationFn: (q: Queued) =>
+      api.post('/api/download/queue/next', { animeId: q.animeId, epKey: q.epKey }),
+    onSuccess: done,
+  })
+
   const remove = useMutation({
     mutationFn: (hash: string) => api.del(`/api/downloads/${hash}`),
     onSuccess: done,
@@ -372,13 +378,52 @@ export function Downloads() {
 
   if (isError) return <ErrorState error={error} retry={() => refetch()} />
 
-  const removable = (data?.items ?? []).filter((d) => !d.pinned).length
+  const items = data?.items ?? []
+  const queued = queue.data?.items ?? []
+  const removable = items.filter((d) => !d.pinned).length
+
+  // A queue entry and its torrent are one download; the torrent wins.
+  const started = new Set(items.flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
+  const active = items.filter((d) => d.percent < 100 && !d.paused)
+  const held = items.filter((d) => d.percent < 100 && d.paused)
+  const finished = items.filter((d) => d.percent >= 100)
+  const waitingQueue = queued.filter(
+    (q) => q.state === 'pending' && !started.has(`${q.animeId}-${q.epKey}`),
+  )
+  const failed = queued.filter((q) => q.state === 'failed')
+  const waiting = held.length + waitingQueue.length
+  const keptBytes = finished.reduce((n, d) => n + (d.kept ? d.bytesOnDisk : 0), 0)
+  const cachedBytes = finished.reduce((n, d) => n + (d.kept ? 0 : d.bytesOnDisk), 0)
+
+  const rows: Row[] = [
+    ...(active.length > 0 ? [{ group: 'Downloading', meta: 'one at a time' }] : []),
+    ...active.map((d) => ({ d })),
+    ...(waiting > 0 ? [{ group: 'Waiting', meta: String(waiting) }] : []),
+    ...held.map((d, i) => ({ d, position: i + 1 })),
+    ...waitingQueue.map((q, i) => ({ q, position: held.length + i + 1 })),
+    ...(failed.length > 0 ? [{ group: 'Failed' }] : []),
+    ...failed.map((q) => ({ q })),
+    ...(finished.length > 0
+      ? [{ group: 'On disk', meta: `${bytes(cachedBytes)} cached · ${bytes(keptBytes)} downloaded` }]
+      : []),
+    ...finished.map((d) => ({ d })),
+  ]
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Downloads"
-        meta={data ? `${data.items.length} on disk` : undefined}
+        meta={
+          data
+            ? [
+                active.length > 0 && `${active.length} downloading`,
+                waiting > 0 && `${waiting} waiting`,
+                `${finished.length} on disk`,
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : undefined
+        }
         actions={
           removable > 0 &&
           (confirmClear ? (
@@ -405,7 +450,7 @@ export function Downloads() {
 
       {isPending ? (
         <Skeleton className="h-64 w-full" />
-      ) : data.items.length === 0 ? (
+      ) : rows.length === 0 ? (
         <Empty
           title="Nothing downloaded"
           hint="Episodes you watch are cached here, and anything you download stays until you remove it."
@@ -413,10 +458,28 @@ export function Downloads() {
           action={<LinkButton to="/recent">Find something to watch</LinkButton>}
         />
       ) : (
-        <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
-          {data.items.map((d) => (
-            <li key={d.infoHash} className="p-3">
-              <div className="flex items-start justify-between gap-3">
+        <ul className="surface overflow-hidden">
+          {rows.map((r) => {
+            if ('group' in r) return <Group key={r.group} label={r.group} meta={r.meta} />
+            if ('q' in r)
+              return (
+                <QueueRow
+                  key={`q-${r.q.animeId}-${r.q.epKey}`}
+                  q={r.q}
+                  position={r.position}
+                  onNext={() => next.mutate(r.q)}
+                  onRetry={() => requeue.mutate(r.q)}
+                  onRemove={() => dequeue.mutate(r.q)}
+                />
+              )
+            const d = r.d
+            return (
+            <li key={d.infoHash} className="border-t border-white/[0.05] p-3 first:border-t-0">
+              <div className="flex items-start gap-3">
+                {/* A gutter the posters line up against, numbered while waiting. */}
+                <span className="w-4 shrink-0 pt-4 text-right text-xs tabular-nums text-base-500">
+                  {r.position ?? ''}
+                </span>
                 {d.cover && (
                   <Link to={`/anime/${d.animeId}`} className="shrink-0">
                     <img
@@ -443,34 +506,32 @@ export function Downloads() {
                       {d.name}
                     </p>
                   )}
-                  <p className="mt-0.5 text-xs text-base-500">
-                    {bytes(d.bytesOnDisk)} of {bytes(d.totalBytes)}
-                    {/* Speed and peers are what separate slow from stalled. */}
-                    {!d.paused && d.percent < 100 && d.mbps ? (
-                      <span className="text-base-400"> · {d.mbps.toFixed(1)} Mbps</span>
-                    ) : null}
+                  {/* One line, left to right: how far, how big, how fast, how
+                      long. Speed and peers separate slow from stalled. */}
+                  <p className="mt-0.5 text-xs text-base-400">
+                    {d.percent < 100 && (
+                      <span className="font-medium text-base-100">{Math.round(d.percent)}% · </span>
+                    )}
+                    {d.percent < 100 ? `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}` : bytes(d.bytesOnDisk)}
+                    {!d.paused && d.percent < 100 && d.mbps ? ` · ${d.mbps.toFixed(1)} Mbps` : ''}
                     {!d.paused && d.percent < 100 && d.peers ? ` · ${d.peers} peers` : ''}
+                    {!d.paused && d.percent < 100 && d.mbps
+                      ? ` · ${timeLeft(d.totalBytes - d.bytesOnDisk, d.mbps)}`
+                      : ''}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   {d.pinned && <Badge tone="accent">Playing</Badge>}
                   {d.checking && <Badge>Checking file…</Badge>}
-                  {/* Downloads run one at a time, so a paused row is usually
-                      just waiting its turn — "Paused" would read as stuck. */}
-                  {d.paused && d.percent < 100 && (
-                    <Badge tone={d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)) ? 'neutral' : 'warning'}>
-                      {d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)) ? 'Queued' : 'Paused'}
-                    </Badge>
+                  {/* Paused by hand, not by the queue: the group already says
+                      a row is waiting its turn. */}
+                  {d.paused && d.percent < 100 && !d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)) && (
+                    <Badge tone="warning">Paused</Badge>
                   )}
-                  {!d.paused && !d.checking && d.percent < 100 && <Badge tone="accent">Downloading</Badge>}
                   {/* Cached is what watching leaves behind and the sweep may
                       take; Downloaded was asked for and stays. */}
-                  {d.percent >= 100 ? (
+                  {d.percent >= 100 && (
                     <Badge tone={d.kept ? 'success' : 'neutral'}>{d.kept ? 'Downloaded' : 'Cached'}</Badge>
-                  ) : (
-                    <span className="w-10 text-right text-xs tabular-nums text-base-400">
-                      {Math.round(d.percent)}%
-                    </span>
                   )}
 
                   {/* Pausing keeps the file; removing does not. Finished ones
@@ -526,95 +587,100 @@ export function Downloads() {
                   )}
                 </div>
               </div>
-              <ProgressBar value={d.percent} className="mt-2" />
+              {d.percent < 100 && <ProgressBar value={d.percent} className="mt-2" />}
               {d.episodes.length > 1 && <PackEpisodes hash={d.infoHash} />}
             </li>
-          ))}
+            )
+          })}
         </ul>
       )}
-
-      <QueueList
-        items={queue.data?.items ?? []}
-        onRemove={(q) => dequeue.mutate(q)}
-        onRetry={(q) => requeue.mutate(q)}
-      />
     </div>
   )
 }
 
-/**
- * What is waiting its turn. Downloads run one at a time, so showing the order
- * tells you "yours is fourth" rather than "nothing is happening".
- */
-function QueueList({
-  items,
-  onRemove,
-  onRetry,
-}: {
-  items: Queued[]
-  onRemove: (q: Queued) => void
-  onRetry: (q: Queued) => void
-}) {
-  const waiting = items.filter((q) => q.state !== 'active')
-  if (items.length === 0) return null
+type Row =
+  | { group: string; meta?: string }
+  | { d: Download; position?: number }
+  | { q: Queued; position?: number }
 
+function Group({ label, meta }: { label: string; meta?: string }) {
   return (
-    <section className="space-y-2">
-      <div className="flex items-baseline justify-between">
-        <h2 className="section-title">Queue</h2>
-        <p className="text-sm text-base-500">
-          {waiting.length} waiting · one at a time
+    <li className="flex items-baseline justify-between gap-3 border-t border-white/[0.05] bg-base-950/40 px-3 py-1.5 first:border-t-0">
+      <span className="text-[11px] font-semibold tracking-wider text-base-400 uppercase">{label}</span>
+      {meta && <span className="text-[11px] text-base-600">{meta}</span>}
+    </li>
+  )
+}
+
+// Queued but not started: there is no torrent yet, so nothing to pause or keep.
+function QueueRow({
+  q,
+  position,
+  onNext,
+  onRetry,
+  onRemove,
+}: {
+  q: Queued
+  position?: number
+  onNext: () => void
+  onRetry: () => void
+  onRemove: () => void
+}) {
+  return (
+    <li className="group flex items-center gap-3 border-t border-white/[0.05] p-3 first:border-t-0">
+      <span className="w-4 shrink-0 text-right text-xs tabular-nums text-base-500">{position ?? ''}</span>
+      {q.cover ? (
+        <img src={q.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
+      ) : (
+        <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
+      )}
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-base-100">
+          {q.title ?? `Anime ${q.animeId}`}
+          <span className="ml-1.5 font-normal text-base-400">episode {q.episode}</span>
         </p>
+        {q.error && <p className="truncate text-xs text-recap">{q.error}</p>}
       </div>
 
-      <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
-        {items.map((q) => (
-          <li key={`${q.animeId}-${q.epKey}`} className="group flex items-center gap-3 p-2.5">
-            {q.cover ? (
-              <img src={q.cover} alt="" loading="lazy" className="h-10 w-7 shrink-0 rounded object-cover" />
-            ) : (
-              <div className="h-10 w-7 shrink-0 rounded bg-base-850" />
-            )}
-
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-base-100">
-                {q.title ?? `Anime ${q.animeId}`}
-                <span className="ml-1.5 text-base-400">episode {q.episode}</span>
-              </p>
-              {q.error && <p className="truncate text-xs text-recap">{q.error}</p>}
-            </div>
-
-            {q.state === 'active' ? (
-              <Badge tone="accent">Downloading</Badge>
-            ) : q.state === 'failed' ? (
-              <Badge tone="recap">Failed</Badge>
-            ) : (
-              <Badge>Queued</Badge>
-            )}
-
-            {q.state === 'failed' && (
-              <button
-                onClick={() => onRetry(q)}
-                className="shrink-0 rounded-md px-2 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
-              >
-                Try again
-              </button>
-            )}
-
-            {/* Including the one downloading: cancelling stops it and keeps
-                what is already on disk. */}
-            <button
-              onClick={() => onRemove(q)}
-              aria-label={q.state === 'active' ? 'Stop this download' : 'Remove from queue'}
-              className="grid size-7 shrink-0 place-items-center rounded-md text-base-600 opacity-0 transition-opacity group-hover:opacity-100 hover:text-recap focus-visible:opacity-100"
-            >
-              ✕
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {q.state === 'failed' ? (
+          <button
+            onClick={onRetry}
+            className="rounded-md px-2 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+          >
+            Try again
+          </button>
+        ) : (
+          <button
+            onClick={onNext}
+            title="Download this one as soon as the current download finishes"
+            className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+          >
+            Download next
+          </button>
+        )}
+        <button
+          onClick={onRemove}
+          aria-label="Remove from queue"
+          className="grid size-7 shrink-0 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap"
+        >
+          ✕
+        </button>
+      </div>
+    </li>
   )
+}
+
+// Remaining bytes over the speed the engine reports; Mbps is megabits.
+function timeLeft(remaining: number, mbps: number): string {
+  const seconds = remaining / ((mbps * 1_000_000) / 8)
+  if (!isFinite(seconds) || seconds <= 0) return ''
+  if (seconds < 60) return 'under a minute left'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min left`
+  const hours = Math.floor(minutes / 60)
+  return `${hours} h ${minutes % 60} min left`
 }
 
 interface LocalFile {

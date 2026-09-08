@@ -28,9 +28,8 @@ type Browse struct {
 	PerPage int
 }
 
-// browseSorts are the orderings the API accepts here. Search results ignore
-// the requested sort in favour of match quality, which is what a user typing a
-// title expects.
+// browseSorts are the orderings the API accepts here. A typed query with no
+// sort chosen falls back to match quality.
 var browseSorts = map[string]string{
 	"popular":    "POPULARITY_DESC",
 	"trending":   "TRENDING_DESC",
@@ -128,13 +127,14 @@ func (c *Client) BrowseMedia(ctx context.Context, b Browse) (DiscoverPage, error
 		vars["isAdult"] = false
 	}
 
+	// Nothing chosen: relevance for a typed query, popularity otherwise. A sort
+	// the user picked is a request to reorder those matches, so it wins.
 	sort := browseSorts[strings.ToLower(b.Sort)]
-	switch {
-	case b.Search != "":
-		// Relevance beats any requested ordering when there is a query.
-		sort = "SEARCH_MATCH"
-	case sort == "":
+	if sort == "" {
 		sort = "POPULARITY_DESC"
+		if b.Search != "" {
+			sort = "SEARCH_MATCH"
+		}
 	}
 	vars["sort"] = []string{sort}
 

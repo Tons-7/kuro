@@ -25,7 +25,9 @@ export function Settings() {
   )
 
   return (
-    <div className="space-y-5">
+    // Centred as one block: the slack becomes margins, not a gulf between
+    // every label and its control.
+    <div className="mx-auto max-w-[59rem] space-y-5">
       <h1 className="text-xl font-semibold text-white">Settings</h1>
 
       {connected && (
@@ -43,13 +45,19 @@ export function Settings() {
         </div>
       )}
 
-      <Segmented
-        options={TABS.map((name) => ({ value: name, label: name }))}
-        value={tab}
-        onChange={setTab}
-      />
+      {/* Beside the settings on a desktop, above them on a phone. */}
+      <div className="lg:hidden">
+        <Segmented
+          options={TABS.map((name) => ({ value: name, label: name }))}
+          value={tab}
+          onChange={setTab}
+        />
+      </div>
 
-      <div className="animate-fade-in">
+      <div className="flex gap-6">
+        <SideTabs tab={tab} onChange={setTab} />
+
+        <div className="animate-fade-in w-full max-w-[47rem] min-w-0">
         {tab === 'Playback' && <PlaybackTab />}
         {tab === 'Quality' && <QualityTab />}
         {tab === 'Trackers' && <TrackersTab />}
@@ -58,7 +66,31 @@ export function Settings() {
         {tab === 'Access' && <AccessTab />}
         {tab === 'Jobs' && <JobsTab />}
         {tab === 'About' && <AboutTab />}
+        </div>
       </div>
+    </div>
+  )
+}
+
+function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+  return (
+    <div role="tablist" className="hidden w-42 shrink-0 flex-col gap-0.5 lg:flex">
+      {TABS.map((name) => (
+        <button
+          key={name}
+          role="tab"
+          aria-selected={name === tab}
+          onClick={() => onChange(name)}
+          className={cx(
+            'rounded-lg px-3 py-1.5 text-left text-sm transition-colors',
+            name === tab
+              ? 'bg-accent-500/15 font-medium text-accent-200 shadow-[inset_2px_0_0_var(--color-accent-500)]'
+              : 'text-base-400 hover:bg-base-900 hover:text-base-100',
+          )}
+        >
+          {name}
+        </button>
+      ))}
     </div>
   )
 }
@@ -67,20 +99,23 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   return (
     <section className="surface p-4">
       <h2 className="text-sm font-semibold text-base-100">{title}</h2>
-      {hint && <p className="mt-0.5 mb-3 text-xs text-base-500">{hint}</p>}
-      <div className={cx('space-y-3', !hint && 'mt-3')}>{children}</div>
+      {hint && <p className="mt-0.5 text-xs text-base-500">{hint}</p>}
+      {/* A rule per row: a two-line hint otherwise runs into the row below it. */}
+      <div className="mt-2 divide-y divide-white/5">{children}</div>
     </section>
   )
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4">
+    <div className="flex items-center justify-between gap-5 py-2.5">
       <div className="min-w-0">
         <p className="text-sm text-base-200">{label}</p>
         {hint && <p className="text-xs text-base-500">{hint}</p>}
       </div>
-      <div className="shrink-0">{children}</div>
+      {/* One track so the right edge does not zigzag; not on a phone, where it
+          would come out of the label. */}
+      <div className="flex shrink-0 justify-end sm:min-w-36">{children}</div>
     </div>
   )
 }

@@ -6,6 +6,54 @@ import (
 	"testing"
 )
 
+// "Download next" on a waiting episode: it goes to the front, the rest keep
+// their order, and the one already downloading is not disturbed.
+func TestPrioritiseMovesAnEpisodeToTheFront(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 100, "FINISHED", 12)
+
+	if _, err := s.Enqueue(ctx, 100, 1, []int{1, 2, 3, 4}); err != nil {
+		t.Fatal(err)
+	}
+	// Episode 1 is downloading now.
+	if _, _, err := s.NextQueued(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := s.Prioritise(ctx, 100, "4")
+	if err != nil || !moved {
+		t.Fatalf("moved=%v err=%v", moved, err)
+	}
+
+	next, ok, err := s.NextQueued(ctx)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if next.Episode != 4 {
+		t.Errorf("started episode %d, want the prioritised 4", next.Episode)
+	}
+
+	items, err := s.QueuedDownloads(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending []int
+	for _, q := range items {
+		if q.State == "pending" {
+			pending = append(pending, q.Episode)
+		}
+	}
+	if len(pending) != 2 || pending[0] != 2 || pending[1] != 3 {
+		t.Errorf("the rest lost their order: %v", pending)
+	}
+
+	// An episode that is not waiting cannot be jumped forward.
+	if moved, err := s.Prioritise(ctx, 100, "1"); err != nil || moved {
+		t.Errorf("an active episode was reordered: moved=%v err=%v", moved, err)
+	}
+}
+
 // Downloads run one at a time across every show, so the queue has to hand out
 // work in the order it was asked for and survive being asked twice.
 func TestQueueIsWorkedInOrder(t *testing.T) {

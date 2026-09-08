@@ -125,6 +125,20 @@ func (s *Store) ResetActive(ctx context.Context) error {
 	return err
 }
 
+// Prioritise moves one waiting episode to the front. The worker takes the
+// oldest pending row, so being first in line is a queued_at older than the rest.
+func (s *Store) Prioritise(ctx context.Context, animeID int, epKey string) (bool, error) {
+	res, err := s.w.ExecContext(ctx, `
+		UPDATE download_queue
+		SET queued_at = coalesce((SELECT min(queued_at) FROM download_queue WHERE state = 'pending'), queued_at) - 1
+		WHERE anime_id = ? AND ep_key = ? AND state = 'pending'`, animeID, epKey)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 	mode := s.TitleMode(ctx, 0)
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kuro/internal/store"
@@ -22,10 +23,14 @@ type Cache struct {
 	torrent *torrent.Client
 	dir     string
 	log     *slog.Logger
+
+	// Refreshes in a row the engine has not listed a download.
+	mu     sync.Mutex
+	absent map[string]int
 }
 
 func NewCache(s *store.Store, tc *torrent.Client, dir string, log *slog.Logger) *Cache {
-	return &Cache{store: s, torrent: tc, dir: dir, log: log}
+	return &Cache{store: s, torrent: tc, dir: dir, log: log, absent: map[string]int{}}
 }
 
 type SweepReport struct {
@@ -92,7 +97,9 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 func evictionOrder(entries []store.CacheEntry) []store.CacheEntry {
 	held := map[string]bool{}
 	for _, e := range entries {
-		if e.Pinned || e.Kept {
+		// Unfinished too: rqbit allocated the whole file at the start, so
+		// deleting one frees nothing and loses every byte transferred.
+		if e.Pinned || e.Kept || !e.Complete {
 			held[e.InfoHash] = true
 		}
 	}
@@ -449,6 +456,26 @@ func (c *Cache) Progress(ctx context.Context) (map[string]Progress, error) {
 	return out, nil
 }
 
+// rqbit answers before it has reloaded its session, so one absence means
+// "not yet", not "gone".
+const forgetAfter = 2
+
+// missing counts consecutive refreshes without this download in the listing.
+func (c *Cache) missing(hash string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.absent[hash]++
+	return c.absent[hash]
+}
+
+func (c *Cache) present(hashes map[string]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for hash := range hashes {
+		delete(c.absent, hash)
+	}
+}
+
 // A download removed outside kuro leaves a row still charging the budget for
 // bytes that are gone, and nothing else ever clears it.
 func (c *Cache) forgetVanished(ctx context.Context) error {
@@ -461,6 +488,7 @@ func (c *Cache) forgetVanished(ctx context.Context) error {
 	for _, t := range live.Torrents {
 		held[strings.ToLower(t.InfoHash)] = struct{}{}
 	}
+	c.present(held)
 
 	entries, err := c.store.CacheEntries(ctx)
 	if err != nil {
@@ -471,6 +499,10 @@ func (c *Cache) forgetVanished(ctx context.Context) error {
 	for _, e := range entries {
 		hash := strings.ToLower(e.InfoHash)
 		if _, ok := held[hash]; ok || dropped[hash] {
+			continue
+		}
+		// Forgetting cascades the episode's link to the file away.
+		if c.missing(hash) < forgetAfter {
 			continue
 		}
 		if err := c.store.DropTorrentCache(ctx, e.InfoHash); err != nil {
