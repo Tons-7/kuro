@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"sort"
+	"time"
 )
 
 type Relation struct {
@@ -31,6 +34,115 @@ type Season struct {
 type Franchise struct {
 	RootID  int      `json:"rootId"`
 	Seasons []Season `json:"seasons"`
+}
+
+// RelatedEntry is a film, OVA, special or spin-off of the same franchise.
+type RelatedEntry struct {
+	Season
+	// Kind is AniList's edge type: SIDE_STORY, SPIN_OFF, SUMMARY, ALTERNATIVE…
+	Kind string `json:"kind"`
+}
+
+// Anything the franchise links to that is not part of the season chain, and is
+// not itself a season of it. Newest last: films are listed as they came out.
+const relatedQuery = `
+WITH members AS (
+    SELECT anime_id FROM franchise
+    WHERE root_id = (SELECT root_id FROM franchise WHERE anime_id = ?)
+    UNION SELECT ?
+),
+edges AS (
+    SELECT r.related_id AS id, min(r.kind) AS kind
+    FROM relation r
+    JOIN members m ON m.anime_id = r.anime_id
+    WHERE r.kind NOT IN ('PREQUEL','SEQUEL')
+      AND r.related_id NOT IN (SELECT anime_id FROM members)
+      AND r.related_id NOT IN (SELECT anime_id FROM dead_anime)
+      AND r.related_id <> ?
+    GROUP BY r.related_id
+)
+SELECT e.id, e.kind,
+       coalesce(a.title_romaji, ''), a.title_english, a.cover_url,
+       coalesce(a.episode_count, c.episodes),
+       -- OVAs and films often carry a start date but no season.
+       coalesce(a.season_year, c.year, cast(substr(a.start_date, 1, 4) AS INTEGER)),
+       a.format, a.status, l.status, coalesce(l.progress, 0), l.id IS NOT NULL
+FROM edges e
+LEFT JOIN anime a        ON a.id = e.id
+LEFT JOIN corpus_anime c ON c.anime_id = e.id
+LEFT JOIN list_entry l   ON l.anime_id = e.id
+ORDER BY coalesce(a.season_year, c.year, cast(substr(a.start_date, 1, 4) AS INTEGER), 9999), a.title_romaji
+LIMIT 200`
+
+// Kinds that are seasons of the same show. Everything else is related material
+// the page lists separately; a spin-off wedged into the chain breaks numbering.
+var SeasonKinds = map[string]bool{"PREQUEL": true, "SEQUEL": true}
+
+// MarkRelationsFetched records when a franchise was walked, so it can be walked
+// again once a new sequel or film has had time to appear.
+func (s *Store) MarkRelationsFetched(ctx context.Context, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO relation_fetch (anime_id, fetched_at) VALUES (?, unixepoch())
+		ON CONFLICT(anime_id) DO UPDATE SET fetched_at = excluded.fetched_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range ids {
+		if _, err := stmt.ExecContext(ctx, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// RelationsStale reports whether the graph should be walked again: never
+// fetched, or fetched longer ago than maxAge.
+func (s *Store) RelationsStale(ctx context.Context, animeID int, maxAge time.Duration) bool {
+	var age int64
+	err := s.r.QueryRowContext(ctx,
+		`SELECT unixepoch() - fetched_at FROM relation_fetch WHERE anime_id = ?`, animeID).Scan(&age)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return true
+	case err != nil:
+		// A database hiccup is not a reason to crawl AniList.
+		return false
+	}
+	// Inclusive, so a zero window means "always walk it again".
+	return age >= int64(maxAge.Seconds())
+}
+
+// Related is everything linked to a franchise that is not one of its seasons:
+// films, OVAs, specials, spin-offs and alternative versions.
+func (s *Store) Related(ctx context.Context, animeID int) ([]RelatedEntry, error) {
+	rows, err := s.r.QueryContext(ctx, relatedQuery, animeID, animeID, animeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []RelatedEntry{}
+	for rows.Next() {
+		var e RelatedEntry
+		if err := rows.Scan(&e.ID, &e.Kind, &e.Romaji, &e.English, &e.Cover,
+			&e.Episodes, &e.Year, &e.Format, &e.Status, &e.ListStatus,
+			&e.Progress, &e.OnList); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // HasRelations reports whether the graph has been walked for this anime. An
@@ -214,7 +326,8 @@ func (s *Store) startDates(ctx context.Context) (map[int]int, error) {
 const franchiseQuery = `
 SELECT f.anime_id, f.ordinal,
        coalesce(a.title_romaji, ''), a.title_english, a.cover_url,
-       coalesce(a.episode_count, c.episodes), coalesce(a.season_year, c.year),
+       coalesce(a.episode_count, c.episodes),
+       coalesce(a.season_year, c.year, cast(substr(a.start_date, 1, 4) AS INTEGER)),
        a.format, a.status, e.status,
        coalesce(e.progress, 0), e.id IS NOT NULL
 FROM franchise f

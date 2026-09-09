@@ -20,6 +20,9 @@ import (
 const (
 	Endpoint = "https://graphql.anilist.co"
 
+	// Their WAF wants the site as the referer; without it every call is refused.
+	Referer = "https://anilist.co/"
+
 	// AniList has been capped at 30/min since November 2022. The documented 90
 	// has never been restored, so this is the real ceiling, not a safety margin.
 	requestsPerMinute = 30
@@ -243,6 +246,9 @@ func (c *Client) post(ctx context.Context, body []byte) (*http.Response, []byte,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	// AniList's edge answers 403 "API temporarily disabled" to requests without
+	// one, whatever the user agent. Sent on every call since 2026-09-09.
+	req.Header.Set("Referer", Referer)
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}

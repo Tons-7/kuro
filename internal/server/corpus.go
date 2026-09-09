@@ -247,7 +247,31 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	send(w, http.StatusOK, fr)
+	related, err := s.store.Related(r.Context(), id)
+	if err != nil {
+		s.log.Warn("related entries", "anime", id, "err", err)
+	}
+	// Same as the seasons: an id never imported would render as a blank chip.
+	var blank []int
+	for _, e := range related {
+		if e.Romaji == "" {
+			blank = append(blank, e.ID)
+		}
+	}
+	if len(blank) > 0 && s.importer != nil {
+		if _, err := s.importer.Hydrate(r.Context(), blank); err != nil {
+			s.log.Warn("hydrate related", "anime", id, "err", err)
+		} else if related, err = s.store.Related(r.Context(), id); err != nil {
+			s.fail(w, "related entries", err)
+			return
+		}
+	}
+
+	send(w, http.StatusOK, map[string]any{
+		"rootId":  fr.RootID,
+		"seasons": fr.Seasons,
+		"related": related,
+	})
 }
 
 // episodes finds releases for an anime the user already picked, so the season

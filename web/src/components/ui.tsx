@@ -364,7 +364,7 @@ export function Badge({
   tone = 'neutral',
 }: {
   children: ReactNode
-  tone?: 'neutral' | 'filler' | 'recap' | 'accent' | 'success' | 'warning'
+  tone?: 'neutral' | 'filler' | 'recap' | 'accent' | 'success' | 'warning' | 'overlay'
 }) {
   const tones = {
     neutral: 'bg-base-800 text-base-300',
@@ -373,6 +373,9 @@ export function Badge({
     accent: 'bg-accent-500/15 text-accent-400',
     success: 'bg-emerald-500/15 text-emerald-400',
     warning: 'bg-amber-500/15 text-amber-400',
+    // Over poster art, where a 15% tint leaves the text sitting on whatever
+    // the cover happens to be.
+    overlay: 'bg-base-950/85 text-accent-200 ring-1 ring-accent-400/30 backdrop-blur-sm',
   }
   return (
     <span

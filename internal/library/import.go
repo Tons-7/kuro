@@ -47,14 +47,45 @@ func (i *Importer) Run(ctx context.Context, userID int, mode store.ImportMode) (
 // Hydrate fills in anime the graph references but nobody has imported, which
 // otherwise appear as rows with an id and no title.
 func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
-	if len(ids) == 0 {
-		return 0, nil
+	// MediaByIDs takes one AniList page, and drops the rest without a word: a
+	// franchise of 61 films came back with 11 rows still bare.
+	const perPage = 50
+
+	var saved int
+	for len(ids) > 0 {
+		batch := ids
+		if len(batch) > perPage {
+			batch = batch[:perPage]
+		}
+		ids = ids[len(batch):]
+
+		media, err := i.al.MediaByIDs(ctx, batch)
+		if err != nil {
+			return saved, err
+		}
+		n, err := i.Save(ctx, media)
+		if err != nil {
+			return saved, err
+		}
+		saved += n
+
+		// An id AniList does not return is not coming back, and asking again on
+		// every page view costs a request from a 30-per-minute budget.
+		returned := make(map[int]bool, len(media))
+		for _, m := range media {
+			returned[m.ID] = true
+		}
+		var missing []int
+		for _, id := range batch {
+			if !returned[id] {
+				missing = append(missing, id)
+			}
+		}
+		if err := i.store.MarkDead(ctx, missing); err != nil {
+			i.log.Warn("mark unresolved ids", "count", len(missing), "err", err)
+		}
 	}
-	media, err := i.al.MediaByIDs(ctx, ids)
-	if err != nil {
-		return 0, err
-	}
-	return i.Save(ctx, media)
+	return saved, nil
 }
 
 // Save stores media the caller already has, so viewing a page keeps the local

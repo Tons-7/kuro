@@ -66,33 +66,38 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 // decorate turns AniList media into cards: resolved title plus whether it is
 // already on the user's list, which every grid in the UI needs.
 func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem {
-	onList, err := s.store.ListProgress(r.Context())
+	onList, err := s.store.ListEntries(r.Context())
 	if err != nil {
-		s.log.Warn("list progress", "err", err)
+		s.log.Warn("list entries", "err", err)
 	}
 	titles := s.store.TitleMode(r.Context(), 0)
 
 	items := make([]discoverItem, 0, len(media))
 	for _, m := range media {
-		progress, listed := onList[m.ID]
+		entry, listed := onList[m.ID]
 
 		it := discoverItem{
-			ID:         m.ID,
-			English:    m.Title.English,
-			Cover:      m.CoverImage.Large,
-			Thumb:      m.CoverImage.Medium,
-			Banner:     m.BannerImage,
-			Color:      m.CoverImage.Color,
-			Format:     m.Format,
-			Status:     m.Status,
-			Episodes:   m.Episodes,
-			Season:     m.Season,
-			SeasonYear: m.SeasonYear,
-			Score:      m.AverageScore,
-			Popularity: m.Popularity,
-			Genres:     m.Genres,
-			OnList:     listed,
-			Progress:   progress,
+			ID:          m.ID,
+			English:     m.Title.English,
+			Cover:       m.CoverImage.Large,
+			Thumb:       m.CoverImage.Medium,
+			Banner:      m.BannerImage,
+			Color:       m.CoverImage.Color,
+			Format:      m.Format,
+			Status:      m.Status,
+			Episodes:    m.Episodes,
+			Season:      m.Season,
+			SeasonYear:  m.SeasonYear,
+			Score:       m.AverageScore,
+			Popularity:  m.Popularity,
+			Genres:      m.Genres,
+			Description: m.Description,
+			OnList:      listed,
+			Progress:    entry.Progress,
+		}
+		if listed && entry.Status != "" {
+			status := entry.Status
+			it.ListStatus = &status
 		}
 		if m.Title.Romaji != nil {
 			it.Romaji = *m.Title.Romaji

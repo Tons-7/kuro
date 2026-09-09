@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { LIST_STATUSES } from '../lib/api'
+import { LIST_STATUSES, type LibraryItem } from '../lib/api'
 import { useFavourites, useLibrary, useLibraryCounts } from '../lib/queries'
 import { PosterCard, PosterGrid, toCard } from '../components/PosterCard'
 import {
@@ -17,6 +17,12 @@ import {
 } from '../components/ui'
 
 const FAVOURITES = 'favourites'
+
+// Episodes to measure progress against: the announced total, or what has
+// aired for a show still running without one.
+function total(item: LibraryItem): number | null {
+  return item.episodes ?? (item.nextEpisode ? item.nextEpisode - 1 : null)
+}
 
 export function Library() {
   const [params, setParams] = useSearchParams()
@@ -146,10 +152,12 @@ export function Library() {
                 key={item.id}
                 anime={{
                   ...toCard(item),
-                  percent: item.episodes ? (item.progress / item.episodes) * 100 : 0,
+                  // A show with no announced total still has a bar and a count,
+                  // measured against what has aired.
+                  percent: total(item) ? (item.progress / total(item)!) * 100 : 0,
                   badge:
-                    item.progress > 0 && item.episodes
-                      ? `${item.progress}/${item.episodes}`
+                    item.progress > 0 && total(item)
+                      ? `${item.progress}/${total(item)}`
                       : undefined,
                   myScore: item.score,
                 }}

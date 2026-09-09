@@ -11,6 +11,8 @@ export interface CardAnime {
   cover?: string | null
   color?: string | null
   episodes?: number | null
+  /** Episodes aired, where no total has been announced. */
+  aired?: number | null
   format?: string | null
   score?: number | null
   progress?: number
@@ -31,22 +33,27 @@ export interface CardAnime {
 export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
   const discover = item as DiscoverItem
   const library = item as LibraryItem
+  // Both carry a "status", meaning opposite things: on a search result it is
+  // the airing state, on a library row the list tag.
+  const fromDiscover = 'onList' in item
   return {
     id: item.id,
     title: item.title,
     cover: item.cover ?? null,
     color: (discover.color ?? library.color) ?? null,
     episodes: item.episodes ?? null,
+    // A long-runner has no announced total; what has aired stands in for it.
+    aired: !item.episodes && library.nextEpisode ? library.nextEpisode - 1 : null,
     format: discover.format ?? null,
     score: discover.score ?? null,
     progress: item.progress,
-    status: library.status ?? null,
+    status: fromDiscover ? (discover.listStatus ?? null) : (library.status ?? null),
     romaji: discover.romaji ?? null,
     english: discover.english ?? null,
     seasonYear: discover.seasonYear ?? null,
     genres: discover.Genres ?? null,
     description: discover.description ?? null,
-    airing: discover.status ?? null,
+    airing: fromDiscover ? (discover.status ?? null) : null,
   }
 }
 
@@ -98,7 +105,7 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
 
           {anime.badge && (
             <div className="absolute top-1.5 left-1.5">
-              <Badge tone="accent">{anime.badge}</Badge>
+              <Badge tone="overlay">{anime.badge}</Badge>
             </div>
           )}
 
@@ -108,7 +115,11 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
             )}
             <div className="flex items-center gap-1.5 text-[11px] text-base-300">
               {anime.format && <span>{anime.format.replace('_', ' ')}</span>}
-              {anime.episodes ? <span>· {anime.episodes} ep</span> : null}
+              {anime.episodes ? (
+                <span>· {anime.episodes} ep</span>
+              ) : anime.aired ? (
+                <span title="Still airing; no total announced">· {anime.aired} aired</span>
+              ) : null}
               {anime.myScore ? (
                 <span className="ml-auto text-accent-300" title="Your score">
                   ★ {Math.round(anime.myScore / 10)}/10

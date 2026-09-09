@@ -59,6 +59,7 @@ func (c *Client) Exchange(ctx context.Context, clientID, clientSecret, redirectU
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Referer", Referer)
 
 	res, err := c.http.Do(req)
 	if err != nil {

@@ -12,6 +12,8 @@ export interface HoverAnime {
   format?: string | null
   status?: string | null
   episodes?: number | null
+  /** Episodes aired, where no total has been announced. */
+  aired?: number | null
   seasonYear?: number | null
   score?: number | null
   genres?: string[] | null
@@ -93,7 +95,7 @@ function Panel({
   const meta = [
     anime.format?.replace('_', ' '),
     anime.seasonYear ? String(anime.seasonYear) : null,
-    anime.episodes ? `${anime.episodes} ep` : null,
+    anime.episodes ? `${anime.episodes} ep` : anime.aired ? `${anime.aired} aired` : null,
   ].filter(Boolean)
 
   return (
@@ -140,9 +142,15 @@ function Panel({
         <div className="mt-2.5">
           <p className="mb-1 text-[11px] text-base-400">
             Watched {anime.progress}
-            {anime.episodes ? ` of ${anime.episodes}` : ''}
+            {anime.episodes ? ` of ${anime.episodes}` : anime.aired ? ` of ${anime.aired} aired` : ''}
           </p>
-          <ProgressBar value={anime.episodes ? (anime.progress / anime.episodes) * 100 : 0} />
+          <ProgressBar
+            value={
+              anime.episodes || anime.aired
+                ? (anime.progress / (anime.episodes ?? anime.aired!)) * 100
+                : 0
+            }
+          />
         </div>
       )}
 

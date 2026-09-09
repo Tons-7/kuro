@@ -12,6 +12,7 @@ import {
   useRecommendations,
   useSetPref,
   useSetStatus,
+  type RelatedEntry,
   type Season,
 } from '../lib/queries'
 import { CharacterRail } from '../components/CharacterRail'
@@ -353,21 +354,15 @@ export function Anime() {
       </section>
 
       {(franchise.data?.seasons?.length ?? 0) > 1 && (
-        <section>
-          <h2 className="mb-3 section-title">
-            Seasons &amp; related
-          </h2>
-          <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
-            {franchise.data!.seasons.map((season) => (
-              <SeasonChip key={season.id} season={season} current={season.id === id} />
-            ))}
-          </div>
-        </section>
+        <Rail title="Seasons">
+          {franchise.data!.seasons.map((season) => (
+            <SeasonChip key={season.id} season={season} current={season.id === id} />
+          ))}
+        </Rail>
       )}
 
-      <CharacterRail animeId={id} />
+      <RelatedRails entries={franchise.data?.related ?? []} />
 
-      <ShowExtra animeId={id} />
 
       <section>
         <div className="mb-3 flex items-baseline justify-between">
@@ -398,6 +393,11 @@ export function Anime() {
           />
         )}
       </section>
+
+      {/* Below the episodes: the list is why the page was opened, and the cast
+          is something you browse afterwards. */}
+      <CharacterRail animeId={id} />
+      <ShowExtra animeId={id} />
 
       {(recommended.data?.items?.length ?? 0) > 0 && (
         <Rail title={recommended.data?.source === 'genre' ? 'Similar genres' : 'More like this'}>
@@ -638,7 +638,109 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   )
 }
 
-function SeasonChip({ season, current }: { season: Season; current: boolean }) {
+const KIND_LABELS: Record<string, string> = {
+  SIDE_STORY: 'Side story',
+  PARENT: 'Main story',
+  SPIN_OFF: 'Spin-off',
+  ALTERNATIVE: 'Alternative',
+  SUMMARY: 'Recap',
+}
+
+// Display order. An unlisted label sorts last rather than vanishing.
+const KIND_ORDER = [
+  'Movie',
+  'Special',
+  'OVA',
+  'ONA',
+  'Side story',
+  'Main story',
+  'Spin-off',
+  'Alternative',
+  'Recap',
+  'Related',
+]
+
+function rank(kind: string): number {
+  const i = KIND_ORDER.indexOf(kind)
+  return i === -1 ? KIND_ORDER.length : i
+}
+
+/**
+ * Films, OVAs and spin-offs: the same franchise, but not seasons of it. A show
+ * with a handful gets one rail; a franchise like Conan gets one per kind, since
+ * sixty entries in a single strip say nothing about what is in them.
+ */
+function RelatedRails({ entries }: { entries: RelatedEntry[] }) {
+  if (entries.length === 0) return null
+
+  const groups = new Map<string, RelatedEntry[]>()
+  for (const e of entries) {
+    const key = label(e)
+    groups.set(key, [...(groups.get(key) ?? []), e])
+  }
+  if (groups.size < 2 || entries.length <= 6) {
+    return <RelatedRail title="Related" entries={entries} />
+  }
+
+  return (
+    <>
+      {[...groups.keys()].sort((a, b) => rank(a) - rank(b)).map((kind) => (
+        <RelatedRail
+          key={kind}
+          title={groups.get(kind)!.length > 1 ? plural(kind) : kind}
+          entries={groups.get(kind)!}
+          kind={kind}
+        />
+      ))}
+    </>
+  )
+}
+
+// No Show all: the rail scrolls, and thirty-five films are thirty-five chips
+// either way. The heading carries the count.
+function RelatedRail({
+  title,
+  entries,
+  kind,
+}: {
+  title: string
+  entries: RelatedEntry[]
+  kind?: string
+}) {
+  return (
+    <Rail title={entries.length > 1 ? `${title} · ${entries.length}` : title}>
+      {entries.map((e) => (
+        <SeasonChip key={e.id} season={e} current={false} kind={kind ? undefined : label(e)} />
+      ))}
+    </Rail>
+  )
+}
+
+function plural(kind: string): string {
+  if (kind === 'Related') return 'Related'
+  return kind === 'Alternative' ? 'Alternatives' : `${kind}s`
+}
+
+// A film says "Movie"; the edge type only earns its place when the format does
+// not already say what the entry is.
+function label(e: RelatedEntry): string {
+  if (e.format === 'MOVIE') return 'Movie'
+  if (e.kind === 'SUMMARY') return 'Recap'
+  if (e.format === 'OVA' || e.format === 'ONA' || e.format === 'SPECIAL') {
+    return e.format === 'SPECIAL' ? 'Special' : e.format
+  }
+  return KIND_LABELS[e.kind] ?? 'Related'
+}
+
+function SeasonChip({
+  season,
+  current,
+  kind,
+}: {
+  season: Season
+  current: boolean
+  kind?: string
+}) {
   // What it was tagged first: marking a season completed does not set a
   // progress count, so inferring the label from progress left it blank.
   const tag = statusLabel(season.listStatus)
@@ -665,6 +767,9 @@ function SeasonChip({ season, current }: { season: Season; current: boolean }) {
         <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
       )}
       <div className="min-w-0">
+        {kind && (
+          <p className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">{kind}</p>
+        )}
         <p className="line-clamp-2 text-xs leading-snug text-base-100">
           {season.english || season.romaji || `Anime ${season.id}`}
         </p>

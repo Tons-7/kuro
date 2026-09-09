@@ -26,6 +26,23 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	}
 }
 
+// Without a referer AniList's edge answers 403 "API temporarily disabled",
+// which reads exactly like an outage. Every request carries one.
+func TestEveryRequestSendsTheReferer(t *testing.T) {
+	var got string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Referer")
+		io.WriteString(w, `{"data":{}}`)
+	})
+
+	if err := c.Query(context.Background(), "{Viewer{id}}", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got != Referer {
+		t.Errorf("Referer = %q, want %q", got, Referer)
+	}
+}
+
 // AniList derives the HTTP status from its error array and can return a
 // non-200 alongside usable data, so errors must be read from the body.
 func TestQueryReadsErrorsRegardlessOfStatus(t *testing.T) {

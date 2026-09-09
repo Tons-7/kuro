@@ -93,12 +93,19 @@ export interface Season {
   onList: boolean
 }
 
+/** A film, OVA, special or spin-off: same franchise, not part of the seasons. */
+export interface RelatedEntry extends Season {
+  kind: string
+}
+
 export function useFranchise(animeId?: number) {
   return useQuery({
     enabled: !!animeId,
     queryKey: ['franchise', animeId],
     queryFn: () =>
-      api.get<{ rootId: number; seasons: Season[] }>(`/api/franchise?id=${animeId}`),
+      api.get<{ rootId: number; seasons: Season[]; related: RelatedEntry[] }>(
+        `/api/franchise?id=${animeId}`,
+      ),
     staleTime: 30 * 60_000,
   })
 }

@@ -142,6 +142,8 @@ export interface DiscoverItem {
   description?: string
   onList: boolean
   progress: number
+  /** Which list it is on. `status` above is the airing state. */
+  listStatus?: string | null
 }
 
 export interface ScheduleItem {

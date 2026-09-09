@@ -288,19 +288,39 @@ func (s *Store) ClearDirty(ctx context.Context, animeID, remoteID, remoteUpdated
 // ListProgress maps anime to watched episode count for everything on the
 // user's list, so a schedule can mark what is already seen.
 func (s *Store) ListProgress(ctx context.Context) (map[int]int, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT anime_id, progress FROM list_entry`)
+	entries, err := s.ListEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]int, len(entries))
+	for id, e := range entries {
+		out[id] = e.Progress
+	}
+	return out, nil
+}
+
+// ListedEntry is what a card needs to show the list tag it already carries.
+type ListedEntry struct {
+	Status   string
+	Progress int
+}
+
+func (s *Store) ListEntries(ctx context.Context) (map[int]ListedEntry, error) {
+	rows, err := s.r.QueryContext(ctx,
+		`SELECT anime_id, coalesce(status, ''), progress FROM list_entry`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	out := make(map[int]int, 512)
+	out := make(map[int]ListedEntry, 512)
 	for rows.Next() {
-		var id, progress int
-		if err := rows.Scan(&id, &progress); err != nil {
+		var id int
+		var e ListedEntry
+		if err := rows.Scan(&id, &e.Status, &e.Progress); err != nil {
 			return nil, err
 		}
-		out[id] = progress
+		out[id] = e
 	}
 	return out, rows.Err()
 }

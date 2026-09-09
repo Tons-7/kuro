@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"time"
 
 	"kuro/internal/anilist"
 	"kuro/internal/store"
@@ -22,7 +23,16 @@ func NewRelations(s *store.Store, al *anilist.Client, log *slog.Logger) *Relatio
 }
 
 // Only prequel/sequel edges are seasons; spin-offs would wedge a recap mid-show.
-var seasonEdges = map[string]bool{"PREQUEL": true, "SEQUEL": true}
+var seasonEdges = store.SeasonKinds
+
+// Stored for the related row. CHARACTER and OTHER only share a cast.
+var relatedEdges = map[string]bool{
+	"SIDE_STORY": true, "PARENT": true, "SPIN_OFF": true, "ALTERNATIVE": true,
+	"SUMMARY": true, "PREQUEL": true, "SEQUEL": true,
+}
+
+// Walked again after this: franchises gain films and sequels.
+const relationsMaxAge = 7 * 24 * time.Hour
 
 // Fetch walks outward from one anime, following season edges until the whole
 // franchise is covered. Depth is bounded since a franchise can chain many entries.
@@ -32,6 +42,7 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 	seen := map[int]bool{animeID: true}
 	frontier := []int{animeID}
 	var saved []store.Relation
+	var walked []int
 
 	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
 		media, err := r.al.Relations(ctx, frontier)
@@ -41,20 +52,30 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 
 		var next []int
 		for _, m := range media {
+			walked = append(walked, m.ID)
 			for _, edge := range m.Relations.Edges {
-				if !seasonEdges[edge.Type] || edge.Node.Type != "ANIME" {
+				if !relatedEdges[edge.Type] || edge.Node.Type != "ANIME" {
 					continue
 				}
 				saved = append(saved, store.Relation{
 					AnimeID: m.ID, RelatedID: edge.Node.ID, Kind: edge.Type,
 				})
-				if !seen[edge.Node.ID] {
+				// Films and spin-offs are covered by this walk too; without
+				// marking them, opening one crawled the franchise again.
+				walked = append(walked, edge.Node.ID)
+				// Only the season chain is followed outward: films and spin-offs
+				// are recorded where they hang, not crawled through.
+				if seasonEdges[edge.Type] && !seen[edge.Node.ID] {
 					seen[edge.Node.ID] = true
 					next = append(next, edge.Node.ID)
 				}
 			}
 		}
 		frontier = next
+	}
+
+	if err := r.store.MarkRelationsFetched(ctx, append(walked, animeID)); err != nil {
+		r.log.Warn("record relation fetch", "anime", animeID, "err", err)
 	}
 
 	// Recorded, or Ensure asks AniList again on every visit to a standalone show.
@@ -106,7 +127,7 @@ func (r *Relations) Ensure(ctx context.Context, animeID int) error {
 	if err != nil {
 		return err
 	}
-	if !known {
+	if !known || r.store.RelationsStale(ctx, animeID, relationsMaxAge) {
 		_, err = r.Fetch(ctx, animeID)
 		return err
 	}

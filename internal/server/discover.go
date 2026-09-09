@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"kuro/internal/anilist"
-	"kuro/internal/store"
 )
 
 type discoverItem struct {
@@ -33,6 +32,9 @@ type discoverItem struct {
 	Description *string `json:"description,omitempty"`
 	OnList      bool    `json:"onList"`
 	Progress    int     `json:"progress"`
+	// Which list it is on. Status above is the airing state, so without this a
+	// card cannot tell "completed" from "never added".
+	ListStatus *string `json:"listStatus,omitempty"`
 }
 
 // Each window costs ~30s of upstream calls, too long to sit behind a tab click.
@@ -131,41 +133,10 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	onList, err := s.store.ListProgress(r.Context())
-	if err != nil {
-		s.log.Warn("list progress", "err", err)
-	}
-	titles := s.store.TitleMode(r.Context(), 0)
-
-	items := make([]discoverItem, 0, len(result.Media))
-	for _, m := range result.Media {
-		progress, listed := onList[m.ID]
-
-		it := discoverItem{
-			ID:          m.ID,
-			English:     m.Title.English,
-			Cover:       m.CoverImage.Large,
-			Thumb:       m.CoverImage.Medium,
-			Banner:      m.BannerImage,
-			Color:       m.CoverImage.Color,
-			Format:      m.Format,
-			Status:      m.Status,
-			Episodes:    m.Episodes,
-			Season:      m.Season,
-			SeasonYear:  m.SeasonYear,
-			Score:       m.AverageScore,
-			Popularity:  m.Popularity,
-			Genres:      m.Genres,
-			Description: m.Description,
-			OnList:      listed,
-			Progress:    progress,
-		}
-		if m.Title.Romaji != nil {
-			it.Romaji = *m.Title.Romaji
-		}
-		it.Title = store.PickTitle(titles, it.Romaji, it.English)
-		items = append(items, it)
-	}
+	// One builder for every grid: this one used to be a copy, and the copy is
+	// what left cards on the home page showing "Add to list" for a show
+	// already on it.
+	items := s.decorate(r, result.Media)
 
 	if page <= 0 {
 		page = 1

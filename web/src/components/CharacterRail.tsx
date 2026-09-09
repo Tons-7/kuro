@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { usePrefs } from '../lib/queries'
+import { Rail } from './Rail'
 import { Skeleton } from './ui'
 
 export interface Voice {
@@ -29,14 +30,11 @@ export function useCharacters(animeId: number | undefined) {
   })
 }
 
-/**
- * Who is in the show and who played them; MyAnimeList records one cast per
- * series. Laid out in rows so names aren't cut off by a single sideways strip.
- */
+/** Who is in the show and who played them; MyAnimeList records one cast per series. */
 export function CharacterRail({
   animeId,
-  limit = 12,
-  title = 'Characters',
+  limit = 24,
+  title = 'Cast',
 }: {
   animeId: number
   limit?: number
@@ -55,88 +53,79 @@ export function CharacterRail({
     return voices[0]
   }
 
-  // A count rather than a number of rows: the grid fits as many columns as the
-  // width allows, so how many make a row is not something this can know.
+  // A long cast still needs a cap — Conan lists two thousand — but the rail
+  // scrolls, so the first pass can be generous.
   const cast = data?.items ?? []
-  const shown = expanded ? cast.slice(0, 48) : cast.slice(0, limit)
+  const shown = expanded ? cast.slice(0, 120) : cast.slice(0, limit)
 
   if (isPending) {
     return (
-      <section className="space-y-3">
-        <h2 className="section-title">{title}</h2>
-        <div className="grid gap-x-3 gap-y-2.5 [grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))]">
-          {Array.from({ length: limit }, (_, i) => (
-            <Skeleton key={i} className="h-[72px] rounded-card" />
-          ))}
-        </div>
-      </section>
+      <Rail title={title}>
+        {Array.from({ length: limit }, (_, i) => (
+          <Skeleton key={i} className="h-[174px] w-[116px] shrink-0 rounded-card" />
+        ))}
+      </Rail>
     )
   }
   if (cast.length === 0) return null
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-baseline justify-between">
-        <h2 className="section-title">{title}</h2>
-        {cast.length > shown.length && (
+    <Rail
+      title={title}
+      action={
+        cast.length > limit && (
           <button
-            onClick={() => setExpanded(true)}
-            className="text-sm text-accent-400 transition-colors hover:text-accent-300"
+            onClick={() => setExpanded(!expanded)}
+            className="rounded-md px-2 py-1 text-sm text-base-400 transition-colors hover:bg-base-850 hover:text-white"
           >
-            Show more
+            {expanded ? 'Show less' : cast.length > 120 ? 'Show more' : `Show all ${cast.length}`}
           </button>
-        )}
-        {expanded && (
-          <button
-            onClick={() => setExpanded(false)}
-            className="text-sm text-accent-400 transition-colors hover:text-accent-300"
-          >
-            Show less
-          </button>
-        )}
-      </div>
-
-      <ul className="grid gap-x-3 gap-y-2.5 [grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))]">
-        {shown.map((c) => {
-          const voice = voiceOf(c)
-          return (
-            <li
-              key={c.id}
-              className="flex items-stretch overflow-hidden rounded-card bg-base-800 shadow-card ring-1 ring-white/5 transition-colors hover:bg-base-750"
-            >
+        )
+      }
+    >
+      {/* One portrait each, in the app's poster shape, with the actor's face as
+          a small avatar rather than a second full-height photo. */}
+      {shown.map((c) => {
+        const voice = voiceOf(c)
+        return (
+          <div key={c.id} className="w-[116px] shrink-0 snap-start">
+            <div className="relative overflow-hidden rounded-card shadow-card">
               {c.image ? (
-                <img src={c.image} alt="" loading="lazy" className="h-[72px] w-14 shrink-0 object-cover" />
+                <img src={c.image} alt="" loading="lazy" className="h-[174px] w-[116px] object-cover" />
               ) : (
-                <div className="h-[72px] w-14 shrink-0 bg-base-850" />
+                <div className="h-[174px] w-[116px] bg-base-850" />
               )}
-
-              {/* Stacked, not two columns: long Japanese names truncated both.
-                  min-w-0 lets the text ellipse instead of pushing portraits out. */}
-              <div className="min-w-0 flex-1 px-2.5 py-2">
-                <p className="truncate text-sm font-medium text-base-100" title={c.name}>
-                  {c.name}
-                </p>
-                <p className="text-xs text-base-500">{c.role}</p>
-                {voice && (
-                  <p
-                    className="mt-1 truncate text-xs text-base-300"
-                    title={`${voice.name} · ${voice.language}`}
-                  >
-                    {voice.name}
-                    <span className="text-base-600"> · {voice.language}</span>
-                  </p>
-                )}
-              </div>
-
-              {voice?.image ? (
-                <img src={voice.image} alt="" loading="lazy" className="h-[72px] w-14 shrink-0 object-cover" />
-              ) : (
-                voice && <div className="h-[72px] w-14 shrink-0 bg-base-850" />
+              {/* Only "Main" earns a badge: SUPPORTING on nine cards in ten
+                  says nothing. */}
+              {c.role?.toUpperCase() === 'MAIN' && (
+                <span className="absolute top-1.5 left-1.5 rounded-full bg-accent-500/85 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+                  Main
+                </span>
               )}
-            </li>
-          )
-        })}
-      </ul>
-    </section>
+              {voice?.image && (
+                <img
+                  src={voice.image}
+                  alt=""
+                  loading="lazy"
+                  title={`${voice.name} · ${voice.language}`}
+                  className="absolute right-1.5 bottom-1.5 size-9 rounded-full object-cover ring-2 ring-base-950/80"
+                />
+              )}
+            </div>
+            <p className="mt-2 line-clamp-2 text-[13px] leading-snug font-medium text-base-100" title={c.name}>
+              {c.name}
+            </p>
+            {voice && (
+              <p
+                className="line-clamp-2 text-xs leading-snug text-base-500"
+                title={`${voice.name} · ${voice.language}`}
+              >
+                {voice.name}
+              </p>
+            )}
+          </div>
+        )
+      })}
+    </Rail>
   )
 }
