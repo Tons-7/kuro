@@ -109,7 +109,7 @@ var specs = []spec{
 	{
 		name: "size", tier: tierPolicy,
 		reject: func(c Candidate, prefs Preferences) string {
-			if prefs.MaxAutoBytes > 0 && c.EpisodeBytes() > prefs.MaxAutoBytes {
+			if prefs.MaxAutoBytes > 0 && c.EpisodeBytes() > c.SizeLimit(prefs) {
 				return "larger than the automatic size limit"
 			}
 			return ""

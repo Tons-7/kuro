@@ -16,7 +16,7 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
     const el = track.current
     if (!el) return
     const max = el.scrollWidth - el.clientWidth
-    setState({
+    const next = {
       // A pixel of slack: sub-pixel widths otherwise report a rail that fits as
       // scrollable, and every short row grew arrows.
       scrollable: max > 1,
@@ -24,7 +24,11 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
       atEnd: el.scrollLeft >= max - 1,
       progress: max > 1 ? el.scrollLeft / max : 0,
       visible: el.scrollWidth > 0 ? el.clientWidth / el.scrollWidth : 1,
-    })
+    }
+    // The observers fire on every image that loads; most say nothing new.
+    setState((prev) =>
+      (Object.keys(next) as (keyof typeof next)[]).every((k) => prev[k] === next[k]) ? prev : next,
+    )
   }, [track])
 
   useEffect(() => {

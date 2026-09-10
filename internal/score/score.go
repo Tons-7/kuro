@@ -147,6 +147,9 @@ type Candidate struct {
 	// Episodes in the show, used to size a single episode inside a batch.
 	TotalEpisodes int
 
+	// One episode's length in minutes, 0 when unknown; scales the size limit.
+	RuntimeMinutes int
+
 	// The release states the episode asked for. Anything else is a guess,
 	// however well seeded.
 	Confirmed bool
@@ -159,6 +162,22 @@ type Candidate struct {
 	// asked for first. A release that names no cour counts from the first one,
 	// so for a later cour only the numbers carried across cours are listed.
 	Numbers []int `json:"-"`
+}
+
+// The limit is set for an episode of this length; longer runtimes scale it.
+const nominalRuntime = 24
+
+// SizeLimit scales the cap by runtime: a 50-minute film is twice the file of a
+// 24-minute episode at the same quality.
+func (c Candidate) SizeLimit(prefs Preferences) int64 {
+	if prefs.MaxAutoBytes <= 0 || c.RuntimeMinutes <= nominalRuntime {
+		return prefs.MaxAutoBytes
+	}
+	scaled := float64(prefs.MaxAutoBytes) * float64(c.RuntimeMinutes) / nominalRuntime
+	if limit := int64(scaled); limit > prefs.MaxAutoBytes {
+		return limit
+	}
+	return prefs.MaxAutoBytes
 }
 
 // EpisodeBytes is what will actually be downloaded. Only the requested file is
@@ -201,7 +220,13 @@ const (
 	dualAudioBonus      = 5.0
 	batchPenalty        = 15.0
 	unknownScopePenalty = 25.0
-	seedWeight          = 9.0
+	seedWeight          = 22.0
+	// Below the smallest gap between tiers, including a partial match, so the
+	// swarm orders equals and never buys a lower resolution.
+	maxSeedBonus = 50.0
+	// A handful of seeders streams badly however good the release is.
+	thinSwarm        = 5
+	thinSwarmPenalty = 30.0
 
 	// Larger than a tier step, so the quality ladder cannot overturn language:
 	// an unreadable 1080p is worth less than a readable 720p.
@@ -232,6 +257,11 @@ func Rank(cands []Candidate, prefs Preferences) []Result {
 func better(a, b Result) bool {
 	if a.AutoPick != b.AutoPick {
 		return a.AutoPick
+	}
+	// No resolution named is unproven quality: last, even if it is the only one
+	// naming the episode.
+	if a.AutoPick && (a.Release.Resolution == "") != (b.Release.Resolution == "") {
+		return b.Release.Resolution == ""
 	}
 	// A stated episode beats a maybe outright, so a film with no episode number
 	// can't outrank the actual episode on score alone.
@@ -321,14 +351,17 @@ func evaluate(c Candidate, prefs Preferences) Result {
 		r.add("episode not stated in the name")
 	}
 
-	// Log scaled: 1000 seeders must not drown out quality, but 0 against 20
-	// decides how long the first frame takes.
+	// Log scaled and capped: a big swarm decides between equals only.
 	switch {
 	case !c.Torrent.SeedersKnown:
 		r.add("swarm size unknown")
 	case c.Torrent.Seeders > 0:
-		r.Score += math.Log1p(float64(c.Torrent.Seeders)) * seedWeight
+		r.Score += min(math.Log1p(float64(c.Torrent.Seeders))*seedWeight, maxSeedBonus)
 		r.addf("%d seeders", c.Torrent.Seeders)
+		if c.Torrent.Seeders < thinSwarm {
+			r.Score -= thinSwarmPenalty
+			r.add("few seeders, expect a slow download")
+		}
 	}
 
 	if r.Score < 0 {

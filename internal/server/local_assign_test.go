@@ -12,14 +12,14 @@ func TestPreferredGroupsSettingReachesPlaybackPreferences(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := context.Background()
 
-	if p := h.server.preferences(ctx); len(p.PreferGroups) != 0 {
+	if p := h.server.preferences(ctx, 0); len(p.PreferGroups) != 0 {
 		t.Fatalf("default groups = %v", p.PreferGroups)
 	}
 	res, body := h.postJSON(t, "/api/prefs", map[string]any{"key": "release.prefer_groups", "value": `["SubsPlease","Erai-raws"]`})
 	if res.StatusCode != 200 {
 		t.Fatalf("HTTP %d %v", res.StatusCode, body)
 	}
-	p := h.server.preferences(ctx)
+	p := h.server.preferences(ctx, 0)
 	if len(p.PreferGroups) != 2 || p.PreferGroups[0] != "SubsPlease" {
 		t.Fatalf("groups = %v", p.PreferGroups)
 	}
@@ -82,5 +82,32 @@ func TestAssignAndForgetLocalFiles(t *testing.T) {
 	}
 	if f, _ := h.store.LocalFile(ctx, mystery); f.ID == 0 {
 		t.Fatal("present file was forgotten")
+	}
+}
+
+// The per-show group control writes an anime-scoped override, and the release
+// picker used to read the account-wide settings, so the control did nothing.
+func TestPerShowPreferencesReachTheReleasePicker(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	ctx := context.Background()
+
+	res, body := h.postJSON(t, "/api/prefs", map[string]any{
+		"key": "release.prefer_groups", "value": `["SubsPlease"]`,
+	})
+	if res.StatusCode != 200 {
+		t.Fatalf("HTTP %d %v", res.StatusCode, body)
+	}
+	res, body = h.postJSON(t, "/api/prefs", map[string]any{
+		"animeId": 21, "key": "release.prefer_groups", "value": `["Erai-raws"]`,
+	})
+	if res.StatusCode != 200 {
+		t.Fatalf("HTTP %d %v", res.StatusCode, body)
+	}
+
+	if p := h.server.preferences(ctx, 21); len(p.PreferGroups) != 1 || p.PreferGroups[0] != "Erai-raws" {
+		t.Errorf("the show's own groups = %v", p.PreferGroups)
+	}
+	if p := h.server.preferences(ctx, 99); len(p.PreferGroups) != 1 || p.PreferGroups[0] != "SubsPlease" {
+		t.Errorf("another show should still see the global: %v", p.PreferGroups)
 	}
 }

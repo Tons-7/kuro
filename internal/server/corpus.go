@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"sync"
@@ -300,7 +299,7 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 		AnimeID: id,
 		Episode: episode,
 		Season:  season,
-		Prefs:   s.preferences(r.Context()),
+		Prefs:   s.preferences(r.Context(), id),
 	})
 	if err != nil {
 		s.fail(w, "episode sources", err)
@@ -309,42 +308,15 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, got)
 }
 
-func (s *Server) preferences(ctx context.Context) score.Preferences {
-	prefs := score.DefaultPreferences()
-
-	if raw, _ := s.store.Setting(ctx, "quality.ladder"); raw != "" {
-		var tiers []string
-		if json.Unmarshal([]byte(raw), &tiers) == nil && len(tiers) > 0 {
-			prefs.Ladder = prefs.Ladder[:0]
-			for _, t := range tiers {
-				prefs.Ladder = append(prefs.Ladder, score.ParseTier(t))
-			}
-		}
+// preferences resolves the settings for one show: a per-show override wins over
+// the global, which is what playback already does. Zero means no show in mind.
+func (s *Server) preferences(ctx context.Context, animeID int) score.Preferences {
+	resolved, err := s.store.Prefs(ctx, animeID)
+	if err != nil {
+		s.log.Warn("read preferences", "anime", animeID, "err", err)
+		return score.DefaultPreferences()
 	}
-	if v, _ := s.store.Setting(ctx, "quality.max_auto_bytes"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			prefs.MaxAutoBytes = n
-		}
-	}
-	if v, _ := s.store.Setting(ctx, "quality.allow_hi10p"); v == "true" {
-		prefs.AllowHi10P = true
-	}
-	if raw, _ := s.store.Setting(ctx, "release.prefer_groups"); raw != "" {
-		var groups []string
-		if json.Unmarshal([]byte(raw), &groups) == nil {
-			prefs.PreferGroups = groups
-		}
-	}
-	if v, _ := s.store.Setting(ctx, "audio.prefer"); v != "" {
-		prefs.Audio = v
-	}
-	if raw, _ := s.store.Setting(ctx, "subtitle.languages"); raw != "" {
-		var langs []string
-		if json.Unmarshal([]byte(raw), &langs) == nil {
-			prefs.SubLanguages = langs
-		}
-	}
-	return prefs
+	return library.Preferences(resolved)
 }
 
 func (s *Server) RebuildIndex(ctx context.Context) error {

@@ -74,7 +74,11 @@ async function start(name) {
   const logFd = openSync(join(scratch, `${name}.log`), 'w')
   server = spawn(kuroExe, [], {
     cwd: root,
-    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1' },
+    // rqbit's session lives in Windows known folders; shared, it loads the real app's torrents.
+    env: {
+      ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1',
+      RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'), RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
+    },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })

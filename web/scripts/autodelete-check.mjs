@@ -92,7 +92,8 @@ try {
   symlinkSync(join(repo, 'bin'), join(root, 'bin'), process.platform === 'win32' ? 'junction' : 'dir')
   writeFileSync(
     join(root, 'config.toml'),
-    `addr = "127.0.0.1:${PORT}"\n\n[[indexer]]\ntype = "nyaa"\nurl = "${NYAA}"\n\n[[indexer]]\ntype = "tokyotosho"\nurl = "${TOKYO}"\n`,
+    // Its own engine: the default port is the real app's, and this test deletes downloads.
+    `addr = "127.0.0.1:${PORT}"\n\n[torrent]\napi_addr = "127.0.0.1:3034"\nlisten_port = 4344\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "${NYAA}"\n\n[[indexer]]\ntype = "tokyotosho"\nurl = "${TOKYO}"\n`,
   )
 
   if (process.env.SKIP_BUILD !== '1') {
@@ -108,7 +109,11 @@ try {
   const logFd = openSync(serverLog, 'w')
   server = spawn(kuroExe, [], {
     cwd: root,
-    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1' },
+    // rqbit's session lives in Windows known folders; shared, it loads the real app's torrents.
+    env: {
+      ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1',
+      RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'), RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
+    },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })

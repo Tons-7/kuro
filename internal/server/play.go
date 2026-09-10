@@ -39,7 +39,7 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	}
 	// Season 0 lets the finder read it from the title; forcing 1 rejected every
 	// "3rd Season" release.
-	prefs := s.preferences(r.Context())
+	prefs := s.preferences(r.Context(), body.AnimeID)
 	switch body.Audio {
 	case "sub", "dub", "either":
 		prefs.Audio = body.Audio

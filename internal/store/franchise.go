@@ -51,15 +51,27 @@ WITH members AS (
     WHERE root_id = (SELECT root_id FROM franchise WHERE anime_id = ?)
     UNION SELECT ?
 ),
+-- Both ways round: edges are stored from whichever entry was walked, so a
+-- film opened on its own would otherwise list nothing.
+linked AS (
+    SELECT r.related_id AS id, r.kind AS kind
+    FROM relation r JOIN members m ON m.anime_id = r.anime_id
+    UNION ALL
+    SELECT r.anime_id AS id,
+           CASE r.kind WHEN 'SIDE_STORY' THEN 'PARENT'
+                       WHEN 'SPIN_OFF'   THEN 'PARENT'
+                       WHEN 'PARENT'     THEN 'SIDE_STORY'
+                       ELSE r.kind END AS kind
+    FROM relation r JOIN members m ON m.anime_id = r.related_id
+),
 edges AS (
-    SELECT r.related_id AS id, min(r.kind) AS kind
-    FROM relation r
-    JOIN members m ON m.anime_id = r.anime_id
-    WHERE r.kind NOT IN ('PREQUEL','SEQUEL')
-      AND r.related_id NOT IN (SELECT anime_id FROM members)
-      AND r.related_id NOT IN (SELECT anime_id FROM dead_anime)
-      AND r.related_id <> ?
-    GROUP BY r.related_id
+    SELECT id, min(kind) AS kind
+    FROM linked
+    WHERE kind NOT IN ('PREQUEL','SEQUEL')
+      AND id NOT IN (SELECT anime_id FROM members)
+      AND id NOT IN (SELECT anime_id FROM dead_anime)
+      AND id <> ?
+    GROUP BY id
 )
 SELECT e.id, e.kind,
        coalesce(a.title_romaji, ''), a.title_english, a.cover_url,
@@ -427,6 +439,17 @@ func (s *Store) SearchTitles(ctx context.Context, animeID int) ([]string, error)
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// EpisodeRuntime is one episode's length in minutes, 0 when unknown.
+func (s *Store) EpisodeRuntime(ctx context.Context, animeID int) int {
+	var minutes *int
+	err := s.r.QueryRowContext(ctx,
+		`SELECT duration FROM anime WHERE id = ?`, animeID).Scan(&minutes)
+	if err != nil || minutes == nil {
+		return 0
+	}
+	return *minutes
 }
 
 func (s *Store) EpisodeCount(ctx context.Context, animeID int) (int, error) {

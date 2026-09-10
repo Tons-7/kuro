@@ -426,6 +426,7 @@ FROM anime a
 JOIN playback p2 ON p2.anime_id = a.id
 LEFT JOIN list_entry e ON e.anime_id = a.id
 ` + latestPlayback + `
+WHERE p2.last_played_at > 0
 GROUP BY a.id
 ORDER BY max(p2.last_played_at) DESC
 LIMIT ? OFFSET ?`
@@ -435,7 +436,7 @@ func (s *Store) RecentlyWatched(ctx context.Context, p Paging) (Page[LibraryItem
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}
-	total, err := s.countRows(ctx, `SELECT count(DISTINCT anime_id) FROM playback`)
+	total, err := s.countRows(ctx, `SELECT count(DISTINCT anime_id) FROM playback WHERE last_played_at > 0`)
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}

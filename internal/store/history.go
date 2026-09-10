@@ -31,6 +31,7 @@ SELECT a.id, a.title_romaji, a.title_english, a.cover_url, a.cover_medium,
 FROM playback p
 JOIN anime a ON a.id = p.anime_id
 LEFT JOIN episode ep ON ep.anime_id = p.anime_id AND ep.ep_key = p.ep_key
+WHERE p.last_played_at > 0
 ORDER BY p.last_played_at DESC, p.rowid DESC
 LIMIT ? OFFSET ?`
 
@@ -75,7 +76,7 @@ func (s *Store) History(ctx context.Context, p Paging) (Page[HistoryEntry], erro
 		return Page[HistoryEntry]{}, err
 	}
 
-	total, err := s.countRows(ctx, `SELECT count(*) FROM playback`)
+	total, err := s.countRows(ctx, `SELECT count(*) FROM playback WHERE last_played_at > 0`)
 	if err != nil {
 		return Page[HistoryEntry]{}, err
 	}

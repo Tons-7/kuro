@@ -93,7 +93,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 
 	// Season 0 lets the finder fill from the show's own title; forcing 1 here
 	// searched a second season's episodes as if they were season one.
-	s.prefetch.PrepareTarget(body.AnimeID, body.Episode, body.Season, s.preferences(r.Context()))
+	s.prefetch.PrepareTarget(body.AnimeID, body.Episode, body.Season, s.preferences(r.Context(), body.AnimeID))
 	send(w, http.StatusAccepted, map[string]any{"preparing": true})
 }
 

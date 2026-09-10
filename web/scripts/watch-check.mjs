@@ -1,7 +1,7 @@
 // Opens a watch page and reports what the user actually sees, and when.
 import { chromium } from 'playwright'
 
-const base = 'http://127.0.0.1:4321'
+const base = process.env.KURO_URL ?? 'http://127.0.0.1:4321'
 const target = process.argv[2] ?? '/watch/201514/1'
 
 const browser = await chromium.launch()

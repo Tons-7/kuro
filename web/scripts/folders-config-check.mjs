@@ -28,11 +28,15 @@ mkdirSync(join(scratch, 'appdata'), { recursive: true })
 spawnSyncOrThrow('cmd', ['/c', 'mklink', '/J', tools, join(repo, 'bin')])
 writeFileSync(
   join(root, 'config.toml'),
-  `addr = "127.0.0.1:${PORT}"\ndata_dir = "data"\ncache_dir = "store"\nbin_dir = '${tools}'\n\n[torrent]\napi_addr = "127.0.0.1:3032"\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
+  `addr = "127.0.0.1:${PORT}"\ndata_dir = "data"\ncache_dir = "store"\nbin_dir = '${tools}'\n\n[torrent]\napi_addr = "127.0.0.1:3032"\nlisten_port = 4342\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
 )
 
 const kuro = spawn(exe, ['--no-window'], {
-  env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: join(scratch, 'appdata'), KURO_NO_WINDOW: '1' },
+  // rqbit's session lives in Windows known folders; shared, it loads the real app's torrents.
+  env: {
+    ...process.env, KURO_ROOT: root, LOCALAPPDATA: join(scratch, 'appdata'), KURO_NO_WINDOW: '1',
+    RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'), RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
+  },
   stdio: 'ignore',
 })
 try {

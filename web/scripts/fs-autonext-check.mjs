@@ -108,6 +108,14 @@ check(await fullscreen(), 'still fullscreen while the card counts down')
 await page.screenshot({ path: `${SHOTS}/fs-countdown.png` })
 
 check(await until(() => page.url().endsWith(`/watch/${ANIME}/2`), 25_000), 'auto-next advanced to episode 2', page.url())
+
+// How long the switch leaves you looking at nothing. Play used to wait on
+// canplay, so the next episode sat there apparently paused.
+const switched = Date.now()
+const started = await until(() => video.evaluate((v) => !v.paused), 20_000)
+const gap = Date.now() - switched
+check(started, 'episode 2 starts on its own')
+check(gap < 4000, 'and starts promptly rather than sitting paused', `${gap}ms`)
 await sleep(2500)
 
 check(await fullscreen(), 'STILL FULLSCREEN on the next episode')
@@ -165,6 +173,15 @@ check(
   'the ways out are reachable from inside the player',
 )
 await page.screenshot({ path: `${SHOTS}/fs-no-release.png` })
+
+// Auto play off means the episode is loaded and waiting, not started for you.
+console.log('\n-- auto play off --')
+await post('/api/prefs', { key: 'playback.autoplay', value: 'false' })
+await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'the episode still loads')
+await sleep(5000)
+check(await video.evaluate((v) => v.paused), 'and it waits for a click instead of starting',
+  await video.evaluate((v) => `t=${v.currentTime.toFixed(1)}`))
 
 await browser.close()
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)

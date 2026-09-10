@@ -41,6 +41,8 @@ export function Browse() {
     const next = new URLSearchParams(params)
     if (debounced) next.set('q', debounced)
     else next.delete('q')
+    // A new search starts at its own first page, not page four of the last one.
+    if (next.get('q') !== params.get('q')) next.delete('page')
     if (next.toString() !== params.toString()) setParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced])
@@ -86,6 +88,13 @@ export function Browse() {
     // Changing a filter must return to the first page or the results look empty.
     next.delete('page')
     setParams(next)
+  }
+
+  const goToPage = (n: number) => {
+    const next = new URLSearchParams(params)
+    next.set('page', String(n))
+    setParams(next)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   return (
@@ -187,15 +196,11 @@ export function Browse() {
           </PosterGrid>
 
           <div className="flex items-center justify-center gap-2 pt-2">
-            <PageButton
-              disabled={page <= 1}
-              onClick={() => set('page', String(page - 1))}
-              label="Previous"
-            />
+            <PageButton disabled={page <= 1} onClick={() => goToPage(page - 1)} label="Previous" />
             <span className="text-sm text-base-400">Page {page}</span>
             <PageButton
               disabled={!results.data.hasMore}
-              onClick={() => set('page', String(page + 1))}
+              onClick={() => goToPage(page + 1)}
               label="Next"
             />
           </div>

@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type LibraryItem } from '../lib/api'
 import { clockTime } from '../lib/format'
+import { browseSeason, currentSeason, nextSeason } from '../lib/season'
 import { useAired, useDiscover, useHome, useNow } from '../lib/queries'
 import { Hero } from '../components/Hero'
 import { HoverInfo } from '../components/HoverInfo'
@@ -15,6 +16,7 @@ import { ProgressBar, Skeleton } from '../components/ui'
 export function Home() {
   const trending = useDiscover('trending', 20)
   const seasonal = useDiscover('season', 20)
+  const upcoming = useDiscover('upcoming', 20)
   const continuing = useHome()
   const schedule = useAired(48)
 
@@ -62,7 +64,7 @@ export function Home() {
           {seasonal.isPending ? (
             <RailSkeleton title="This season" />
           ) : (
-            <Rail title="This season" more={{ to: '/browse?sort=popular' }}>
+            <Rail title="This season" more={{ to: browseSeason(currentSeason()) }}>
               {(seasonal.data?.items ?? []).map((anime) => (
                 <RailItem key={anime.id}>
                   <PosterCard anime={toCard(anime)} />
@@ -81,6 +83,20 @@ export function Home() {
                 </RailItem>
               ))}
             </Rail>
+          )}
+
+          {upcoming.isPending ? (
+            <RailSkeleton title="Upcoming" />
+          ) : (
+            (upcoming.data?.items ?? []).length > 0 && (
+              <Rail title="Upcoming" more={{ to: browseSeason(nextSeason()) }}>
+                {(upcoming.data?.items ?? []).map((anime) => (
+                  <RailItem key={anime.id}>
+                    <PosterCard anime={toCard(anime)} />
+                  </RailItem>
+                ))}
+              </Rail>
+            )
           )}
         </div>
 

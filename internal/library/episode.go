@@ -104,6 +104,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 		return Candidates{}, err
 	}
 	total, _ := f.store.EpisodeCount(ctx, req.AnimeID)
+	runtime := f.store.EpisodeRuntime(ctx, req.AnimeID)
 	bestByHash, bestByGroup, _ := f.store.SeaDexFor(ctx, req.AnimeID)
 
 	// Results rank by seeders and the curated release is rarely the most
@@ -162,7 +163,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 				continue
 			}
 			c := score.Candidate{
-				Torrent: t, Release: rel, TotalEpisodes: total,
+				Torrent: t, Release: rel, TotalEpisodes: total, RuntimeMinutes: runtime,
 				Confirmed: confirms(rel, req), Numbers: numbersFor(rel, req),
 				// Kept, not dropped: the picker shows what was found and why not.
 				WrongShow: !identity.matches(rel, t.Title),

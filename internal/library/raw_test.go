@@ -2,7 +2,9 @@ package library
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"kuro/internal/indexer"
 	"kuro/internal/parse"
@@ -25,7 +27,7 @@ func TestNoReleaseSinglesOutARawOnlyEpisode(t *testing.T) {
 		t.Fatalf("expected a raw rejection, got %v", raw.Rejections)
 	}
 
-	err := noRelease(Candidates{Results: []score.Result{raw}, Queries: []string{"a"}}, PlayRequest{Episode: 7})
+	err := noRelease(Candidates{Results: []score.Result{raw}, Queries: []string{"a"}}, PlayRequest{Episode: 7}, true, 0)
 
 	var missing *NoRelease
 	if !errors.As(err, &missing) {
@@ -40,7 +42,7 @@ func TestNoReleaseSinglesOutARawOnlyEpisode(t *testing.T) {
 }
 
 func TestNoReleaseStaysGenericWhenNothingMatched(t *testing.T) {
-	err := noRelease(Candidates{Queries: []string{"a", "b"}}, PlayRequest{Episode: 7})
+	err := noRelease(Candidates{Queries: []string{"a", "b"}}, PlayRequest{Episode: 7}, true, 0)
 
 	var missing *NoRelease
 	if !errors.As(err, &missing) {
@@ -65,5 +67,26 @@ func TestAllowRawAcceptsTheRelease(t *testing.T) {
 	prefs.AllowRaw = true
 	if got := score.Rank([]score.Candidate{c}, prefs)[0]; !got.AutoPick {
 		t.Fatalf("raw still blocked with AllowRaw: %q", got.Blocked)
+	}
+}
+
+// An episode the catalogue puts in the future is not a search failure, and
+// saying "none met your preferences" sends people to change settings for nothing.
+func TestNoReleaseSaysWhenTheEpisodeIsNotOut(t *testing.T) {
+	airs := time.Now().Add(50 * time.Hour).Unix()
+	err := noRelease(Candidates{Queries: []string{"a"}}, PlayRequest{Episode: 8}, false, airs)
+
+	var missing *NoRelease
+	if !errors.As(err, &missing) {
+		t.Fatalf("error is not a *NoRelease: %T", err)
+	}
+	if !missing.Unaired {
+		t.Error("the episode was not flagged as unaired")
+	}
+	if !strings.Contains(err.Error(), "has not aired yet") {
+		t.Errorf("message = %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "2 days") {
+		t.Errorf("message does not say when it airs: %q", err.Error())
 	}
 }

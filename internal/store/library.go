@@ -290,6 +290,7 @@ LEFT JOIN (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at,
            ROW_NUMBER() OVER (PARTITION BY anime_id ORDER BY last_played_at DESC) AS rn
     FROM playback
+    WHERE last_played_at > 0
 ) p ON p.anime_id = a.id AND p.rn = 1
 LEFT JOIN episode ep ON ep.anime_id = a.id AND ep.ep_key = p.ep_key`
 
@@ -332,22 +333,57 @@ LIMIT ?3 OFFSET ?4`
 // show. "Not finished" is position vs threshold (same rule as ResumeAt); the 15s
 // floor matches resumable() so the rail and the resume prompt agree.
 const inProgress = `dismissed = 0 AND position_s >= 15
-      AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * ?)
+      AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * ?1)
       AND NOT (coalesce(duration_s, 0) <= 0 AND watched = 1)`
 
-const continueQuery = `
-SELECT ` + libraryColumns + `
-FROM anime a
-JOIN (
+// Two ways to continue: an episode stopped part way, or the next one of a show
+// being watched. Without the second, finishing an episode emptied the row.
+const continuePicks = `
+WITH resume AS (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at,
            ROW_NUMBER() OVER (PARTITION BY anime_id ORDER BY last_played_at DESC) AS rn
     FROM playback
     WHERE ` + inProgress + `
-) p ON p.anime_id = a.id AND p.rn = 1
+),
+upnext AS (
+    SELECT e.anime_id,
+           cast(e.progress + 1 AS TEXT) AS ep_key,
+           NULL AS position_s, NULL AS duration_s, 0 AS watched,
+           coalesce((SELECT max(last_played_at) FROM playback p WHERE p.anime_id = e.anime_id),
+                    e.local_updated_at) AS last_played_at
+    FROM list_entry e
+    JOIN anime a ON a.id = e.anime_id
+    WHERE e.status IN ('CURRENT','REPEATING')
+      AND e.progress > 0
+      AND (a.episode_count IS NULL OR e.progress < a.episode_count)
+      -- Not one still to broadcast: the card would sit there all week and
+      -- fail when clicked.
+      AND (a.next_episode IS NULL OR a.next_airing_at IS NULL
+           OR e.progress + 1 < a.next_episode OR a.next_airing_at <= unixepoch())
+      AND e.anime_id NOT IN (SELECT anime_id FROM resume WHERE rn = 1)
+      AND NOT EXISTS (
+          SELECT 1 FROM playback d
+          WHERE d.anime_id = e.anime_id
+            AND d.ep_key = cast(e.progress + 1 AS TEXT)
+            AND d.dismissed = 1)
+),
+picks AS (
+    SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at
+    FROM resume WHERE rn = 1
+    UNION ALL
+    SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at FROM upnext
+)`
+
+const continueQuery = continuePicks + `
+SELECT ` + libraryColumns + `
+FROM picks p
+JOIN anime a ON a.id = p.anime_id
 LEFT JOIN list_entry e ON e.anime_id = a.id
 LEFT JOIN episode ep ON ep.anime_id = a.id AND ep.ep_key = p.ep_key
 ORDER BY p.last_played_at DESC
-LIMIT ? OFFSET ?`
+LIMIT ?2 OFFSET ?3`
+
+const continueCountQuery = continuePicks + `SELECT count(*) FROM picks`
 
 // One extra row is requested so the envelope can report hasMore without a
 // second query.
@@ -420,8 +456,7 @@ func (s *Store) ContinueWatching(ctx context.Context, p Paging) (Page[LibraryIte
 		return Page[LibraryItem]{}, err
 	}
 
-	total, err := s.countRows(ctx,
-		`SELECT count(DISTINCT anime_id) FROM playback WHERE `+inProgress, threshold)
+	total, err := s.countRows(ctx, continueCountQuery, threshold)
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}

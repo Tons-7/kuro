@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type Release struct {
@@ -65,7 +66,12 @@ var (
 
 	// Where the title stops and quality metadata begins, for scene-style names
 	// with no brackets to strip.
-	metaStart = regexp.MustCompile(`(?i)[\s._]+\b(\d{3,4}[pi]|BD|BDRip|BDMV|Blu-?ray|Remux|WEB-?DL|WEB-?Rip|WEB|HDTV|TVRip|DVD|DVDRip|CR|HIDIVE|AMZN|NF|Baha|Funi|x26[45]|H\.?26[45]|HEVC|AVC|AV1|VP9|MPEG-?2|AAC|FLAC|Opus|E?-?AC-?3|DDP?|DTS|TrueHD|Dual|Multi|10-?bits?|8-?bits?|Hi10P|Complete|Batch)\b`)
+	metaTokens = `\d{3,4}[pi]|BD|BDRip|BDMV|Blu-?ray|Remux|WEB-?DL|WEB-?Rip|WEB|HDTV|TVRip|DVD|DVDRip|CR|HIDIVE|AMZN|NF|Baha|Funi|x26[45]|H\.?26[45]|HEVC|AVC|AV1|VP9|MPEG-?2|AAC|FLAC|Opus|E?-?AC-?3|DDP?|DTS|TrueHD|Dual|Multi|10-?bits?|8-?bits?|Hi10P|Complete|Batch`
+	metaStart  = regexp.MustCompile(`(?i)[\s._]+\b(` + metaTokens + `)\b`)
+
+	// "Show 08 1080p": a bare number counts only against the quality run, and
+	// needs a word before it, or a show named 86 is episode 86.
+	bareEp = regexp.MustCompile(`(?i)(?:^|[\s._])(\d{2,3})(?:v(\d))?[\s._]+\[?(` + metaTokens + `)\b`)
 
 	dotSeparated = regexp.MustCompile(`[._]`)
 )
@@ -296,6 +302,14 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 	if m == nil {
 		m = markedEp.FindStringSubmatch(work)
 	}
+	if m == nil {
+		if b := bareEpisode(work); b != nil {
+			m = []string{work[b[0]:b[1]], work[b[2]:b[3]], ""}
+			if b[4] >= 0 {
+				m[2] = work[b[4]:b[5]]
+			}
+		}
+	}
 	if m != nil {
 		episode, _ = strconv.Atoi(m[1])
 		if m[2] != "" {
@@ -305,7 +319,39 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 	return season, episode, end, version
 }
 
+// bareEpisode locates the number in "Show 08 1080p", or nil. The separator must
+// not belong to a number of its own, or "Evangelion.3.33.1080p" is episode 33.
+func bareEpisode(work string) []int {
+	for _, m := range bareEp.FindAllStringSubmatchIndex(work, -1) {
+		if !hasWordBefore(work, m[2]) {
+			continue
+		}
+		if m[0] > 0 && work[m[0]-1] >= '0' && work[m[0]-1] <= '9' {
+			continue
+		}
+		return m
+	}
+	return nil
+}
+
+// hasWordBefore: a letter before the index, ignoring the group bracket.
+func hasWordBefore(work string, idx int) bool {
+	head := work[:idx]
+	if m := leadGroup.FindString(head); m != "" {
+		head = head[len(m):]
+	}
+	return strings.ContainsFunc(head, unicode.IsLetter)
+}
+
 func title(work string, r Release) string {
+	// Before the brackets go, keeping the quality token the cut below needs.
+	if b := bareEpisode(work); r.Episode > 0 && b != nil {
+		end := b[3]
+		if b[4] >= 0 {
+			end = b[5]
+		}
+		work = work[:b[0]] + work[end:]
+	}
 	s := bracketed.ReplaceAllString(work, " ")
 
 	if r.Group != "" {

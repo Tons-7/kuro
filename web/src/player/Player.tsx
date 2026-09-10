@@ -164,6 +164,8 @@ export function Player({
     // ranges sits over the new one.
     setTime(0)
     setDuration(0)
+    // Or a new episode sits on a paused frame while it buffers.
+    setWaiting(true)
   }
 
   const playlist = stream?.playlist
@@ -262,6 +264,8 @@ export function Player({
   useEffect(() => {
     if (!video || !stream?.id || !autoPlayRef.current) return
     const start = () => void video.play().catch(() => {})
+    // Straight away; waiting on canplay left the next episode still for seconds.
+    start()
     video.addEventListener('canplay', start, { once: true })
     return () => video.removeEventListener('canplay', start)
   }, [video, stream?.id])
@@ -332,6 +336,18 @@ export function Player({
     },
     [video],
   )
+
+  // Only a slow seek earns a spinner; otherwise every arrow press flashes one.
+  const seekTimer = useRef<number>(0)
+  const markSeeking = useCallback((active: boolean) => {
+    window.clearTimeout(seekTimer.current)
+    if (!active) {
+      setWaiting(false)
+      return
+    }
+    seekTimer.current = window.setTimeout(() => setWaiting(true), 150)
+  }, [])
+  useEffect(() => () => window.clearTimeout(seekTimer.current), [])
 
   // On touch, a double tap on either third of the picture seeks ten seconds
   // that way; a single tap still toggles play. Mouse clicks are unchanged.
@@ -487,6 +503,9 @@ export function Player({
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}
         onCanPlay={() => setWaiting(false)}
+        // Paused seeks repaint only once the new position decodes.
+        onSeeking={() => markSeeking(true)}
+        onSeeked={() => markSeeking(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
         onVolumeChange={(e) => {

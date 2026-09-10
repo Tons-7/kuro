@@ -93,13 +93,16 @@ await new Promise((r) => gh.listen(0, '127.0.0.1', r))
 const ghBase = () => `http://127.0.0.1:${gh.address().port}`
 
 // ---------------------------------------------------------------- run old
-writeFileSync(join(root, 'config.toml'), `addr = "127.0.0.1:${PORT}"\n`)
+// Its own engine port and session: the default port is the real app's engine.
+writeFileSync(join(root, 'config.toml'), `addr = "127.0.0.1:${PORT}"\n\n[torrent]\napi_addr = "127.0.0.1:3033"\nlisten_port = 4343\nupnp = false\n`)
 const env = {
   ...process.env,
   KURO_ROOT: root,
   LOCALAPPDATA: data,
   KURO_UPDATE_API: ghBase(),
   KURO_NO_WINDOW: '1',
+  RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'),
+  RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
 }
 const old = spawn(join(root, 'kuro.exe'), [], { env, cwd: root })
 let oldLog = ''

@@ -338,6 +338,7 @@ export function Anime() {
             )}
 
             <AutoDownload animeId={id} />
+            <ShowGroups animeId={id} />
             <SyncNote sync={detail.data?.sync} />
             {detail.isSuccess && (
               <ExternalLinks
@@ -468,6 +469,76 @@ function AutoDownload({ animeId }: { animeId: number }) {
       </span>
       {on ? 'Auto-downloading new episodes' : 'Auto-download new episodes'}
     </button>
+  )
+}
+
+function parseGroups(raw: string | undefined): string[] {
+  try {
+    const parsed = JSON.parse(raw || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+// One show's groups, over the account-wide ones. A preference, not a filter: quality still decides first.
+function ShowGroups({ animeId }: { animeId: number }) {
+  const prefs = usePrefs(animeId)
+  const setPref = useSetPref()
+  const [open, setOpen] = useState(false)
+
+  const own = parseGroups(prefs.data?.overrides?.['release.prefer_groups'])
+  const inherited = parseGroups(prefs.data?.defaults?.['release.prefer_groups'])
+  const [text, setText] = useState('')
+  useEffect(() => setText(own.join(', ')), [prefs.data?.overrides?.['release.prefer_groups']]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!prefs.isSuccess) return null
+
+  const save = () => {
+    const groups = text.split(',').map((g) => g.trim()).filter(Boolean)
+    if (groups.join(',') === own.join(',')) return
+    setPref.mutate({
+      animeId,
+      key: 'release.prefer_groups',
+      value: groups.length > 0 ? JSON.stringify(groups) : '',
+    })
+  }
+
+  if (!open && own.length === 0) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-2 block text-xs text-base-500 transition-colors hover:text-base-200"
+      >
+        Prefer a release group for this show…
+      </button>
+    )
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-400">
+      <label htmlFor={`groups-${animeId}`}>Prefer for this show</label>
+      <input
+        id={`groups-${animeId}`}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+        placeholder={inherited.length > 0 ? inherited.join(', ') : 'SubsPlease'}
+        className="w-48 rounded-md border border-base-800 bg-base-900 px-2 py-1 text-xs text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none"
+      />
+      {own.length > 0 && (
+        <button
+          onClick={() => {
+            setText('')
+            setPref.mutate({ animeId, key: 'release.prefer_groups', value: '' })
+          }}
+          className="text-base-500 transition-colors hover:text-base-200"
+        >
+          Clear
+        </button>
+      )}
+    </div>
   )
 }
 

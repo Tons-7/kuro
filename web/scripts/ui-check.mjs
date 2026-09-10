@@ -33,7 +33,15 @@ await p.getByRole('button', { name: /^Genre/ }).click()
 await p.waitForTimeout(700)
 const box = await p.locator('[role=listbox]').first().boundingBox()
 console.log('genre panel width :', Math.round(box?.width ?? 0))
-await p.locator('[role=listbox] input').fill('rom')
-await p.waitForTimeout(500)
-console.log('after typing "rom":', await p.locator('[role=listbox] [role=option]').allInnerTexts())
+// The search box only exists once the vocabulary has arrived; without it the
+// panel is the narrow kind and there is nothing to type into.
+const search = p.locator('[role=listbox] input')
+console.log('genre options     :', await p.locator('[role=listbox] [role=option]').count())
+if (await search.count()) {
+  await search.fill('rom')
+  await p.waitForTimeout(500)
+  console.log('after typing "rom":', await p.locator('[role=listbox] [role=option]').allInnerTexts())
+} else {
+  console.log('after typing "rom": no search box — the genre list came back empty')
+}
 await b.close()

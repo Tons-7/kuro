@@ -175,6 +175,18 @@ func aired(episode, nextEpisode int, airingAt, now int64) bool {
 	return airingAt <= now
 }
 
+// EpisodeAired answers whether an episode has broadcast, and when the next one
+// does. Unknown counts as aired: no schedule is not evidence of a future date.
+func (s *Store) EpisodeAired(ctx context.Context, animeID, episode int) (bool, int64) {
+	var next, at *int
+	err := s.r.QueryRowContext(ctx,
+		`SELECT next_episode, next_airing_at FROM anime WHERE id = ?`, animeID).Scan(&next, &at)
+	if err != nil || next == nil || at == nil {
+		return true, 0
+	}
+	return aired(episode, *next, int64(*at), time.Now().Unix()), int64(*at)
+}
+
 // Watched shows are those followed plus those set to auto-download (separate
 // choices). Grouped by anime, not UNIONed: a show that is both matches twice
 // with differing filter columns, which would search every indexer twice per poll.

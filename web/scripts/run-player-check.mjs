@@ -36,6 +36,15 @@ const ffmpeg = join(repo, 'bin', exe('ffmpeg'))
 const scratch = join(tmpdir(), 'kuro-e2e')
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
+// rqbit finds its session through Windows known folders, not LOCALAPPDATA:
+// unset, the scratch engine loads the real app's torrents and can delete them.
+const isolated = {
+  KURO_ROOT: root,
+  LOCALAPPDATA: appdata,
+  KURO_NO_WINDOW: '1',
+  RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'),
+  RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
+}
 const lib = join(scratch, 'lib')
 const shots = join(scratch, 'shots')
 const serverLog = join(scratch, 'server.log')
@@ -194,7 +203,9 @@ try {
   // refused for want of a site, and the first-run nudge stays off.
   writeFileSync(
     join(root, 'config.toml'),
-    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\napi_addr = "127.0.0.1:3031"\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
+    // listen_port off rqbit's default: its DHT binds UDP there, and sharing it
+    // stops the real app's engine starting.
+    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\napi_addr = "127.0.0.1:3031"\nlisten_port = 4341\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
   )
 
   if (!SKIP_BUILD) {
@@ -217,7 +228,7 @@ try {
     cwd: root,
     // No app window: Playwright is the browser, and the window's Chromium
     // profile outlives taskkill and blocks the scratch cleanup.
-    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1' },
+    env: { ...process.env, ...isolated },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })

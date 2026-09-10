@@ -687,7 +687,8 @@ func (p *Playback) candidates(ctx context.Context, req PlayRequest) ([]score.Res
 	}
 
 	if found.Best == nil {
-		return nil, noRelease(found, req)
+		aired, airsAt := p.store.EpisodeAired(ctx, req.AnimeID, req.Episode)
+		return nil, noRelease(found, req, aired, airsAt)
 	}
 
 	// The best release first, then the rest as fallbacks, capped so a show
@@ -714,16 +715,39 @@ type NoRelease struct {
 	Found    int
 	RawOnly  bool
 	RawTitle string
-	message  string
+	// Unaired is set when the catalogue puts this episode in the future; AirsAt
+	// is that broadcast time, zero when unknown.
+	Unaired bool
+	AirsAt  int64
+	message string
 }
 
 func (e *NoRelease) Error() string { return e.message }
 
-func noRelease(found Candidates, req PlayRequest) error {
+// airsIn phrases the wait, or says nothing when the time is unknown or past.
+func airsIn(at int64) string {
+	if at <= 0 {
+		return ""
+	}
+	d := time.Until(time.Unix(at, 0))
+	switch {
+	case d <= 0:
+		return ""
+	case d < time.Hour:
+		return fmt.Sprintf(" — it airs in %d minutes", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf(" — it airs in %d hours", int(d.Hours()))
+	}
+	return fmt.Sprintf(" — it airs in %d days", int(d.Hours()/24))
+}
+
+func noRelease(found Candidates, req PlayRequest, aired bool, airsAt int64) error {
 	out := &NoRelease{
 		Episode: req.Episode,
 		Queries: len(found.Queries),
 		Found:   len(found.Results),
+		Unaired: !aired,
+		AirsAt:  airsAt,
 	}
 
 	for _, r := range found.Results {
@@ -735,6 +759,8 @@ func noRelease(found Candidates, req PlayRequest) error {
 	}
 
 	switch {
+	case out.Unaired:
+		out.message = fmt.Sprintf("episode %d has not aired yet%s", req.Episode, airsIn(airsAt))
 	case out.RawOnly:
 		out.message = fmt.Sprintf(
 			"episode %d is out as a raw broadcast, but no subtitled release yet — "+

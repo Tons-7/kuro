@@ -85,3 +85,43 @@ func TestRelationFreshness(t *testing.T) {
 		t.Error("every id walked is marked, not only the one asked for")
 	}
 }
+
+// Edges are stored from whichever entry the walk started at, and a film reached
+// from a show is marked as fetched, so opening it listed nothing at all.
+func TestRelatedWorksFromTheFilmSide(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 1, "FINISHED", 12)
+	seedCatalogue(t, s, 2, "FINISHED", 1)
+	seedCatalogue(t, s, 3, "FINISHED", 1)
+
+	if err := s.SaveRelations(ctx, []Relation{
+		{AnimeID: 1, RelatedID: 2, Kind: "SIDE_STORY"},
+		{AnimeID: 1, RelatedID: 3, Kind: "SPIN_OFF"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	film, err := s.Related(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(film) == 0 {
+		t.Fatal("the film lists nothing related, not even the show it hangs off")
+	}
+	var sawShow bool
+	for _, e := range film {
+		if e.ID == 1 {
+			sawShow = true
+			if e.Kind != "PARENT" {
+				t.Errorf("the show is listed as %q from the film's side", e.Kind)
+			}
+		}
+		if e.ID == 2 {
+			t.Error("the film lists itself")
+		}
+	}
+	if !sawShow {
+		t.Errorf("the parent show is missing: %+v", film)
+	}
+}

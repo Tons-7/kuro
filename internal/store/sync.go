@@ -92,9 +92,13 @@ func ValidStatus(status string) bool {
 }
 
 // Its own flag, not watched: dismissing is not a claim the episode was seen.
+// The episode may never have been played, so the row may not exist; zero
+// last_played_at keeps the marker out of history and recent.
 func (s *Store) DismissResume(ctx context.Context, animeID int, epKey string) error {
-	_, err := s.w.ExecContext(ctx,
-		`UPDATE playback SET dismissed = 1 WHERE anime_id = ? AND ep_key = ?`, animeID, epKey)
+	_, err := s.w.ExecContext(ctx, `
+		INSERT INTO playback (anime_id, ep_key, last_played_at, dismissed)
+		VALUES (?, ?, 0, 1)
+		ON CONFLICT(anime_id, ep_key) DO UPDATE SET dismissed = 1`, animeID, epKey)
 	return err
 }
 
