@@ -97,7 +97,12 @@ for (let i = 0; i < 20 && !keptBoth; i++) {
   keptBoth = (await downloadedBadge.count()) === 2
 }
 check(keptBoth, 'Keep moves a cached episode to the downloaded tier')
-const usage = await api('/api/cache')
+// The row flips optimistically, before the server has answered.
+let usage = await api('/api/cache')
+for (let i = 0; i < 20 && usage.body?.kept !== 2; i++) {
+  await sleep(250)
+  usage = await api('/api/cache')
+}
 check(
   usage.ok && usage.body.kept === 2 && usage.body.bytes === 0 && usage.body.keptBytes > 0,
   'kept downloads are outside the cache budget',

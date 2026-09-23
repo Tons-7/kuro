@@ -138,14 +138,18 @@ func (c *Client) token1(ctx context.Context, form url.Values) (Token, error) {
 // ensureToken renews before the hour is up. Without this every call more than
 // an hour after connecting would 401.
 func (c *Client) ensureToken(ctx context.Context) error {
-	t := c.Token()
-	if t.Access == "" || t.Expires.IsZero() {
+	due := func() bool {
+		t := c.Token()
+		return t.Access != "" && !t.Expires.IsZero() &&
+			time.Until(t.Expires) <= refreshWindow && t.Refresh != ""
+	}
+	if !due() {
 		return nil
 	}
-	if time.Until(t.Expires) > refreshWindow {
-		return nil
-	}
-	if t.Refresh == "" {
+	c.refreshing.Lock()
+	defer c.refreshing.Unlock()
+	// Another caller may have refreshed while this one waited.
+	if !due() {
 		return nil
 	}
 

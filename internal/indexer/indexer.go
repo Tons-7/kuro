@@ -4,6 +4,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -132,6 +133,12 @@ func (m Multi) Search(ctx context.Context, q Query) ([]Torrent, error) {
 					out[i].Leechers = t.Leechers
 					out[i].SeedersKnown = true
 				}
+				// Trusted by either site counts; a remake flag from either stands.
+				out[i].Trusted = out[i].Trusted || t.Trusted
+				out[i].Remake = out[i].Remake || t.Remake
+				if out[i].Category == "" {
+					out[i].Category = t.Category
+				}
 				continue
 			}
 			seen[key] = len(out)
@@ -139,8 +146,9 @@ func (m Multi) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		}
 	}
 
-	if len(out) == 0 && len(errs) > 0 {
-		return nil, errs[0]
+	// Only when no site answered: one empty and one down is still an answer.
+	if len(errs) == len(results) && len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return out, nil
 }

@@ -175,7 +175,7 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 
 		// Same reason as subtitles: attachments are read by demuxing the file,
 		// which over the stream endpoint means downloading all of it.
-		found, err := s.subtitles.ExtractFonts(ctx, s.readable(ctx, session), s.streamDir(id))
+		found, err := s.subtitles.ExtractFonts(ctx, s.readable(ctx, session), s.streamDir(id), session.Info.Attachments)
 		if err != nil {
 			s.log.Warn("extract fonts", "session", id, "err", err)
 		}
@@ -224,7 +224,9 @@ func (s *Server) engineSource(source string) bool {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
-	return strings.EqualFold(u.Host, s.cfg.Torrent.APIAddr)
+	// The configured address, or the one the engine fell back to.
+	return strings.EqualFold(u.Host, s.cfg.Torrent.APIAddr) ||
+		(s.playback != nil && strings.EqualFold(u.Host, s.playback.EngineAddr()))
 }
 
 var localRoute = regexp.MustCompile(`^/api/local/(\d+)/stream$`)
@@ -321,6 +323,11 @@ func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid segment"})
 		return
 	}
+	// Past the end would start an encoder at an offset with nothing to encode.
+	if session.Segments > 0 && n >= session.Segments {
+		send(w, http.StatusNotFound, map[string]any{"error": "no such segment"})
+		return
+	}
 
 	path, err := session.WaitSegment(r.Context(), n, 90*time.Second)
 	if err != nil {
@@ -369,6 +376,15 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	if (err != nil || s.subtitles.Cues(dir, index, codec) == 0) && local != session.Source {
 		if p, retry := s.subtitles.Extract(r.Context(), session.Source, dir, index, codec, false); retry == nil {
 			path, err = p, nil
+		}
+	}
+	// Past the downloaded opening, the read above only reaches the first lines;
+	// what is playing is read directly, since it is downloaded.
+	if at, _ := strconv.ParseFloat(r.URL.Query().Get("at"), 64); at > 0 && !complete {
+		if p, aroundErr := s.subtitles.ExtractAround(r.Context(), local, dir, index, codec, at); aroundErr == nil {
+			path, err = p, nil
+		} else {
+			s.log.Debug("subtitle around playhead", "session", session.ID, "at", at, "err", aroundErr)
 		}
 	}
 	if err != nil {
@@ -543,6 +559,19 @@ func (s *Server) streamFont(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, filepath.Join(s.streamDir(session.ID), "fonts", name), "font/ttf")
 }
 
+// SessionGone forgets what was extracted for a session the reaper removed:
+// its folder is deleted, and a rebuild under the same id must extract again
+// rather than serve font URLs that 404.
+func (s *Server) SessionGone(id string) {
+	s.fontsMu.Lock()
+	delete(s.fonts, id)
+	delete(s.fontJobs, id)
+	s.fontsMu.Unlock()
+	if s.subtitles != nil {
+		s.subtitles.Forget(s.streamDir(id))
+	}
+}
+
 func (s *Server) streamClose(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -555,10 +584,7 @@ func (s *Server) streamClose(w http.ResponseWriter, r *http.Request) {
 		// Closing removes the session directory, so the extracted fonts are gone
 		// and the next open has to find them again. Dropping the job marker too
 		// stops an extractor still running from writing the dead paths back.
-		s.fontsMu.Lock()
-		delete(s.fonts, id)
-		delete(s.fontJobs, id)
-		s.fontsMu.Unlock()
+		s.SessionGone(id)
 	}
 	// Not if the queue is fetching this same episode: closing the player is not
 	// a reason to stop a download that was asked for separately.

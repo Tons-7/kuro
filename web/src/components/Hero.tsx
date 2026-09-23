@@ -46,17 +46,28 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
     })
   }, [index, slides.length])
 
-  if (loading || slides.length === 0) {
-    return <Skeleton className="h-[clamp(20rem,42vw,30rem)] w-full rounded-xl" />
+  if (loading) {
+    return <Skeleton className="h-[clamp(22rem,46vw,34rem)] w-full rounded-2xl" />
   }
+  // Trending failed or came back empty: nothing to feature, and a skeleton
+  // that never resolves reads as broken.
+  if (slides.length === 0) return null
 
-  const active = slides[index]
+  const active = slides[Math.min(index, slides.length - 1)]
+  const caughtUp =
+    active.listStatus === 'COMPLETED' ||
+    (!!active.episodes && (active.progress ?? 0) >= active.episodes)
 
   return (
     <section
-      className="relative h-[clamp(20rem,42vw,30rem)] overflow-hidden rounded-xl bg-base-900"
+      className="relative h-[clamp(22rem,46vw,34rem)] overflow-hidden rounded-2xl bg-base-900 ring-1 ring-white/[0.06]"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
+      // Keyboard too: rotating under focus sent Enter to a different show.
+      onFocus={() => setPaused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPaused(false)
+      }}
       aria-roledescription="carousel"
     >
       {slides.map((anime, i) => (
@@ -75,55 +86,86 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
               src={anime.banner ?? anime.cover}
               alt=""
               decoding="async"
-              className="size-full object-cover object-center"
+              // A slow drift keeps the strip alive; reduced motion stops it.
+              className={cx(
+                'size-full object-cover object-center transition-transform duration-[9000ms] ease-linear',
+                i === index ? 'scale-105' : 'scale-100',
+              )}
             />
           )}
-          <div className="absolute inset-0 bg-gradient-to-r from-base-950 via-base-950/80 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-transparent to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-r from-base-950 via-base-950/75 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/10 to-transparent" />
+          {/* The show's own colour, low in the corner. */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: `radial-gradient(60% 70% at 0% 100%, ${tint(anime.color, 0.35) ?? 'rgb(111 92 255 / 0.25)'}, transparent 70%)`,
+            }}
+          />
         </div>
       ))}
 
-      <div className="relative flex h-full flex-col justify-end p-5 sm:p-8">
-        <div className="max-w-xl">
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-base-300">
-            {active.format && <span>{active.format.replace('_', ' ')}</span>}
-            {active.episodes ? <span>· {active.episodes} episodes</span> : null}
+      <div className="relative flex h-full flex-col justify-end p-5 sm:p-10">
+        <div className="max-w-2xl">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <span className="rounded-md bg-accent-500 px-2 py-0.5 tracking-wider text-white uppercase">
+              #{index + 1} Trending
+            </span>
+            {active.format && (
+              <span className="rounded-md bg-base-950/60 px-2 py-0.5 text-base-100 uppercase ring-1 ring-white/10 backdrop-blur-md">
+                {active.format.replace('_', ' ')}
+              </span>
+            )}
+            {active.episodes ? (
+              <span className="rounded-md bg-base-950/60 px-2 py-0.5 text-base-100 uppercase ring-1 ring-white/10 backdrop-blur-md">
+                {active.episodes} eps
+              </span>
+            ) : null}
             {active.score ? (
-              <span
-                className="rounded px-1.5 py-0.5 font-medium"
-                style={{
-                  background: tint(active.color, 0.25) ?? 'rgba(111,92,255,0.2)',
-                  color: '#fff',
-                }}
-              >
-                ★ {active.score}
+              <span className="rounded-md bg-base-950/60 px-2 py-0.5 text-amber-300 ring-1 ring-amber-400/30 backdrop-blur-md">
+                ★ {(active.score / 10).toFixed(1)}
               </span>
             ) : null}
           </div>
 
-          <h1 className="text-2xl leading-tight font-semibold text-white text-balance sm:text-4xl">
+          <h1 className="font-display text-3xl leading-[1.05] font-bold tracking-tight text-white text-balance drop-shadow-lg sm:text-5xl lg:text-6xl">
             {active.title}
           </h1>
 
           {active.Genres && active.Genres.length > 0 && (
-            <p className="mt-2 text-sm text-base-300">{active.Genres.slice(0, 4).join(' · ')}</p>
+            <p className="mt-3 text-sm font-medium text-base-200">{active.Genres.slice(0, 4).join(' · ')}</p>
+          )}
+          {active.description && (
+            <p className="mt-2 line-clamp-2 max-w-xl text-sm leading-relaxed text-base-300 max-sm:hidden">
+              {active.description.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()}
+            </p>
           )}
 
-          <div className="mt-5 flex items-center gap-2">
-            <Link
-              to={`/watch/${active.id}/${(active.progress ?? 0) + 1}`}
-              className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-base-950 transition-transform hover:scale-[1.02] active:scale-95"
-            >
-              <PlayIcon />
-              {active.progress ? `Continue ep ${active.progress + 1}` : 'Watch'}
-            </Link>
+          <div className="mt-6 flex items-center gap-2">
+            {/* Finished or caught up: there is no next episode to link to, so
+                the show page decides (rewatch, or wait for the next one). */}
+            {caughtUp ? null : (
+              <Link
+                to={`/watch/${active.id}/${(active.progress ?? 0) + 1}`}
+                className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-accent-400 to-accent-500 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_24px_-8px_rgb(111_92_255/0.7)] transition-[transform,filter] hover:scale-[1.02] hover:brightness-110 active:scale-95"
+              >
+                <PlayIcon />
+                {active.progress ? `Continue ep ${active.progress + 1}` : 'Watch'}
+              </Link>
+            )}
             <Link
               to={`/anime/${active.id}`}
-              className="rounded-md bg-base-800/80 px-4 py-2 text-sm font-medium text-base-100 backdrop-blur-sm transition-colors hover:bg-base-700"
+              className={cx(
+                'rounded-xl px-5 py-2.5 text-sm font-medium backdrop-blur-md transition-colors',
+                caughtUp
+                  ? 'bg-gradient-to-b from-accent-400 to-accent-500 text-white hover:brightness-110'
+                  : 'bg-white/10 text-white ring-1 ring-white/15 hover:bg-white/20',
+              )}
             >
               Details
             </Link>
-            <StatusMenu animeId={active.id} current={active.onList ? 'CURRENT' : null} compact />
+            {/* Keyed by slide: rotation must close a menu opened for the last one. */}
+            <StatusMenu key={active.id} animeId={active.id} current={active.listStatus ?? null} compact />
           </div>
         </div>
 

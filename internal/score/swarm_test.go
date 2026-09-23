@@ -85,6 +85,40 @@ func first(rs []Result) Result {
 	return rs[0]
 }
 
+// Most English releases state no subtitle language, so stating one must not
+// buy a lower resolution.
+func TestSubtitleLabelNeverBeatsResolution(t *testing.T) {
+	prefs := DefaultPreferences()
+	plain := seeded("[SubsPlease] Show - 05 (1080p) [ABCD1234].mkv", 1<<30, 50)
+	labelled := seeded("[Erai-raws] Show - 05 [720p][Multiple Subtitle] [ENG]", 700<<20, 50)
+	low := seeded("[Erai-raws] Show - 05 [480p][Multiple Subtitle] [ENG]", 300<<20, 50)
+
+	ranked := Rank([]Candidate{labelled, low, plain}, prefs)
+	if ranked[0].Release.Resolution != "1080p" {
+		t.Fatalf("picked %s; a label outranked a resolution", ranked[0].Torrent.Title)
+	}
+}
+
+// The pick used to depend on the order the indexer listed results in: A beat
+// B, B beat C, C beat A.
+func TestPickDoesNotDependOnOrder(t *testing.T) {
+	prefs := DefaultPreferences()
+	a := seeded("[G1] Show - 05 [1080p WEB-DL AVC AAC].mkv", 1<<30, 20)
+	b := seeded("[G2] Show - 05 [BD 1080p HEVC 10bit FLAC].mkv", 2<<30, 20)
+	c := seeded("[G3] Show - 05 [720p][Multi-Subs].mkv", 700<<20, 20)
+
+	orders := [][]Candidate{{a, b, c}, {a, c, b}, {b, a, c}, {b, c, a}, {c, a, b}, {c, b, a}}
+	var first string
+	for i, order := range orders {
+		got := Rank(order, prefs)[0].Torrent.Title
+		if i == 0 {
+			first = got
+		} else if got != first {
+			t.Fatalf("order %d picked %q, order 0 picked %q", i, got, first)
+		}
+	}
+}
+
 // A dead .avi naming the episode used to win on that alone, over the complete
 // Blu-ray, because nothing else stated the episode.
 func TestUnlabelledEpisodeLosesToALabelledPack(t *testing.T) {

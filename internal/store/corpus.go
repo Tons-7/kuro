@@ -11,6 +11,7 @@ import (
 	"kuro/internal/corpus"
 	"kuro/internal/match"
 	"kuro/internal/metadata"
+	"kuro/internal/parse"
 )
 
 type CorpusEntry struct {
@@ -272,6 +273,54 @@ func (s *Store) MarkDead(ctx context.Context, ids []int) error {
 	return tx.Commit()
 }
 
+// NotInCorpus returns the ids the corpus has no row for.
+func (s *Store) NotInCorpus(ctx context.Context, ids []int) ([]int, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.r.QueryContext(ctx,
+		`SELECT anime_id FROM corpus_anime WHERE anime_id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	have := make(map[int]bool, len(ids))
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		have[id] = true
+	}
+	var missing []int
+	for _, id := range ids {
+		if !have[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing, rows.Err()
+}
+
+// Revive clears ids AniList has just answered for: an entry it once dropped
+// can come back, and a dead mark would keep it from ever being fetched again.
+func (s *Store) Revive(ctx context.Context, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	_, err := s.w.ExecContext(ctx,
+		`DELETE FROM dead_anime WHERE anime_id IN (`+placeholders(len(ids))+`)`, args...)
+	return err
+}
+
 // BuildIndex loads the whole corpus into the in-memory matcher. The primary
 // title is placed first because the matcher rewards it.
 func (s *Store) BuildIndex(ctx context.Context) (*match.Index, error) {
@@ -304,7 +353,7 @@ func (s *Store) BuildIndex(ctx context.Context) (*match.Index, error) {
 		}
 
 		if haveCur && cur.ID != id {
-			ix.Add(cur)
+			ix.Add(withSeason(cur))
 			cur = match.Media{}
 		}
 		if cur.ID == 0 {
@@ -314,9 +363,27 @@ func (s *Store) BuildIndex(ctx context.Context) (*match.Index, error) {
 		haveCur = true
 	}
 	if haveCur && cur.ID != 0 {
-		ix.Add(cur)
+		ix.Add(withSeason(cur))
 	}
 	return ix, rows.Err()
+}
+
+// withSeason reads the season off the titles; without it "Show S2 - 05" had
+// nothing to tell season two's entry from season one's.
+func withSeason(m match.Media) match.Media {
+	for _, t := range m.Titles {
+		if n := parse.SeasonOf(t); n > 0 {
+			m.Season = n
+			return m
+		}
+	}
+	for _, t := range m.Titles {
+		if n, roman := parse.NumeralSeason(t); roman {
+			m.Season = n
+			return m
+		}
+	}
+	return m
 }
 
 // MatchBoosts weights anime the user has a relationship with, so a release of

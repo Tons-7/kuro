@@ -11,6 +11,7 @@ export function ComponentState({
   latest,
   onInstall,
   pending,
+  requestError,
 }: {
   progress?: SetupProgress
   present: boolean
@@ -19,6 +20,8 @@ export function ComponentState({
   latest?: string
   onInstall: () => void
   pending: boolean
+  /** The install request itself was refused, before any progress existed. */
+  requestError?: string
 }) {
   const update = present && !!latest && !!version && latest !== version
   if (present && progress?.stage !== 'failed' && !update) return null
@@ -59,9 +62,9 @@ export function ComponentState({
       >
         {progress?.stage === 'failed' ? 'Try again' : update ? `Update to ${latest}` : 'Install'}
       </button>
-      {progress?.error && (
-        <span className="text-xs text-recap" title={progress.error}>
-          {progress.error.slice(0, 80)}
+      {(progress?.error ?? requestError) && (
+        <span className="text-xs text-recap" title={progress?.error ?? requestError}>
+          {(progress?.error ?? requestError)!.slice(0, 80)}
         </span>
       )}
     </div>

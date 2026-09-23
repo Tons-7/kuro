@@ -190,6 +190,10 @@ func (s *Store) StartedTorrents(ctx context.Context) (map[string]bool, error) {
 // Ids are per-session, so a stale one would evict the wrong file; anything the
 // engine no longer knows loses its id and is marked gone.
 func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (matched, orphaned int, err error) {
+	// An empty listing is an engine still reloading its session, not proof.
+	if len(live) == 0 {
+		return 0, 0, nil
+	}
 	rows, err := s.r.QueryContext(ctx, `SELECT info_hash, rqbit_id FROM torrent`)
 	if err != nil {
 		return 0, 0, err
@@ -298,8 +302,7 @@ func (s *Store) DownloadStatus(ctx context.Context) ([]Download, error) {
 		LEFT JOIN cache_entry c ON c.info_hash = f.info_hash AND c.file_index = f.file_index
 		LEFT JOIN anime a ON a.id = f.anime_id
 		GROUP BY t.info_hash
-		ORDER BY t.added_at DESC
-		LIMIT 200`)
+		ORDER BY t.added_at DESC`)
 	if err != nil {
 		return nil, err
 	}

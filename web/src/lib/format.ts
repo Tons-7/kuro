@@ -49,6 +49,44 @@ export function tint(color?: string | null, alpha = 1): string | undefined {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
 }
 
+/**
+ * The show's colour, lifted until it reads as text on the dark background: a
+ * dark red cover colour used as-is disappeared.
+ */
+export function readableTint(color?: string | null): string | undefined {
+  if (!color || !/^#[0-9a-f]{6}$/i.test(color)) return undefined
+  const n = parseInt(color.slice(1), 16)
+  let [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  const luminance = () => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+  // Mix toward white until bright enough; a few steps cover any colour.
+  for (let i = 0; i < 8 && luminance() < 0.6; i++) {
+    r += (255 - r) * 0.25
+    g += (255 - g) * 0.25
+    b += (255 - b) * 0.25
+  }
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`
+}
+
+/** Items under "Today", "Yesterday", then dated headings, in the order given. */
+export function groupByDay<T>(items: T[], at: (item: T) => number): Array<[string, T[]]> {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const day = new Date(at(item) * 1000)
+    day.setHours(0, 0, 0, 0)
+    const back = Math.round((today.getTime() - day.getTime()) / 86_400_000)
+    const label =
+      back <= 0
+        ? 'Today'
+        : back === 1
+          ? 'Yesterday'
+          : day.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
+    groups.set(label, [...(groups.get(label) ?? []), item])
+  }
+  return [...groups]
+}
+
 export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }

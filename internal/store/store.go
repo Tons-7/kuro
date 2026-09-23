@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"kuro/internal/db"
 )
@@ -15,6 +16,8 @@ import (
 type Store struct {
 	r *sql.DB
 	w *sql.DB
+
+	answers atomic.Int64 // saved since start, to prune now and then
 }
 
 func New(d *db.DB) *Store { return &Store{r: d.R, w: d.W} }

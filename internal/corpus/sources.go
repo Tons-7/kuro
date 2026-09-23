@@ -60,8 +60,12 @@ type Fetcher struct {
 }
 
 func NewFetcher() *Fetcher {
+	// No client Timeout: it would span the streamed manami body and the database
+	// writes made while reading it. Callers bound each download instead.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = time.Minute
 	return &Fetcher{
-		http: &http.Client{Timeout: 5 * time.Minute},
+		http: &http.Client{Transport: transport},
 		urls: map[string]string{
 			"manami":   ManamiURL,
 			"animeapi": AnimeAPIURL,
@@ -109,6 +113,8 @@ type manamiRecord struct {
 // Manami streams the seed database. Records without an AniList id are skipped,
 // since the app is keyed on AniList throughout.
 func (f *Fetcher) Manami(ctx context.Context, yield func(Entry) error) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 	body, err := f.get(ctx, f.urls["manami"])
 	if err != nil {
 		return 0, err
@@ -183,6 +189,8 @@ func firstID(re *regexp.Regexp, sources []string) int {
 // AnimeAPI returns the AniList ids that exist today. It carries no titles, so
 // its only job is telling us which anime we have never heard of.
 func (f *Fetcher) AnimeAPI(ctx context.Context) (map[int]Entry, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	body, err := f.get(ctx, f.urls["animeapi"])
 	if err != nil {
 		return nil, err
@@ -231,6 +239,8 @@ func field(fields []string, col map[string]int, name string) int {
 // AniDB publishes a daily title dump covering 70 languages. Its terms allow one
 // download per day and require a distinct User-Agent.
 func (f *Fetcher) AniDBTitles(ctx context.Context, yield func(anidbID int, t Title) error) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 	body, err := f.get(ctx, f.urls["anidb"])
 	if err != nil {
 		return 0, err

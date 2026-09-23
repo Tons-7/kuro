@@ -93,7 +93,11 @@ export function SchedulePage() {
                 const isNext = item === nextUp
 
                 return (
-                  <li key={`${item.animeId}-${item.episode}`} ref={isNext ? upcoming : undefined}>
+                  <li
+                    key={`${item.animeId}-${item.episode}`}
+                    ref={isNext ? upcoming : undefined}
+                    className="group/row relative"
+                  >
                     {isNext && nowLine && (
                       <div
                         aria-hidden
@@ -110,6 +114,7 @@ export function SchedulePage() {
                         'flex items-center gap-3 border-l-2 px-3 py-2.5 transition-colors hover:bg-base-850/70',
                         aired ? 'border-transparent opacity-60 hover:opacity-100' : 'border-transparent',
                         isNext && 'border-accent-500 bg-accent-500/10',
+                        aired && !item.watched && 'pr-14',
                       )}
                     >
                       <div className="w-20 shrink-0 text-right">
@@ -154,6 +159,18 @@ export function SchedulePage() {
                         {item.onList && !item.watched && item.behind === 0 && <Badge>On list</Badge>}
                       </div>
                     </Link>
+                    {/* Out already: one click to watch, not two via the show. */}
+                    {aired && !item.watched && (
+                      <Link
+                        to={`/watch/${item.animeId}/${item.episode}`}
+                        aria-label={`Play episode ${item.episode} of ${item.title}`}
+                        className="absolute top-1/2 right-3 grid size-8 -translate-y-1/2 place-items-center rounded-full bg-accent-500 text-white opacity-0 shadow-lg transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+                      >
+                        <svg viewBox="0 0 24 24" className="size-3.5 translate-x-px" aria-hidden>
+                          <path d="M8 5.5v13l11-6.5-11-6.5Z" fill="currentColor" />
+                        </svg>
+                      </Link>
+                    )}
                   </li>
                 )
               })}

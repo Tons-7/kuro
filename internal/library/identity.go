@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,6 +58,18 @@ func (id *showIdentity) matches(rel parse.Release, rawTitle string) bool {
 	if title == "" {
 		title = rawTitle
 	}
+	// "Romaji | English": either name is the show's.
+	for _, part := range altSplit.Split(title, -1) {
+		if id.matchesName(strings.Trim(part, " -")) {
+			return true
+		}
+	}
+	return false
+}
+
+var altSplit = regexp.MustCompile(`\s+[|/]\s+`)
+
+func (id *showIdentity) matchesName(title string) bool {
 	release := identityTokens(corpus.Normalise(title))
 	if len(release) == 0 {
 		return false
@@ -73,9 +86,12 @@ func (id *showIdentity) matches(rel parse.Release, rawTitle string) bool {
 		}
 	}
 
+	// Spelling variants only: same length. Extra words ("Tensura Nikki - …")
+	// are another show, not a respelling.
 	folded := identityTokens(corpus.Fold(title))
 	for _, f := range id.folded {
-		if len(f) > 0 && (slices.Equal(folded, f) || overlap(folded, f) >= sameNameOverlap) {
+		if len(f) > 0 && (slices.Equal(folded, f) ||
+			(len(folded) == len(f) && overlap(folded, f) >= sameNameOverlap)) {
 			return true
 		}
 	}

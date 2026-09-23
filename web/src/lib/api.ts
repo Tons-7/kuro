@@ -11,6 +11,8 @@ function readToken(): string {
   return localStorage.getItem(TOKEN_KEY) ?? ''
 }
 
+export const UNPAIRED_EVENT = 'kuro:unpaired'
+
 export class ApiError extends Error {
   readonly status: number
   readonly body?: unknown
@@ -22,6 +24,27 @@ export class ApiError extends Error {
   }
 }
 
+// When AniList can't be reached the server answers from what it saved and says
+// when that was; any live answer clears it. Unix seconds, or null while live.
+let savedAt: number | null = null
+const savedListeners = new Set<() => void>()
+
+function noteSource(res: Response) {
+  const saved = res.headers.get('X-Kuro-Saved')
+  const next = saved ? Number(saved) : res.headers.has('X-Kuro-Live') ? null : savedAt
+  if (next === savedAt) return
+  savedAt = next
+  savedListeners.forEach((l) => l())
+}
+
+export const catalogueSource = {
+  subscribe(listener: () => void) {
+    savedListeners.add(listener)
+    return () => savedListeners.delete(listener)
+  },
+  savedAt: () => savedAt,
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = readToken()
   const headers = new Headers(init?.headers)
@@ -29,6 +52,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
 
   const res = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  noteSource(res)
+
+  // A paired device whose token was revoked: every call now fails the same
+  // way, so the app says so once instead of on every page.
+  if (res.status === 401) window.dispatchEvent(new Event(UNPAIRED_EVENT))
 
   if (!res.ok) {
     let body: unknown
@@ -47,10 +75,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+// A query's own signal, so a superseded request is abandoned.
 export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+  get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
+    request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined, signal }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   /** The file as sent; the server tells the formats apart by content. */
   upload: <T>(path: string, file: File) =>
@@ -144,6 +173,16 @@ export interface DiscoverItem {
   progress: number
   /** Which list it is on. `status` above is the airing state. */
   listStatus?: string | null
+  malId?: number
+  /** The next episode to air and when (unix seconds), while airing. */
+  nextEpisode?: number
+  nextAiringAt?: number
+  /** As far as known: 2021-04-11, 2021-04 or 2021. */
+  startDate?: string
+  endDate?: string
+  /** Minutes per episode. */
+  duration?: number
+  studios?: { id: number; name: string }[]
 }
 
 export interface ScheduleItem {

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAired, useNow } from '../lib/queries'
+import { groupByDay } from '../lib/format'
 import { ReleasedCard } from '../components/ReleasedCard'
 import {
   Empty,
@@ -64,9 +65,20 @@ export function RecentPage() {
           hint={mine ? 'Nothing from your list, at least. Try widening it.' : 'Try a wider window.'}
         />
       ) : (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-          {items.map((item) => (
-            <ReleasedCard key={`${item.animeId}-${item.episode}`} item={item} tags />
+        // By day: a week of episodes in one grid had no sense of when.
+        <div className="space-y-8">
+          {groupByDay(items, (i) => i.airingAt).map(([label, group]) => (
+            <section key={label}>
+              <h2 className="mb-3 section-title">
+                {label}
+                <span className="text-sm font-normal text-base-500">{group.length}</span>
+              </h2>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+                {group.map((item) => (
+                  <ReleasedCard key={`${item.animeId}-${item.episode}`} item={item} tags />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}

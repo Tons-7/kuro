@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kuro/internal/anilist"
@@ -57,6 +58,19 @@ func interval(st *store.Store, key string, fallback time.Duration) time.Duration
 		return time.Duration(secs) * time.Second
 	}
 	return fallback
+}
+
+// debounce runs fn once, wait after the first call of a burst.
+func debounce(wait time.Duration, fn func()) func() {
+	var pending atomic.Bool
+	return func() {
+		if pending.CompareAndSwap(false, true) {
+			time.AfterFunc(wait, func() {
+				pending.Store(false)
+				fn()
+			})
+		}
+	}
 }
 
 // Stream session ids are "<anime>-<episode>", built by the stream handler.
@@ -146,8 +160,22 @@ func run(log *slog.Logger) error {
 	// Started by an update: the old process still holds the port.
 	update.WaitFor(os.Args[1:], 30*time.Second)
 	exe, _ := os.Executable()
-	if exe != "" {
-		update.Cleanup(exe)
+	// A new version that dies before serving hands back to the previous one.
+	serving := false
+	if exe != "" && update.Handover(os.Args[1:]) {
+		defer func() {
+			if serving {
+				return
+			}
+			if err := update.Rollback(exe); err != nil {
+				log.Error("restore the previous version", "err", err)
+				return
+			}
+			log.Warn("this version failed to start; the previous one is back")
+			if err := update.Relaunch(exe); err != nil {
+				log.Error("start the previous version", "err", err)
+			}
+		}()
 	}
 	log.Info("kuro", "version", update.Version)
 
@@ -160,6 +188,19 @@ func run(log *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+
+	// Claimed first: a second launch must not touch the running one's state.
+	claim, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		if !kuroAnswers(cfg.LocalURL()) {
+			return err
+		}
+		log.Info("kuro is already running; showing it", "url", cfg.LocalURL())
+		if windowWanted() {
+			config.OpenApp(ctx, cfg.LocalURL())
+		}
+		return nil
 	}
 	warnSlowDisk(log, cfg.BinDir, cfg.CacheDir)
 
@@ -176,6 +217,7 @@ func run(log *slog.Logger) error {
 
 	st := store.New(conn)
 	al := anilist.New(log)
+	al.SetArchive(st)
 
 	token, err := st.EnsureSetting(ctx, "access.token", server.NewAccessToken())
 	if err != nil {
@@ -205,9 +247,11 @@ func run(log *slog.Logger) error {
 	// several carry. Cached: one episode is six queries per site.
 	var sites, adultSites []indexer.Source
 	for _, in := range cfg.Indexers {
+		// Skipped, not fatal: kuro then starts and Setup names the bad block.
 		src, err := indexer.Build(in.Type, in.URL, in.Adult)
 		if err != nil {
-			return fmt.Errorf("config.toml: %w", err)
+			log.Warn("config.toml: skipping an [[indexer]] block", "err", err)
+			continue
 		}
 		if in.Adult {
 			adultSites = append(adultSites, indexer.NewCached(src))
@@ -249,6 +293,7 @@ func run(log *slog.Logger) error {
 		ListenPort:  cfg.Torrent.ListenPort,
 		PeerLimit:   cfg.Torrent.PeerLimit,
 		DisableUPnP: !cfg.Torrent.UPnPEnabled(),
+		SessionDir:  filepath.Join(cfg.CacheDir, library.SessionDirName),
 	}, log)
 	defer supervisor.Stop()
 
@@ -277,8 +322,8 @@ func run(log *slog.Logger) error {
 
 	// Downloads run one at a time: parallel ones share the connection, so each
 	// finishes later and the awaited one finishes last.
-	downloader := library.NewDownloader(st, prefetcher, func(ctx context.Context) score.Preferences {
-		prefs, err := st.Prefs(ctx, 0)
+	downloader := library.NewDownloader(st, prefetcher, func(ctx context.Context, animeID int) score.Preferences {
+		prefs, err := st.Prefs(ctx, animeID)
 		if err != nil {
 			return score.DefaultPreferences()
 		}
@@ -356,24 +401,29 @@ func run(log *slog.Logger) error {
 		})
 	}
 
-	// A GPU encoder is preferred when one actually works here: it encodes 1080p
-	// far faster than realtime, so a transcode never becomes the bottleneck.
-	encoder := transcode.DetectEncoder(ctx, cfg.Tool("ffmpeg"), log)
-	log.Info("video encoder", "encoder", encoder)
-	// Without a real-time hardware encoder, HEVC/10-bit releases stall on seeks,
-	// so the finder prefers a directly-playable one of the same resolution.
-	finder.WithHardwareTranscode(transcode.IsHardwareEncoder(encoder))
 	streams := transcode.NewManager(
 		cfg.Tool("ffmpeg"), cfg.Tool("ffprobe"),
-		cfg.CacheDir, encoder, log)
+		cfg.CacheDir, "libx264", log)
 	if _, err := streams.Purge(); err != nil {
 		log.Warn("purge transcode output", "err", err)
 	}
+	// A GPU encoder is preferred when one actually works here: it encodes 1080p
+	// far faster than realtime. Probing takes trial encodes, so it runs after
+	// the window opens rather than before.
+	detectEncoder := func(ctx context.Context) {
+		encoder := transcode.DetectEncoder(ctx, cfg.Tool("ffmpeg"), log)
+		streams.SetEncoder(encoder)
+		// Without a real-time hardware encoder, HEVC/10-bit releases stall on
+		// seeks, so the finder prefers a directly-playable one.
+		finder.WithHardwareTranscode(transcode.IsHardwareEncoder(encoder))
+		log.Info("video encoder", "encoder", encoder)
+	}
+	go detectEncoder(ctx)
 
 	// Detection above had nothing to ask if ffmpeg was not installed yet, and
 	// software encoding for the rest of the session is not what was chosen.
 	depsManager := deps.New(cfg.BinDir, log)
-	// A running engine holds its binary open; the next call starts the new one.
+	// The old engine ran on through the download; the next call starts the new one.
 	depsManager.OnInstalling(func(name string) {
 		if name == "rqbit" {
 			supervisor.Stop()
@@ -385,11 +435,7 @@ func run(log *slog.Logger) error {
 		}
 		detect, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-
-		encoder := transcode.DetectEncoder(detect, cfg.Tool("ffmpeg"), log)
-		streams.SetEncoder(encoder)
-		finder.WithHardwareTranscode(transcode.IsHardwareEncoder(encoder))
-		log.Info("video encoder", "encoder", encoder)
+		detectEncoder(detect)
 	})
 
 	// Seeking into a part that has not downloaded should start fetching there
@@ -422,9 +468,14 @@ func run(log *slog.Logger) error {
 	// A killed browser never tells the server it stopped watching, so the reaper
 	// is the only signal left; without it the episode stays pinned as "playing"
 	// and keeps downloading with nobody watching.
+	// Set below; the reaper cannot fire before the server exists.
+	var api *server.Server
 	streams.OnIdle(func(sessionID string) {
 		// Also the only signal that would ever release the queue's hold.
 		downloader.Release(sessionID)
+		if api != nil {
+			api.SessionGone(sessionID)
+		}
 
 		animeID, episode, ok := parseStreamID(sessionID)
 		if !ok {
@@ -434,9 +485,8 @@ func run(log *slog.Logger) error {
 		defer cancel()
 		playback.Suspend(ctx, animeID, episode)
 	})
-	go streams.Reap(ctx)
 
-	api := server.New(server.Deps{
+	api = server.New(server.Deps{
 		Config:     cfg,
 		Streams:    streams,
 		Subtitles:  transcode.NewSubtitles(cfg.Tool("ffmpeg")),
@@ -465,6 +515,8 @@ func run(log *slog.Logger) error {
 		Deps:       depsManager,
 		Log:        log,
 	})
+	// After api exists: the idle hook reads it.
+	go streams.Reap(ctx)
 
 	// The catalogue every mirror hangs off; without a job a new install had
 	// nothing to search or randomise. Its sources decide staleness (a month for
@@ -473,16 +525,26 @@ func run(log *slog.Logger) error {
 		Name: "corpus", Every: 24 * time.Hour, OnStart: true,
 		Run: func(ctx context.Context) error {
 			rep, err := ingester.Run(ctx, false)
-			if err != nil {
-				return err
-			}
 			// Nothing arrived, so the index built below already matches the
 			// corpus — rebuilding it would be 34,000 entries of wasted work.
+			// A partial run still indexes what it saved.
 			if rep.Seeded == 0 && rep.Fetched == 0 {
-				return nil
+				return err
 			}
-			return api.RebuildIndex(ctx)
+			return errors.Join(err, api.RebuildIndex(ctx))
 		},
+	})
+	// Shows first seen while browsing join the index, one rebuild per burst.
+	importer.OnNewTitles = debounce(2*time.Minute, func() {
+		if err := api.RebuildIndex(ctx); err != nil {
+			log.Warn("rebuild match index", "err", err)
+		}
+	})
+	// Saved shows still airing stay current though nobody opens them: each
+	// broadcast moves the next episode on, and in time the status.
+	scheduler.Add(jobs.Job{
+		Name: "airing-refresh", Every: 15 * time.Minute, OnStart: true,
+		Run: func(ctx context.Context) error { _, err := importer.Refresh(ctx, 150); return err },
 	})
 	scheduler.Start(ctx)
 
@@ -498,8 +560,9 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
-	binder := &binder{srv: srv, log: log}
+	binder := &binder{srv: srv, log: log, claimed: claim}
 	api.OnRebind(binder.bind)
 
 	drained := make(chan struct{})
@@ -520,12 +583,26 @@ func run(log *slog.Logger) error {
 	if err := binder.bind(addr); err != nil {
 		return err
 	}
+	// Serving: the previous binary is no longer needed as a way back.
+	serving = true
+	if exe != "" {
+		update.Cleanup(exe)
+	}
+	if len(api.PairingURLs()) > 0 {
+		go api.LogFirewall(ctx)
+	}
 	for _, url := range api.PairingURLs() {
 		log.Info("reachable on this network", "url", url, "qr", "/api/access/qr.svg")
 	}
 
 	// Running the executable should show the app, not print a URL to paste.
-	window := &config.Window{Profile: cfg.ProfileDir()}
+	window := &config.Window{
+		Profile: cfg.ProfileDir(),
+		Maximized: func() bool {
+			mode, _ := st.Setting(context.Background(), "window.mode")
+			return mode == "maximized"
+		},
+	}
 	if windowWanted() {
 		go window.Open(ctx, cfg.LocalURL())
 	}
@@ -547,12 +624,17 @@ type binder struct {
 
 	mu sync.Mutex
 	ln net.Listener
+	// claimed is the startup listener that kept a second launch out.
+	claimed net.Listener
 }
 
 func (b *binder) bind(addr string) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
+	ln := b.takeClaim(addr)
+	if ln == nil {
+		var err error
+		if ln, err = net.Listen("tcp", addr); err != nil {
+			return err
+		}
 	}
 
 	b.mu.Lock()
@@ -576,6 +658,36 @@ func (b *binder) bind(addr string) error {
 		}
 	}()
 	return nil
+}
+
+// takeClaim hands over the startup listener if it is for addr, else frees it.
+func (b *binder) takeClaim(addr string) net.Listener {
+	b.mu.Lock()
+	c := b.claimed
+	b.claimed = nil
+	b.mu.Unlock()
+	if c == nil {
+		return nil
+	}
+	if c.Addr().String() == addr {
+		return c
+	}
+	c.Close()
+	return nil
+}
+
+// kuroAnswers tells a running kuro from another program holding the port.
+func kuroAnswers(base string) bool {
+	client := http.Client{Timeout: 2 * time.Second}
+	res, err := client.Get(strings.TrimSuffix(base, "/") + "/api/health")
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	var body struct {
+		Version string `json:"version"`
+	}
+	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&body) == nil && body.Version != ""
 }
 
 // warnSlowDisk warns when kuro is unpacked somewhere disk-bound work will crawl.

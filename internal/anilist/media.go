@@ -1,6 +1,10 @@
 package anilist
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // Almost every AniList field is nullable (episodes while airing, title.english
 // often), so pointers keep "absent" distinct from "zero".
@@ -265,7 +269,7 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 
 	var out page
 	err := c.Query(ctx, byIDsQuery, map[string]any{"ids": ids}, &out)
-	if err != nil || !missingAny(ids, out.Page.Media) {
+	if err != nil || !missingAny(ids, out.Page.Media) || !c.Authenticated() {
 		return out.Page.Media, err
 	}
 
@@ -273,12 +277,18 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 	// and says nothing about it. They still appear in the schedule, so their
 	// pages have to open.
 	var anon page
-	if c.queryAnonymous(ctx, byIDsQuery, map[string]any{"ids": ids}, &anon) == nil &&
-		len(anon.Page.Media) > len(out.Page.Media) {
+	if err := c.queryAnonymous(ctx, byIDsQuery, map[string]any{"ids": ids}, &anon); err != nil {
+		return out.Page.Media, fmt.Errorf("%w: %v", ErrIncomplete, err)
+	}
+	if len(anon.Page.Media) > len(out.Page.Media) {
 		return anon.Page.Media, nil
 	}
 	return out.Page.Media, nil
 }
+
+// ErrIncomplete comes with a partial result: the missing ids may be hidden,
+// not gone, so they must not be written off.
+var ErrIncomplete = errors.New("anilist: some titles could not be checked")
 
 // missingAny reports that an id was asked for and not returned.
 func missingAny(ids []int, got []Media) bool {

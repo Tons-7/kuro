@@ -1,10 +1,13 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"kuro/internal/anilist"
+	"kuro/internal/jobs"
 	"kuro/internal/store"
 )
 
@@ -21,11 +24,16 @@ func (s *Server) runJob(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "scheduler unavailable"})
 		return
 	}
-	if err := s.jobs.Trigger(r.Context(), r.PathValue("name")); err != nil {
+	// Started, not awaited: leaving the page must not cancel the job.
+	err := s.jobs.Trigger(r.PathValue("name"))
+	switch {
+	case errors.Is(err, jobs.ErrRunning):
+		send(w, http.StatusConflict, map[string]any{"error": "already running"})
+	case err != nil:
 		send(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
+	default:
+		send(w, http.StatusAccepted, map[string]any{"started": r.PathValue("name")})
 	}
-	send(w, http.StatusOK, map[string]any{"ran": r.PathValue("name")})
 }
 
 type scheduleItem struct {
@@ -136,6 +144,11 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "schedule", err)
 		return
 	}
+	media := make([]anilist.Media, len(entries))
+	for n, e := range entries {
+		media[n] = e.Media
+	}
+	s.remember(r, media)
 
 	onList, err := s.store.ListProgress(r.Context())
 	if err != nil {

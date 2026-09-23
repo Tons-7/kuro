@@ -33,7 +33,8 @@ func (s *Server) getPrefs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{"effective": prefs.All(), "defaults": store.Defaults}
-	if animeID > 0 {
+	// Negative ids are MAL-only shows: still a show, not the globals.
+	if animeID != 0 {
 		overrides, err := s.store.AnimePrefs(r.Context(), animeID)
 		if err != nil {
 			s.fail(w, "anime prefs", err)
@@ -78,7 +79,7 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	if body.AnimeID > 0 {
+	if body.AnimeID != 0 {
 		err = s.store.SetAnimePref(r.Context(), body.AnimeID, body.Key, body.Value)
 	} else {
 		err = s.store.SetSetting(r.Context(), body.Key, body.Value)
@@ -102,13 +103,13 @@ func (s *Server) bookmarks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setBookmark(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
-		store.Bookmark
+		store.BookmarkPatch
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.AnimeID == 0 {
 		send(w, http.StatusBadRequest, map[string]any{"error": "animeId is required"})
 		return
 	}
-	if err := s.store.SetBookmark(r.Context(), body.AnimeID, body.Bookmark); err != nil {
+	if err := s.store.PatchBookmark(r.Context(), body.AnimeID, body.BookmarkPatch); err != nil {
 		s.fail(w, "set bookmark", err)
 		return
 	}

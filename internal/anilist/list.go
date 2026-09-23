@@ -70,7 +70,8 @@ func (c *Client) List(ctx context.Context, userID int) ([]ListEntry, error) {
 			} `json:"lists"`
 		} `json:"MediaListCollection"`
 	}
-	if err := c.Query(ctx, listQuery, map[string]any{"userId": userID}, &out); err != nil {
+	// Fresh: a cached list from before our last push reads as undoing it.
+	if err := c.QueryFresh(ctx, listQuery, map[string]any{"userId": userID}, &out); err != nil {
 		return nil, err
 	}
 
@@ -96,13 +97,14 @@ const saveQuery = `mutation Save($mediaId: Int!, $progress: Int, $status: MediaL
 
 // SetProgress upserts by mediaId. Only set fields are sent: a null clears the
 // field server-side. Repeat and score travel only when non-zero, so a row
-// created locally cannot wipe what the site holds. scoreRaw is always 0-100.
-func (c *Client) SetProgress(ctx context.Context, mediaID, progress int, status string, completed *FuzzyDate, repeat, score int) (ListEntry, error) {
+// created locally cannot wipe what the site holds; clearScore sends a 0 that
+// was meant. scoreRaw is always 0-100.
+func (c *Client) SetProgress(ctx context.Context, mediaID, progress int, status string, completed *FuzzyDate, repeat, score int, clearScore bool) (ListEntry, error) {
 	vars := map[string]any{"mediaId": mediaID, "progress": progress}
 	if repeat > 0 {
 		vars["repeat"] = repeat
 	}
-	if score > 0 {
+	if score > 0 || clearScore {
 		vars["scoreRaw"] = score
 	}
 	if status != "" {

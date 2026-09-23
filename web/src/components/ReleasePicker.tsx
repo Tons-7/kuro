@@ -1,19 +1,23 @@
 import { useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query, type ReleaseCandidate } from '../lib/api'
 import { bytes, cx } from '../lib/format'
-import { Badge, Skeleton, useDismiss } from './ui'
+import { Badge, Skeleton, useDismiss, useModalFocus } from './ui'
 
 /** Every release the finder saw, best first; ineligible ones greyed with the reason. */
 export function ReleasePicker({
   animeId,
   episode,
+  audio,
   current,
   onPick,
   onClose,
 }: {
   animeId: number
   episode: number
+  /** Sub or dub chosen for this episode, so the list is ranked for it. */
+  audio?: string
   /** Info hash of what is playing now, to mark the row. */
   current?: string
   onPick: (infoHash: string) => void
@@ -21,19 +25,23 @@ export function ReleasePicker({
 }) {
   const close = useCallback(() => onClose(), [onClose])
   const panel = useDismiss<HTMLDivElement>(close)
+  useModalFocus(panel)
 
   const sources = useQuery({
-    queryKey: ['sources', animeId, episode],
-    queryFn: () =>
+    queryKey: ['sources', animeId, episode, audio],
+    queryFn: ({ signal }) =>
       api.get<{ results: ReleaseCandidate[]; queries: string[] }>(
-        `/api/episode/sources${query({ id: animeId, episode })}`,
+        `/api/episode/sources${query({ id: animeId, episode, audio })}`,
+        signal,
       ),
     staleTime: 5 * 60_000,
   })
 
   const results = sources.data?.results ?? []
 
-  return (
+  // Into the fullscreen player when there is one: outside it nothing is drawn,
+  // and the next click in the player counts as outside the panel.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
@@ -86,7 +94,8 @@ export function ReleasePicker({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.fullscreenElement ?? document.body,
   )
 }
 

@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -12,24 +14,27 @@ import { cx } from '../lib/format'
 export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'ghost' | 'danger'
 export type ButtonSize = 'sm' | 'md'
 
+// The brand colour leads the main action; white read as a generic button.
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-white text-base-950 hover:bg-base-100 active:scale-[0.98]',
+  primary:
+    'bg-gradient-to-b from-accent-400 to-accent-500 text-white shadow-[0_6px_20px_-6px_rgb(111_92_255/0.6)] hover:brightness-110 active:scale-[0.98]',
   accent:
-    'bg-accent-500 text-white shadow-[0_0_20px_rgb(111_92_255/0.35)] hover:bg-accent-400 active:scale-[0.98]',
-  secondary: 'bg-base-800 text-base-100 ring-1 ring-white/[0.06] hover:bg-base-700',
+    'bg-gradient-to-b from-accent-400 to-accent-500 text-white shadow-[0_6px_20px_-6px_rgb(111_92_255/0.6)] hover:brightness-110 active:scale-[0.98]',
+  secondary:
+    'bg-base-800 text-base-100 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)] ring-1 ring-white/[0.07] hover:bg-base-750',
   ghost: 'text-base-300 hover:bg-base-850 hover:text-white',
   danger: 'bg-red-500/90 text-white hover:bg-red-500',
 }
 
 const SIZES: Record<ButtonSize, string> = {
   sm: 'px-2.5 py-1 text-xs',
-  md: 'px-3.5 py-1.5 text-sm',
+  md: 'px-4 py-2 text-sm',
 }
 
 /** Class list for something that should look like a button but is a link. */
 export function buttonClass(variant: ButtonVariant = 'secondary', size: ButtonSize = 'md') {
   return cx(
-    'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[background-color,color,transform] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50',
+    'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap transition-[background-color,color,transform,filter] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50',
     VARIANTS[variant],
     SIZES[size],
   )
@@ -192,7 +197,7 @@ export function Empty({
           {icon ?? <EmptyIcon />}
         </span>
         <p className="font-medium text-base-100">{title}</p>
-        {hint && <p className="mt-1 text-sm text-base-400">{hint}</p>}
+        {hint && <p className="mt-1 text-sm text-balance text-base-400">{hint}</p>}
         {action && <div className="mt-4">{action}</div>}
       </div>
     </Centered>
@@ -218,15 +223,18 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
   const message = error instanceof Error ? error.message : 'Something went wrong'
   return (
     <Centered>
-      <div className="max-w-md text-center">
-        <p className="text-base-200">{message}</p>
+      <div className="flex max-w-md flex-col items-center px-4 text-center">
+        <span className="mb-4 grid size-14 place-items-center rounded-2xl bg-recap/10 text-red-300 ring-1 ring-recap/25">
+          <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <path d="M12 8v5m0 3.5v.01M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <p className="font-medium text-base-100">That didn't load</p>
+        <p className="mt-1 text-sm text-base-400">{message}</p>
         {retry && (
-          <button
-            onClick={retry}
-            className="mt-3 rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-200 transition-colors hover:bg-base-700"
-          >
+          <Button className="mt-4" onClick={retry}>
             Try again
-          </button>
+          </Button>
         )}
       </div>
     </Centered>
@@ -238,7 +246,7 @@ export function Skeleton({ className }: { className?: string }) {
   return (
     <div
       className={cx(
-        'animate-shimmer rounded-md bg-base-850 bg-[linear-gradient(90deg,transparent_25%,var(--color-base-800)_50%,transparent_75%)] bg-[length:200%_100%]',
+        'animate-shimmer rounded-lg bg-base-850 bg-[linear-gradient(90deg,transparent_25%,var(--color-base-800)_50%,transparent_75%)] bg-[length:200%_100%]',
         className,
       )}
     />
@@ -287,6 +295,8 @@ export function Segmented<T extends string>({
             key={option.value}
             role="tab"
             aria-selected={active}
+            // The strip scrolls with no bar; the selected tab must stay in view.
+            ref={active ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
             onClick={() => onChange(option.value)}
             className={cx(
               'shrink-0 rounded-md font-medium whitespace-nowrap transition-colors',
@@ -307,6 +317,47 @@ export function Segmented<T extends string>({
       })}
     </div>
   )
+}
+
+/**
+ * A modal's keyboard contract: focus moves in when it opens, Tab stays inside,
+ * and focus goes back to whatever opened it on close.
+ */
+export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | null>, open = true) {
+  useEffect(() => {
+    if (!open) return
+    const opener = document.activeElement as HTMLElement | null
+    const focusables = () =>
+      Array.from(
+        ref.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      )
+    focusables()[0]?.focus()
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      const items = focusables()
+      if (items.length === 0) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    const panel = ref.current
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      // Not when the click that closed it put focus somewhere else on purpose.
+      const now = document.activeElement
+      if (!now || now === document.body || panel?.contains(now)) opener?.focus?.()
+    }
+  }, [ref, open])
 }
 
 /** Closes on an outside click or Escape — both matter for a menu to feel right. */
@@ -338,6 +389,17 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void) {
   return ref
 }
 
+/** The window's title, which the taskbar and the picture-in-picture window show. */
+export function useDocumentTitle(title?: string) {
+  useEffect(() => {
+    if (!title) return
+    document.title = `${title} · kuro`
+    return () => {
+      document.title = 'kuro'
+    }
+  }, [title])
+}
+
 /** Debounced value, for search-as-you-type against a rate-limited API. */
 export function useDebounced<T>(value: T, delay = 300): T {
   const [debounced, setDebounced] = useState(value)
@@ -352,7 +414,7 @@ export function ProgressBar({ value, className }: { value: number; className?: s
   return (
     <div className={cx('h-1 w-full overflow-hidden rounded-full bg-base-800', className)}>
       <div
-        className="h-full rounded-full bg-accent-500 transition-[width] duration-300"
+        className="h-full rounded-full bg-gradient-to-r from-accent-500 to-accent-400 transition-[width] duration-300"
         style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
       />
     </div>
@@ -380,7 +442,7 @@ export function Badge({
   return (
     <span
       className={cx(
-        'rounded px-1.5 py-0.5 text-[11px] leading-tight font-medium whitespace-nowrap',
+        'rounded-md px-1.5 py-0.5 text-[11px] leading-tight font-medium whitespace-nowrap',
         tones[tone],
       )}
     >
@@ -393,6 +455,9 @@ export function Badge({
  * A styled select that keeps the real element (native keyboard and phone
  * picker); the browser's own control paints an OS-grey box that clashes.
  */
+/** Names an unlabelled control after the settings row holding it. */
+export const ControlLabel = createContext<string | undefined>(undefined)
+
 export function Select({
   value,
   onChange,
@@ -406,13 +471,14 @@ export function Select({
   className?: string
   'aria-label'?: string
 }) {
+  const rowLabel = useContext(ControlLabel)
   return (
     <div className={cx('relative shrink-0', className)}>
       <select
         value={value}
-        aria-label={label}
+        aria-label={label ?? rowLabel}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full appearance-none rounded-md bg-base-800 py-1.5 pr-8 pl-3 text-sm text-base-100 transition-colors hover:bg-base-750 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+        className="w-full appearance-none rounded-lg bg-base-800 py-1.5 pr-8 pl-3 text-sm text-base-100 ring-1 ring-white/[0.07] transition-colors hover:bg-base-750 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
       >
         {children}
       </select>

@@ -1,8 +1,10 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +25,33 @@ func migrated(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 	return conn
+}
+
+// A data folder named "Anime #2" or "c%20d" must open that folder's database,
+// not "Anime " or nothing.
+func TestOpenKeepsUnusualFolderNames(t *testing.T) {
+	for _, name := range []string{"Anime #2", "c%20d", "100%"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "kuro.db")
+		conn, err := Open(path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var file string
+		conn.R.QueryRow(`SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&file)
+		var mode string
+		conn.W.QueryRow(`PRAGMA journal_mode`).Scan(&mode)
+		conn.Close()
+		if !strings.EqualFold(filepath.Clean(file), filepath.Clean(path)) {
+			t.Errorf("%s: opened %q, want %q", name, file, path)
+		}
+		if mode != "wal" {
+			t.Errorf("%s: pragmas lost, journal_mode = %q", name, mode)
+		}
+	}
 }
 
 func TestOpenAppliesPragmas(t *testing.T) {

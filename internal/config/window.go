@@ -13,6 +13,9 @@ import (
 type Window struct {
 	// Profile is the browser profile directory; empty means AppData.
 	Profile string
+	// Maximized opens a maximized window instead of fullscreen. Read at each
+	// open, so the setting applies from the next launch.
+	Maximized func() bool
 
 	mu  sync.Mutex
 	run *launched
@@ -55,7 +58,8 @@ func (w *Window) Open(ctx context.Context, url string) {
 			case <-time.After(retryWindowAfter):
 			}
 		}
-		if l := showWindow(ctx, url, w.profile()); l != nil {
+		maximized := w.Maximized != nil && w.Maximized()
+		if l := showWindow(ctx, url, w.profile(), maximized); l != nil {
 			w.mu.Lock()
 			w.run = l
 			w.mu.Unlock()
@@ -93,24 +97,13 @@ var (
 // appWindow starts the chrome-less window and reports what stayed up; one that
 // cannot take the profile exits at once showing nothing. A hand-off to a window
 // another process owns is reported without a command to close.
-func appWindow(ctx context.Context, url, profile string) *launched {
+func appWindow(ctx context.Context, url, profile string, maximized bool) *launched {
 	browser := findChromium()
 	if browser == "" {
 		return nil
 	}
 
-	cmd := exec.Command(browser,
-		"--app="+url,
-		// Without a profile of its own the window joins an existing
-		// browser session and app mode is ignored.
-		"--user-data-dir="+profile,
-		// Fullscreen from the start (F11 leaves it); the size is the
-		// restore/fallback size if a browser ignores the flag.
-		"--start-fullscreen",
-		"--window-size=1440,900",
-		"--no-first-run",
-		"--no-default-browser-check",
-	)
+	cmd := exec.Command(browser, windowArgs(url, profile, maximized)...)
 	if cmd.Start() != nil {
 		return nil
 	}
@@ -133,6 +126,25 @@ func appWindow(ctx context.Context, url, profile string) *launched {
 		return &launched{cmd: cmd, exited: exited}
 	case <-time.After(3 * time.Second):
 		return &launched{cmd: cmd, exited: exited}
+	}
+}
+
+func windowArgs(url, profile string, maximized bool) []string {
+	// Fullscreen from the start (F11 leaves it) unless asked for a maximized
+	// window; the size is the restore/fallback size if a browser ignores both.
+	start := "--start-fullscreen"
+	if maximized {
+		start = "--start-maximized"
+	}
+	return []string{
+		"--app=" + url,
+		// Without a profile of its own the window joins an existing
+		// browser session and app mode is ignored.
+		"--user-data-dir=" + profile,
+		start,
+		"--window-size=1440,900",
+		"--no-first-run",
+		"--no-default-browser-check",
 	}
 }
 

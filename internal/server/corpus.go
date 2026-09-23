@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
+	"kuro/internal/jobs"
 	"kuro/internal/library"
 	"kuro/internal/match"
 	"kuro/internal/parse"
@@ -54,31 +56,41 @@ func (s *Server) corpusStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) corpusRefresh(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "true"
 
-	if !s.refreshing.CompareAndSwap(false, true) {
-		send(w, http.StatusConflict, map[string]any{"error": "a refresh is already running"})
-		return
-	}
-
-	go func() {
-		defer s.refreshing.Store(false)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	refresh := func(parent context.Context) error {
+		ctx, cancel := context.WithTimeout(parent, 2*time.Hour)
 		defer cancel()
 
 		report, err := s.ingester.Run(ctx, force)
-		if err != nil {
-			s.log.Error("corpus refresh", "err", err)
-			return
+		if err != nil && report.Seeded == 0 && report.Fetched == 0 {
+			return err
 		}
 		s.log.Info("corpus refreshed", "seeded", report.Seeded,
 			"discovered", report.Discovered, "titles", report.Titles)
+		return errors.Join(err, s.RebuildIndex(ctx))
+	}
 
-		if err := s.RebuildIndex(ctx); err != nil {
-			s.log.Error("rebuild index", "err", err)
-		}
-	}()
-
-	send(w, http.StatusAccepted, map[string]any{"status": "started"})
+	// Under the scheduled job's lock, so the two never ingest at once.
+	var err error
+	if s.jobs != nil {
+		err = s.jobs.RunAs("corpus", refresh)
+	} else if !s.refreshing.CompareAndSwap(false, true) {
+		err = jobs.ErrRunning
+	} else {
+		go func() {
+			defer s.refreshing.Store(false)
+			if err := refresh(context.Background()); err != nil {
+				s.log.Error("corpus refresh", "err", err)
+			}
+		}()
+	}
+	switch {
+	case errors.Is(err, jobs.ErrRunning):
+		send(w, http.StatusConflict, map[string]any{"error": "a refresh is already running"})
+	case err != nil:
+		s.fail(w, "corpus refresh", err)
+	default:
+		send(w, http.StatusAccepted, map[string]any{"status": "started"})
+	}
 }
 
 // Episode data is fetched the first time a detail page is opened, so only
@@ -165,7 +177,7 @@ func (s *Server) deriveEpisodesAsync(animeID int) {
 	}()
 }
 
-// cleanOrphans deletes downloads the torrent engine no longer knows about.
+// cleanOrphans deletes cache files no download claims; GET only lists them.
 // Separate from the sweep because deleting by inference deserves an explicit ask.
 func (s *Server) cleanOrphans(w http.ResponseWriter, r *http.Request) {
 	if s.cache == nil {
@@ -173,12 +185,20 @@ func (s *Server) cleanOrphans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files, bytes, err := s.cache.Orphans(r.Context())
+	files, err := s.cache.Orphans(r.Context(), r.Method == http.MethodGet)
+	if errors.Is(err, library.ErrEngineLoading) {
+		send(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
+	}
 	if err != nil {
 		s.fail(w, "clean orphans", err)
 		return
 	}
-	send(w, http.StatusOK, map[string]any{"removed": files, "freedBytes": bytes})
+	var bytes int64
+	for _, f := range files {
+		bytes += f.Bytes
+	}
+	send(w, http.StatusOK, map[string]any{"files": files, "removed": len(files), "freedBytes": bytes})
 }
 
 func (s *Server) refreshFillers(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +293,7 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// episodes finds releases for an anime the user already picked, so the season
-// is known rather than inferred.
+// episodeSources lists releases for the manual picker, ranked as play would.
 func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 	if s.finder == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{
@@ -290,16 +309,26 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The search terms are the show's stored titles; one never opened on a
+	// fresh install (corpus still seeding) has none, and every search is empty.
+	if id > 0 {
+		s.hydrate(r.Context(), []int{id})
+	}
+
+	// Season 0 lets the finder read it from the title, as play does; forcing
+	// 1 hid every release stating a later season.
 	season, _ := strconv.Atoi(r.URL.Query().Get("season"))
-	if season == 0 {
-		season = 1
+	prefs := s.preferences(r.Context(), id)
+	switch a := r.URL.Query().Get("audio"); a {
+	case "sub", "dub", "either":
+		prefs.Audio = a
 	}
 
 	got, err := s.finder.Find(r.Context(), library.Request{
 		AnimeID: id,
 		Episode: episode,
 		Season:  season,
-		Prefs:   s.preferences(r.Context(), id),
+		Prefs:   prefs,
 	})
 	if err != nil {
 		s.fail(w, "episode sources", err)

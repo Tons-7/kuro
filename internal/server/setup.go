@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +12,7 @@ import (
 
 	"kuro/internal/config"
 	"kuro/internal/deps"
+	"kuro/internal/indexer"
 	"kuro/internal/player"
 )
 
@@ -112,20 +112,32 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Counted as usable, and the rest named: a bad block is skipped at startup.
+	usable, bad := 0, []string{}
+	for _, in := range s.cfg.Indexers {
+		if _, err := indexer.Build(in.Type, in.URL, in.Adult); err != nil {
+			bad = append(bad, err.Error())
+		} else {
+			usable++
+		}
+	}
+
 	body := map[string]any{
-		"components":   components,
-		"ready":        ready,
-		"indexers":     len(s.cfg.Indexers),
-		"configPath":   s.cfg.ConfigPath(),
-		"dataDir":      s.cfg.DataDir(),
-		"strayConfig":  s.cfg.StrayConfig(),
-		"vlc":          player.ResolveVLC(s.cfg.VLCPath()),
-		"temporary":    s.cfg.Temporary(),
-		"binDir":       s.cfg.BinDir,
-		"cacheDir":     s.cfg.CacheDir,
-		"cacheBudget":  cache,
-		"libraryPaths": roots,
-		"progress":     []any{},
+		"components":     components,
+		"ready":          ready,
+		"indexers":       usable,
+		"badIndexers":    bad,
+		"defaultDataDir": config.DefaultDataDir(),
+		"configPath":     s.cfg.ConfigPath(),
+		"dataDir":        s.cfg.DataDir(),
+		"strayConfig":    s.cfg.StrayConfig(),
+		"vlc":            player.ResolveVLC(s.cfg.VLCPath()),
+		"temporary":      s.cfg.Temporary(),
+		"binDir":         s.cfg.BinDir,
+		"cacheDir":       s.cfg.CacheDir,
+		"cacheBudget":    cache,
+		"libraryPaths":   roots,
+		"progress":       []any{},
 	}
 	if s.deps != nil {
 		body["progress"] = s.deps.Status()
@@ -139,12 +151,27 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Path string `json:"path"`
+		// UseExisting confirms switching to a database already in that folder.
+		UseExisting bool `json:"useExisting"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&body); err != nil {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
 	dir := s.cfg.ResolveDataDir(strings.TrimSpace(body.Path))
+	if dir == s.cfg.DataDir() {
+		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false})
+		return
+	}
+	// Opening another history instead of carrying this one is asked, not assumed.
+	if info, err := os.Stat(filepath.Join(dir, "kuro.db")); err == nil && !body.UseExisting {
+		send(w, http.StatusConflict, map[string]any{
+			"error":    "that folder already holds a kuro database",
+			"existing": true,
+			"modified": info.ModTime().Unix(),
+		})
+		return
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		send(w, http.StatusBadRequest, map[string]any{"error": "cannot create folder: " + err.Error()})
 		return
@@ -161,11 +188,8 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 	target := filepath.Join(dir, "kuro.db")
 	copied := false
 	if dir != s.cfg.DataDir() && !fileExists(target) && fileExists(s.cfg.DatabasePath()) {
-		if err := s.store.Checkpoint(r.Context()); err != nil {
-			s.fail(w, "checkpoint database", err)
-			return
-		}
-		if err := copyFile(s.cfg.DatabasePath(), target); err != nil {
+		if err := s.store.SnapshotTo(r.Context(), target); err != nil {
+			os.Remove(target)
 			s.fail(w, "copy database", err)
 			return
 		}
@@ -181,23 +205,6 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func copyFile(from, to string) error {
-	in, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(to)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // Long enough that a failing lookup cannot be retried on every poll.

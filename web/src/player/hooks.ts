@@ -35,6 +35,19 @@ export function useHlsSource(
     let cancelled = false
     let native = false
     let seek: (() => void) | undefined
+    let recoveries = 0
+    let recoveredAt = 0
+    // Native HLS (iOS) reports failure only here.
+    const onMediaError = () => {
+      if (!native) return
+      const code = video.error?.code
+      setError(
+        code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+          ? "This device can't decode this release."
+          : 'Playback failed',
+      )
+    }
+    video.addEventListener('error', onMediaError)
 
     void (async () => {
       const { default: HlsCtor } = await import('hls.js')
@@ -90,11 +103,27 @@ export function useHlsSource(
               instance.startLoad()
             }
             break
-          case HlsCtor.ErrorTypes.MEDIA_ERROR:
+          case HlsCtor.ErrorTypes.MEDIA_ERROR: {
+            // A codec this browser cannot decode fails the same way forever;
+            // recover twice (the second time swapping audio codec), then say so.
+            const now = Date.now()
+            recoveries = now - recoveredAt < 10_000 ? recoveries + 1 : 1
+            recoveredAt = now
+            if (recoveries > 2) {
+              setError("This browser can't decode this release. Try mpv, or another release.")
+              break
+            }
+            if (recoveries === 2) instance.swapAudioCodec()
             instance.recoverMediaError()
             break
+          }
           default:
-            setError(data.details ?? 'Playback failed')
+            // hls.js names like "manifestParsingError" mean nothing to a viewer.
+            setError(
+              /manifest|level/i.test(data.details ?? '')
+                ? "The episode's stream could not be loaded."
+                : 'Playback stopped unexpectedly.',
+            )
         }
       })
 
@@ -105,6 +134,7 @@ export function useHlsSource(
 
     return () => {
       cancelled = true
+      video.removeEventListener('error', onMediaError)
       hls.current?.destroy()
       hls.current = null
       if (native && seek) video.removeEventListener('loadedmetadata', seek)
@@ -433,6 +463,14 @@ const FILL_AHEAD = 120
  * source can still grow (the server says when it can't). Growth is counted in
  * cues, not reach, since head and tail load first and can leave a hole between.
  */
+// Polls touch the session, so one left running on a paused or hidden tab keeps
+// it from ever idling out and holds the download queue. They wait here.
+async function untilWatching(video: HTMLVideoElement | null, cancelled: () => boolean) {
+  while (!cancelled() && (document.visibilityState !== 'visible' || (video && video.paused))) {
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+}
+
 async function keepFilling(
   // Lives behind a Comlink proxy; setTrack must be called as a method on it, or
   // Comlink tries to post the un-cloneable proxy itself.
@@ -453,12 +491,23 @@ async function keepFilling(
     // covered, whatever a far-off tail cue suggests.
     const near = coverageFrom(loaded, video.currentTime) - video.currentTime < FILL_AHEAD
     const wait = near ? (quiet >= 6 ? FILL_EVERY : FILL_SOON) : quiet >= 3 ? FILL_QUIET : FILL_EVERY
-    await new Promise((r) => setTimeout(r, wait))
+    // A seek lands somewhere with no lines yet; ask then, not on the timer.
+    await new Promise<void>((r) => {
+      const done = () => {
+        clearTimeout(timer)
+        video.removeEventListener('seeked', done)
+        r()
+      }
+      const timer = setTimeout(done, wait)
+      video.addEventListener('seeked', done, { once: true })
+    })
+    await untilWatching(video, cancelled)
     if (cancelled()) return
 
     try {
-      // The query only defeats the browser cache; the server ignores it.
-      const res = await fetch(`${url}?fill=${attempt}`)
+      // fill defeats the browser cache; at is where the viewer is, which the
+      // server reads directly while the file is still downloading.
+      const res = await fetch(`${url}?fill=${attempt}&at=${Math.floor(video.currentTime)}`)
       // The session is gone; so is the player, shortly.
       if (res.status === 404) return
       if (!res.ok) continue
@@ -485,12 +534,17 @@ async function keepFilling(
  * Fonts are dumped after the stream opens; doing it first delayed the episode
  * by twenty seconds. Until they land the renderer substitutes.
  */
-export function useEmbeddedFonts(fontsUrl?: string) {
+// generation changes when the session is rebuilt under the same URL: the
+// reaper deleted its fonts, so they are asked for again.
+export function useEmbeddedFonts(fontsUrl?: string, generation = 0) {
   const [fonts, setFonts] = useState<string[]>([])
+  const lastUrl = useRef(fontsUrl)
 
   useEffect(() => {
-    // A fresh [] is a new identity, which rebuilds the subtitle renderer.
-    setFonts((prev) => (prev.length === 0 ? prev : []))
+    // A fresh [] is a new identity, which rebuilds the subtitle renderer; only
+    // a different episode starts from none.
+    if (lastUrl.current !== fontsUrl) setFonts((prev) => (prev.length === 0 ? prev : []))
+    lastUrl.current = fontsUrl
     if (!fontsUrl) return
 
     let cancelled = false
@@ -506,7 +560,9 @@ export function useEmbeddedFonts(fontsUrl?: string) {
         }
         if (cancelled) return
         if (body.ready) {
-          setFonts(body.fonts.map((f) => f.url))
+          const next = body.fonts.map((f) => f.url)
+          // Same list: keep the identity so the renderer is not rebuilt.
+          setFonts((prev) => (prev.join('|') === next.join('|') ? prev : next))
           return
         }
       } catch {
@@ -519,7 +575,7 @@ export function useEmbeddedFonts(fontsUrl?: string) {
     return () => {
       cancelled = true
     }
-  }, [fontsUrl])
+  }, [fontsUrl, generation])
 
   return fonts
 }
@@ -566,8 +622,12 @@ export function useAutoSkip(
  * Moves the whole player into a floating window. Native video PiP carries only
  * the video frames, so it would drop the subtitle canvas.
  */
+// container must be a React portal host: React listens for events on portal
+// containers, so moving one into the floating window keeps its handlers,
+// where a plain subtree moved out of the root would go dead.
 export function useDocumentPiP(container: HTMLElement | null) {
   const [active, setActive] = useState(false)
+  const [win, setWin] = useState<Window | null>(null)
   const supported =
     typeof window !== 'undefined' && 'documentPictureInPicture' in window
 
@@ -592,21 +652,32 @@ export function useDocumentPiP(container: HTMLElement | null) {
     // large as the screen, which opens partly off it.
     const pip = await dpip.requestWindow(pipSize(container))
 
-    // The floating window starts blank, so styles have to be copied across.
+    // The floating window starts blank, so styles have to be copied across. A
+    // linked sheet is linked again, not inlined: inlined, its relative font
+    // URLs resolved against about:blank and every font fell back.
     for (const sheet of Array.from(document.styleSheets)) {
+      if (sheet.href) {
+        const link = pip.document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = sheet.href
+        pip.document.head.append(link)
+        continue
+      }
       try {
-        const css = Array.from(sheet.cssRules)
+        const style = pip.document.createElement('style')
+        style.textContent = Array.from(sheet.cssRules)
           .map((rule) => rule.cssText)
           .join('')
-        const style = pip.document.createElement('style')
-        style.textContent = css
         pip.document.head.append(style)
       } catch {
         // A cross-origin sheet cannot be read; nothing here depends on one.
       }
     }
+    pip.document.title = document.title
     pip.document.body.style.margin = '0'
     pip.document.body.style.background = '#000'
+    pip.document.documentElement.style.height = '100%'
+    pip.document.body.style.height = '100%'
 
     // The element is moved rather than copied, so without something holding its
     // place the player vanishes and the page collapses around the gap. Every
@@ -624,12 +695,16 @@ export function useDocumentPiP(container: HTMLElement | null) {
     placeholder.textContent = 'Playing in picture in picture'
 
     container.replaceWith(placeholder)
+    container.style.height = '100%'
     pip.document.body.append(container)
     setActive(true)
+    setWin(pip)
 
     pip.addEventListener('pagehide', () => {
+      container.style.height = ''
       placeholder.replaceWith(container)
       setActive(false)
+      setWin(null)
     })
   }
 
@@ -643,7 +718,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
     }
   }, [])
 
-  return { supported, active, toggle }
+  return { supported, active, toggle, window: win }
 }
 
 // Small enough to sit over other windows, never wider than a third of the
@@ -682,7 +757,7 @@ export interface Sheet {
  * frames are sampled across the whole episode, so it cannot exist until the
  * file does — a few polls, then it either appears or it never will.
  */
-export function useThumbnails(streamId?: string): Sheet | undefined {
+export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null): Sheet | undefined {
   const [sheet, setSheet] = useState<Sheet | undefined>()
 
   useEffect(() => {
@@ -692,8 +767,13 @@ export function useThumbnails(streamId?: string): Sheet | undefined {
     let timer = 0
     let cancelled = false
 
+    let asked = false
     const ask = async () => {
       try {
+        // The first answer may already be ready; only the re-polls wait.
+        if (asked) await untilWatching(video ?? null, () => cancelled)
+        asked = true
+        if (cancelled) return
         const res = await fetch(`/api/stream/${streamId}/thumbnails`)
         if (!res.ok || cancelled) return
         const body = (await res.json()) as Omit<Sheet, 'url'>
@@ -716,7 +796,7 @@ export function useThumbnails(streamId?: string): Sheet | undefined {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [streamId])
+  }, [streamId, video])
 
   return sheet
 }

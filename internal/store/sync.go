@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 )
 
@@ -20,6 +21,11 @@ type DirtyEntry struct {
 	Repeat int
 	// Score on kuro's 0-100 scale; 0 is unrated.
 	Score int
+	// ScoreCleared: set to unrated on purpose, so the push clears the site's.
+	ScoreCleared bool
+	Dirty        bool
+	// Changed is local_updated_at when read; an edit since keeps it dirty.
+	Changed int64
 }
 
 // MarkWatched records local progress and flags the row for push. Progress only
@@ -146,6 +152,7 @@ func (s *Store) SetScore(ctx context.Context, animeID, score int) error {
 		VALUES ((SELECT min(coalesce(min(id), 0), 0) - 1 FROM list_entry), ?, 'PLANNING', 0, ?, 0, ?, 1)
 		ON CONFLICT(anime_id) DO UPDATE SET
 		    score = excluded.score,
+		    score_cleared = CASE WHEN excluded.score = 0 THEN 1 ELSE 0 END,
 		    local_updated_at = excluded.local_updated_at,
 		    dirty = 1`,
 		animeID, score, time.Now().Unix())
@@ -235,6 +242,7 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 		    status = excluded.status,
 		    progress = CASE WHEN ?6 THEN 0 ELSE list_entry.progress END,
 		    score = CASE WHEN ?3 < 0 THEN list_entry.score ELSE ?3 END,
+		    score_cleared = CASE WHEN ?3 = 0 THEN 1 WHEN ?3 > 0 THEN 0 ELSE list_entry.score_cleared END,
 		    completed_at = coalesce(excluded.completed_at, list_entry.completed_at),
 		    local_updated_at = excluded.local_updated_at,
 		    dirty = 1`,
@@ -247,7 +255,7 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 	// first watch must not become the "continue" point of the rewatch.
 	if starting {
 		_, err = s.w.ExecContext(ctx,
-			`UPDATE playback SET watched = 0, position_s = 0, dismissed = 0 WHERE anime_id = ?`, animeID)
+			`UPDATE playback SET watched = 0, position_s = 0, played_s = 0, dismissed = 0 WHERE anime_id = ?`, animeID)
 	}
 	return err
 }
@@ -256,7 +264,8 @@ func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, erro
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT e.id, e.anime_id, coalesce(e.status, ''), e.progress,
 		       coalesce(a.episode_count, 0),
-		       coalesce(e.started_at, ''), coalesce(e.completed_at, ''), e.repeat_count, e.score
+		       coalesce(e.started_at, ''), coalesce(e.completed_at, ''), e.repeat_count, e.score,
+		       e.score_cleared, e.dirty, e.local_updated_at
 		FROM list_entry e
 		LEFT JOIN anime a ON a.id = e.anime_id
 		WHERE e.dirty = 1 AND e.anime_id > 0
@@ -271,7 +280,8 @@ func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, erro
 	for rows.Next() {
 		var d DirtyEntry
 		if err := rows.Scan(&d.ID, &d.AnimeID, &d.Status, &d.Progress,
-			&d.Episodes, &d.StartedAt, &d.CompletedAt, &d.Repeat, &d.Score); err != nil {
+			&d.Episodes, &d.StartedAt, &d.CompletedAt, &d.Repeat, &d.Score,
+			&d.ScoreCleared, &d.Dirty, &d.Changed); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -282,10 +292,17 @@ func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, erro
 // ClearDirty stores the id and timestamp the server returned. Writing back the
 // server's own updatedAt stops the next pull seeing our write as a remote change.
 func (s *Store) ClearDirty(ctx context.Context, animeID, remoteID, remoteUpdatedAt int) error {
+	return s.ClearDirtyAt(ctx, animeID, remoteID, remoteUpdatedAt, math.MaxInt64)
+}
+
+// ClearDirtyAt clears dirty only if the row has not changed since changed.
+func (s *Store) ClearDirtyAt(ctx context.Context, animeID, remoteID, remoteUpdatedAt int, changed int64) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE list_entry
-		SET dirty = 0, remote_updated_at = ?, id = coalesce(nullif(?, 0), id)
-		WHERE anime_id = ?`, remoteUpdatedAt, remoteID, animeID)
+		SET dirty = CASE WHEN local_updated_at <= ?1 THEN 0 ELSE dirty END,
+		    score_cleared = CASE WHEN local_updated_at <= ?1 THEN 0 ELSE score_cleared END,
+		    remote_updated_at = ?2, id = coalesce(nullif(?3, 0), id)
+		WHERE anime_id = ?4`, changed, remoteUpdatedAt, remoteID, animeID)
 	return err
 }
 
@@ -334,11 +351,12 @@ func (s *Store) ListEntry(ctx context.Context, animeID int) (DirtyEntry, error) 
 	err := s.r.QueryRowContext(ctx, `
 		SELECT e.id, e.anime_id, coalesce(e.status,''), e.progress,
 		       coalesce(a.episode_count, 0), coalesce(e.started_at,''), coalesce(e.completed_at,''),
-		       e.repeat_count, e.score
+		       e.repeat_count, e.score, e.score_cleared, e.dirty, e.local_updated_at
 		FROM list_entry e
 		LEFT JOIN anime a ON a.id = e.anime_id
 		WHERE e.anime_id = ?`, animeID).Scan(
-		&d.ID, &d.AnimeID, &d.Status, &d.Progress, &d.Episodes, &d.StartedAt, &d.CompletedAt, &d.Repeat, &d.Score)
+		&d.ID, &d.AnimeID, &d.Status, &d.Progress, &d.Episodes, &d.StartedAt, &d.CompletedAt, &d.Repeat, &d.Score,
+		&d.ScoreCleared, &d.Dirty, &d.Changed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DirtyEntry{}, nil
 	}

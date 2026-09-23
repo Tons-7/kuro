@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { api, withToken } from '../lib/api'
+import { api, ApiError, withToken } from '../lib/api'
 import { bytes, cx, relativeTime } from '../lib/format'
 import { usePrefs, useSetPref, useSetup } from '../lib/queries'
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../components/Anime4KDialog'
 import { ComponentState } from '../components/ComponentState'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../components/NotificationPanel'
-import { ProgressBar, Segmented, Select, Skeleton, Spinner } from '../components/ui'
+import { buttonClass, ControlLabel, ProgressBar, Segmented, Select, Skeleton, Spinner } from '../components/ui'
 
 const TABS = ['Playback', 'Quality', 'Trackers', 'Library', 'Notifications', 'Access', 'Jobs', 'About'] as const
 type Tab = (typeof TABS)[number]
@@ -23,6 +23,10 @@ export function Settings() {
   const [tab, setTab] = useState<Tab>(
     connected ? 'Trackers' : wanted && TABS.includes(wanted) ? wanted : 'Playback',
   )
+  // A link to ?tab= (the update notification) while already here must switch.
+  useEffect(() => {
+    if (wanted && TABS.includes(wanted)) setTab(wanted)
+  }, [wanted])
 
   return (
     // Centred as one block: the slack becomes margins, not a gulf between
@@ -74,7 +78,8 @@ export function Settings() {
 
 function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   return (
-    <div role="tablist" className="hidden w-42 shrink-0 flex-col gap-0.5 lg:flex">
+    // Stays beside a long tab instead of scrolling away with its top.
+    <div role="tablist" className="sticky top-20 hidden w-42 shrink-0 flex-col gap-0.5 self-start lg:flex">
       {TABS.map((name) => (
         <button
           key={name}
@@ -97,35 +102,43 @@ function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <section className="surface p-4">
-      <h2 className="text-sm font-semibold text-base-100">{title}</h2>
-      {hint && <p className="mt-0.5 text-xs text-base-500">{hint}</p>}
+    <section className="surface p-5">
+      <h2 className="font-display text-base font-semibold text-white">{title}</h2>
+      {hint && <p className="mt-1 text-xs leading-relaxed text-base-500">{hint}</p>}
       {/* A rule per row: a two-line hint otherwise runs into the row below it. */}
       <div className="mt-2 divide-y divide-white/5">{children}</div>
     </section>
   )
 }
 
+// The row's label names its control for screen readers; the switches and
+// selects themselves have no visible text.
+const RowLabel = ControlLabel
+
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-5 py-2.5">
-      <div className="min-w-0">
+    // Wraps on a narrow screen rather than clipping buttons off the edge.
+    <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2 py-2.5">
+      <div className="min-w-0 flex-1 basis-48">
         <p className="text-sm text-base-200">{label}</p>
         {hint && <p className="text-xs text-base-500">{hint}</p>}
       </div>
       {/* One track so the right edge does not zigzag; not on a phone, where it
           would come out of the label. */}
-      <div className="flex shrink-0 justify-end sm:min-w-36">{children}</div>
+      <div className="flex max-w-full justify-end sm:min-w-36">
+        <RowLabel.Provider value={label}>{children}</RowLabel.Provider>
+      </div>
     </div>
   )
 }
 
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label?: string }) {
+  const rowLabel = useContext(RowLabel)
   return (
     <button
       role="switch"
       aria-checked={on}
-      aria-label={label}
+      aria-label={label ?? rowLabel}
       onClick={() => onChange(!on)}
       className={cx(
         'relative h-5 w-9 rounded-full transition-colors',
@@ -276,6 +289,18 @@ function PlaybackTab() {
         </Row>
       </Section>
 
+      <Section title="Window">
+        <Row
+          label="Open kuro"
+          hint="Takes effect the next time kuro starts. F11 switches either way."
+        >
+          <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
+            <option value="fullscreen">Fullscreen</option>
+            <option value="maximized">Maximized</option>
+          </Select>
+        </Row>
+      </Section>
+
       <SubtitleLanguages f={f} />
     </div>
   )
@@ -349,6 +374,12 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
+interface OrphanResult {
+  files: { name: string; bytes: number }[]
+  removed: number
+  freedBytes: number
+}
+
 function QualityTab() {
   const f = useFlag()
   const qc = useQueryClient()
@@ -357,10 +388,20 @@ function QualityTab() {
     mutationFn: () => api.post('/api/cache/sweep'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }),
   })
-  const orphans = useMutation({
-    mutationFn: () => api.post<{ removed: number; freedBytes: number }>('/api/cache/orphans'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }),
+  // Looked at first, deleted only once the list has been seen.
+  const preview = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.get<OrphanResult>('/api/cache/orphans'),
   })
+  const orphans = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<OrphanResult>('/api/cache/orphans'),
+    onSuccess: () => {
+      preview.reset()
+      qc.invalidateQueries({ queryKey: ['cache'] })
+    },
+  })
+  const found = preview.data
 
   if (f.loading) return <Skeleton className="h-48 w-full" />
 
@@ -415,7 +456,7 @@ function QualityTab() {
           <button
             onClick={() => sweep.mutate()}
             disabled={sweep.isPending}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+            className={buttonClass()}
           >
             {sweep.isPending ? 'Sweeping…' : 'Sweep now'}
           </button>
@@ -425,18 +466,55 @@ function QualityTab() {
           hint={
             orphans.data
               ? `Removed ${orphans.data.removed} · freed ${bytes(orphans.data.freedBytes)}`
-              : 'Folders in the cache the torrent engine no longer knows about — left by a crash or a delete outside kuro. They escape the budget until removed.'
+              : found
+                ? found.removed === 0
+                  ? 'Nothing orphaned.'
+                  : `${found.removed} found · ${bytes(found.freedBytes)}`
+                : 'Folders in the cache the torrent engine no longer knows about — left by a crash or a delete outside kuro. They escape the budget until removed.'
           }
         >
-          <button
-            onClick={() => orphans.mutate()}
-            disabled={orphans.isPending}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700 disabled:opacity-50"
-          >
-            {orphans.isPending ? 'Cleaning…' : 'Clean up'}
-          </button>
+          {found && found.removed > 0 ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => orphans.mutate()}
+                disabled={orphans.isPending}
+                className={buttonClass('danger')}
+              >
+                {orphans.isPending ? 'Deleting…' : `Delete ${found.removed}`}
+              </button>
+              <button
+                onClick={() => preview.reset()}
+                className={buttonClass()}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                orphans.reset()
+                preview.mutate()
+              }}
+              disabled={preview.isPending}
+              className={buttonClass()}
+            >
+              {preview.isPending ? 'Looking…' : 'Find'}
+            </button>
+          )}
         </Row>
-        {orphans.isError && <p className="text-xs text-recap">{(orphans.error as Error).message}</p>}
+        {found && found.removed > 0 && (
+          <ul className="max-h-40 overflow-y-auto rounded-md bg-base-950 px-3 py-2 font-mono text-[11px] text-base-400">
+            {found.files.map((f) => (
+              <li key={f.name} className="flex justify-between gap-4">
+                <span className="truncate">{f.name}</span>
+                <span className="shrink-0">{bytes(f.bytes)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {(preview.error ?? orphans.error) && (
+          <p className="text-xs text-recap">{((preview.error ?? orphans.error) as Error).message}</p>
+        )}
       </Section>
 
       <Section title="Downloads">
@@ -492,6 +570,7 @@ interface Tracker {
   hasSecret: boolean
   configured: boolean
   connected: boolean
+  reconnect?: boolean
   user?: string
   redirect: string
   register: string
@@ -524,6 +603,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
   const [editing, setEditing] = useState(!tracker.configured)
 
   const save = useMutation({
+    meta: { inline: true },
     mutationFn: () =>
       api.post('/api/trackers', {
         provider: tracker.provider,
@@ -540,6 +620,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
 
   // MAL's API has no favourites; the public profile can be read once.
   const importFavs = useMutation({
+    meta: { inline: true },
     mutationFn: () =>
       api.post<{ found: number; matched: number; favourited: number; unmatched: number }>(
         '/api/mal/favourites/import',
@@ -547,11 +628,13 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bookmarks'] }),
   })
 
-  const status = tracker.connected
-    ? `Connected as ${tracker.user ?? '—'}`
-    : tracker.configured
-      ? 'Set up, not connected'
-      : 'Not set up'
+  const status = tracker.reconnect
+    ? `${tracker.name} refused the saved login. Reconnect to resume syncing.`
+    : tracker.connected
+      ? `Connected as ${tracker.user ?? '—'}`
+      : tracker.configured
+        ? 'Set up, not connected'
+        : 'Not set up'
 
   const loginPath = tracker.provider === 'anilist' ? '/api/auth/login' : '/api/mal/auth/login'
   const logoutPath =
@@ -580,14 +663,14 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
           {tracker.configured && (
             <a
               href={loginPath}
-              className="rounded-md bg-accent-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-600"
+              className={buttonClass('primary')}
             >
               {tracker.connected ? 'Reconnect' : 'Connect'}
             </a>
           )}
           <button
             onClick={() => setEditing((open) => !open)}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+            className={buttonClass()}
           >
             {editing ? 'Cancel' : tracker.configured ? 'Edit keys' : 'Add keys'}
           </button>
@@ -596,7 +679,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
               onClick={() => importFavs.mutate()}
               disabled={importFavs.isPending}
               title="MyAnimeList's API cannot sync favourites; this copies them over once"
-              className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700 disabled:opacity-50"
+              className={buttonClass()}
             >
               {importFavs.isPending ? 'Importing…' : 'Import favourites'}
             </button>
@@ -622,7 +705,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
             ) : (
               <button
                 onClick={() => setConfirmingOut(true)}
-                className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-300 hover:bg-base-700 hover:text-white"
+                className={buttonClass()}
               >
                 Disconnect
               </button>
@@ -681,7 +764,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
             <button
               onClick={() => save.mutate()}
               disabled={save.isPending || clientId.trim() === ''}
-              className="rounded-md bg-accent-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-600 disabled:opacity-50"
+              className={buttonClass('primary')}
             >
               {save.isPending ? 'Saving…' : 'Save'}
             </button>
@@ -792,13 +875,13 @@ function ImportRow() {
           <button
             onClick={() => sync.mutate()}
             disabled={sync.isPending}
-            className="rounded-md bg-red-500/90 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500"
+            className={buttonClass('danger')}
           >
             {sync.isPending ? 'Replacing…' : 'Yes, replace'}
           </button>
           <button
             onClick={() => setConfirming(false)}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+            className={buttonClass()}
           >
             Cancel
           </button>
@@ -807,7 +890,7 @@ function ImportRow() {
         <button
           onClick={() => (mode === 'replace' ? setConfirming(true) : sync.mutate())}
           disabled={sync.isPending}
-          className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+          className={buttonClass()}
         >
           {sync.isPending ? 'Importing…' : mode === 'merge' ? 'Merge list' : 'Replace list'}
         </button>
@@ -833,6 +916,7 @@ function LibraryTab() {
   const qc = useQueryClient()
 
   const save = useMutation({
+    meta: { inline: true },
     mutationFn: (paths: string[]) => api.post('/api/local/paths', { paths }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
   })
@@ -872,7 +956,7 @@ function LibraryTab() {
             if (path.trim()) save.mutate([...roots, path.trim()])
             setPath('')
           }}
-          className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+          className={buttonClass()}
         >
           Add
         </button>
@@ -912,6 +996,7 @@ function BackupSection() {
   const exportURL = (format: string) => withToken(`/api/library/export?format=${format}`)
 
   const load = useMutation({
+    meta: { inline: true },
     mutationFn: (file: File) =>
       api.upload<{ entries: number; favourites: number; skipped: number }>(
         '/api/library/import',
@@ -941,14 +1026,14 @@ function BackupSection() {
           <a
             href={exportURL('json')}
             download
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+            className={buttonClass()}
           >
             JSON
           </a>
           <a
             href={exportURL('txt')}
             download
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+            className={buttonClass()}
           >
             Text
           </a>
@@ -1051,11 +1136,13 @@ function AccessTab() {
         listening: string
         urls: string[]
         canSwitch: boolean
+        host?: boolean
       }>('/api/access'),
   })
 
   // Moves the listener there and then, so the phone can be tried immediately.
   const setNetwork = useMutation({
+    meta: { inline: true },
     mutationFn: (lan: boolean) => api.post('/api/access/network', { lan }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['access'] }),
   })
@@ -1083,9 +1170,16 @@ function AccessTab() {
 
       {access.isPending ? (
         <Skeleton className="h-40 w-full" />
+      ) : access.isError ? (
+        <p className="text-sm text-recap">{(access.error as Error).message}</p>
       ) : !access.data?.reachable ? (
         <p className="text-sm text-base-400">
           Only this machine can reach kuro right now.
+        </p>
+      ) : access.data.urls.length === 0 ? (
+        <p className="text-sm text-base-300">
+          This machine has no home-network address right now (not on Wi-Fi or Ethernet, or only on a
+          VPN), so there is nothing a phone could open yet.
         </p>
       ) : (
         <div className="flex flex-wrap items-center gap-5">
@@ -1094,15 +1188,207 @@ function AccessTab() {
             alt="Pairing QR code"
             className="size-40 rounded-lg bg-white p-2"
           />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="mb-1 text-xs text-base-500">Scan, or open this on the device:</p>
             {access.data.urls.map((url) => (
-              <code key={url} className="block truncate text-xs text-accent-400">{url}</code>
+              <div key={url} className="flex items-center gap-2">
+                <code className="min-w-0 truncate text-xs text-accent-400">{url}</code>
+                <CopyButton text={url} />
+              </div>
             ))}
           </div>
         </div>
       )}
+      {access.data?.reachable && access.data.host && <FirewallPanel />}
+      {access.data?.reachable && access.data.host && <RevokeDevices />}
     </Section>
+  )
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      onClick={() =>
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true)
+          window.setTimeout(() => setCopied(false), 1500)
+        })
+      }
+      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-base-400 hover:bg-base-800 hover:text-white"
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  )
+}
+
+// A new token signs every paired phone and TV out at once; they pair again
+// with the new code.
+function RevokeDevices() {
+  const qc = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const rotate = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post('/api/access/rotate'),
+    onSuccess: () => {
+      setConfirming(false)
+      void qc.invalidateQueries({ queryKey: ['access'] })
+    },
+  })
+  return (
+    <Row
+      label="Paired devices"
+      hint={
+        rotate.isSuccess
+          ? 'Every device was signed out. Scan the new code to pair again.'
+          : rotate.isError
+            ? (rotate.error as Error).message
+            : 'Sign out every phone and TV that has the link.'
+      }
+    >
+      {confirming ? (
+        <div className="flex gap-2">
+          <button
+            onClick={() => rotate.mutate()}
+            disabled={rotate.isPending}
+            className={buttonClass('danger')}
+          >
+            Sign them out
+          </button>
+          <button
+            onClick={() => setConfirming(false)}
+            className={buttonClass()}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirming(true)}
+          className={buttonClass()}
+        >
+          Sign out all devices
+        </button>
+      )}
+    </Row>
+  )
+}
+
+interface FirewallState {
+  status: {
+    supported: boolean
+    networks: { name: string; interface: string; category: string }[]
+    firewall?: string
+    hint?: string
+    command?: string
+  }
+  reachable: boolean
+  blocked: boolean
+  public: boolean
+}
+
+// Why a phone on the same Wi-Fi can or cannot get in, and the fix. Windows
+// asks about a program once; a Cancel, or a network it calls Public, blocks
+// every device afterwards without saying so.
+function FirewallPanel() {
+  const qc = useQueryClient()
+  const [alsoPublic, setAlsoPublic] = useState(false)
+  const fw = useQuery({
+    queryKey: ['firewall'],
+    queryFn: () => api.get<FirewallState>('/api/access/firewall'),
+    refetchOnWindowFocus: true,
+  })
+  const allow = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<FirewallState>('/api/access/firewall', { public: alsoPublic }),
+    onSuccess: (data) => qc.setQueryData(['firewall'], data),
+  })
+  const openSettings = useMutation({ mutationFn: () => api.post('/api/access/network-settings') })
+
+  if (fw.isPending) return <Skeleton className="mt-4 h-16 w-full" />
+  if (fw.isError || !fw.data) return null
+  const { status, reachable, blocked } = fw.data
+  const publicNets = status.networks.filter((n) => n.category === 'Public')
+
+  // Linux and macOS: kuro only says what it found.
+  if (!status.supported) {
+    if (!status.firewall) return null
+    return (
+      <div className="mt-4 rounded-md border border-base-800 bg-base-950/60 p-3 text-sm">
+        <p className="text-base-200">{status.hint}</p>
+        {status.command && (
+          <code className="mt-2 block rounded bg-base-900 px-2 py-1.5 text-xs break-all text-accent-300 select-all">
+            {status.command}
+          </code>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={cx(
+        'mt-4 space-y-2.5 rounded-md border p-3 text-sm',
+        reachable ? 'border-accent-500/30 bg-accent-500/5' : 'border-recap/40 bg-recap/10',
+      )}
+    >
+      {reachable ? (
+        <p className="text-base-200">
+          ✓ Windows Firewall lets devices on {status.networks.map((n) => n.name).join(', ')} connect.
+        </p>
+      ) : blocked ? (
+        <p className="text-base-100">
+          Windows Firewall is blocking kuro, probably from an earlier Cancel on its prompt. Allowing it
+          fixes that.
+        </p>
+      ) : publicNets.length > 0 ? (
+        <p className="text-base-100">
+          Windows calls <strong>{publicNets.map((n) => n.name).join(', ')}</strong> a Public network and
+          keeps other devices out. If it's your home Wi-Fi, set it to <strong>Private</strong>, then allow
+          kuro below.
+        </p>
+      ) : (
+        <p className="text-base-100">Windows Firewall isn't letting other devices reach kuro yet.</p>
+      )}
+
+      {!reachable && (
+        <div className="flex flex-wrap items-center gap-2">
+          {publicNets.length > 0 && (
+            <button
+              onClick={() => openSettings.mutate()}
+              className={buttonClass('secondary', 'sm')}
+            >
+              Open network settings
+            </button>
+          )}
+          <button
+            onClick={() => allow.mutate()}
+            disabled={allow.isPending}
+            className={buttonClass('primary', 'sm')}
+          >
+            {allow.isPending ? 'Waiting for Windows…' : 'Allow through Windows Firewall'}
+          </button>
+          <button
+            onClick={() => fw.refetch()}
+            className="rounded-md px-2 py-1.5 text-xs text-base-400 hover:text-white"
+          >
+            Check again
+          </button>
+        </div>
+      )}
+      {!reachable && publicNets.length > 0 && (
+        <label className="flex items-center gap-2 text-xs text-base-400">
+          <input type="checkbox" checked={alsoPublic} onChange={(e) => setAlsoPublic(e.target.checked)} />
+          Also allow on Public networks (cafés, hotels: anyone on them could try to connect; the link's
+          token still keeps them out)
+        </label>
+      )}
+      {allow.isError && <p className="text-xs text-recap">{(allow.error as Error).message}</p>}
+      <p className="text-xs text-base-500">
+        Windows will ask for permission. The rule only admits devices on the same local network. Still
+        can't connect? Guest networks and routers with "client isolation" keep devices apart.
+      </p>
+    </div>
   )
 }
 
@@ -1121,6 +1407,7 @@ interface UpdateStatus {
 function AboutTab() {
   const qc = useQueryClient()
   const [waiting, setWaiting] = useState(false)
+  const [stuck, setStuck] = useState(false)
 
   const status = useQuery({
     queryKey: ['update'],
@@ -1129,7 +1416,7 @@ function AboutTab() {
     retry: false,
     refetchInterval: (q) => {
       const stage = q.state.data?.stage
-      return stage === 'downloading' || stage === 'verifying' ? 500 : false
+      return stage === 'downloading' || stage === 'verifying' || stage === 'restarting' ? 500 : false
     },
   })
   const check = useMutation({
@@ -1137,6 +1424,7 @@ function AboutTab() {
     onSuccess: (data) => qc.setQueryData(['update'], data),
   })
   const apply = useMutation({
+    meta: { inline: true },
     mutationFn: () => api.post<UpdateStatus>('/api/update/apply'),
     onSuccess: (data) => qc.setQueryData(['update'], data),
   })
@@ -1145,11 +1433,19 @@ function AboutTab() {
   const from = s?.current
 
   // Once the download lands the server hands over to the new binary: poll until
-  // something answers with a different version, then reload onto it.
+  // something answers with a different version, then reload onto it. The old
+  // process may be gone before 'restarting' is ever seen, so a failed poll
+  // after verifying counts too.
+  const handingOver =
+    s?.stage === 'restarting' || (status.isError && (s?.stage === 'verifying' || s?.stage === 'downloading'))
   useEffect(() => {
-    if (s?.stage !== 'restarting' || waiting) return
+    if (!handingOver || waiting) return
     setWaiting(true)
+    let ticks = 0
     const timer = window.setInterval(async () => {
+      // A new version that never comes up (or a rollback) must not leave the
+      // page spinning for good.
+      if (++ticks === 90) setStuck(true)
       try {
         const health = await api.get<{ version?: string }>('/api/health')
         if (health.version && health.version !== from) window.location.reload()
@@ -1159,11 +1455,20 @@ function AboutTab() {
     }, 1000)
     return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s?.stage])
+  }, [handingOver])
 
   if (status.isPending) return <Skeleton className="h-40 w-full" />
 
-  if (status.isError || !s) {
+  // Only a build without an updater (503 "updater unavailable") is a
+  // development one; any other failure is said as what it is.
+  if (!s && !(status.error instanceof ApiError && status.error.status === 503)) {
+    return (
+      <Section title="kuro">
+        <p className="text-sm text-recap">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
+      </Section>
+    )
+  }
+  if (!s) {
     return (
       <div className="space-y-4">
         <Section title="kuro" hint="Development build — updates are not checked.">
@@ -1185,7 +1490,9 @@ function AboutTab() {
       case 'verifying':
         return 'Verifying…'
       case 'restarting':
-        return 'Restarting into the new version…'
+        return stuck
+          ? 'The new version has not come up. Reload this page; if that fails, start kuro again (it falls back to the previous version).'
+          : 'Restarting into the new version…'
       case 'failed':
         return s.error ?? 'Update failed'
       default:
@@ -1204,7 +1511,7 @@ function AboutTab() {
             <button
               onClick={() => check.mutate()}
               disabled={busy || check.isPending}
-              className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700 disabled:opacity-50"
+              className={buttonClass()}
             >
               {check.isPending ? 'Checking…' : 'Check now'}
             </button>
@@ -1212,7 +1519,7 @@ function AboutTab() {
               <button
                 onClick={() => apply.mutate()}
                 disabled={busy || apply.isPending}
-                className="rounded-md bg-accent-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-600 disabled:opacity-50"
+                className={buttonClass('primary')}
               >
                 {busy ? 'Updating…' : s.stage === 'failed' ? 'Try again' : `Update to ${s.latest?.version}`}
               </button>
@@ -1256,6 +1563,7 @@ function ComponentsSection() {
   })
 
   const install = useMutation({
+    meta: { inline: true },
     mutationFn: (name: string) => api.post(`/api/setup/install/${name}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['setup'] }),
   })
@@ -1293,6 +1601,9 @@ function ComponentsSection() {
                 latest={c.latest}
                 onInstall={() => install.mutate(c.name)}
                 pending={install.isPending && install.variables === c.name}
+                requestError={
+                  install.isError && install.variables === c.name ? (install.error as Error).message : undefined
+                }
               />
             )}
           </Row>
@@ -1311,7 +1622,15 @@ function JobsTab() {
     queryFn: () => api.get<{ jobs: Array<Record<string, unknown>> }>('/api/jobs'),
     refetchInterval: 10_000,
   })
-  const run = useMutation({ mutationFn: (name: string) => api.post(`/api/jobs/${name}`) })
+  const qc = useQueryClient()
+  // Started, not awaited: the list shows it running at once, and a job that
+  // was already running says so instead of looking like nothing happened.
+  const run = useMutation({
+    meta: { inline: true },
+    mutationFn: (name: string) => api.post(`/api/jobs/${name}`),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['jobs'] }),
+  })
+  const busy = run.error instanceof ApiError && run.error.status === 409 ? run.variables : undefined
 
   return (
     <Section title="Background jobs" hint="Syncing, release checks and data mirrors.">
@@ -1330,6 +1649,9 @@ function JobsTab() {
                 {job.lastError ? (
                   <p className="mt-0.5 truncate text-xs text-recap">{String(job.lastError)}</p>
                 ) : null}
+                {busy === job.name && !job.running && (
+                  <p className="mt-0.5 text-xs text-base-400">Already running.</p>
+                )}
               </div>
               <button
                 onClick={() => run.mutate(String(job.name))}

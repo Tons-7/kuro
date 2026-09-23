@@ -29,7 +29,9 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	dsn := "file:" + path + "?" + pragmas
+	// Not a file: URI, which would end the path at '#' and decode '%' in a
+	// folder name; the driver still reads the pragmas after '?'.
+	dsn := path + "?" + pragmas
 
 	write, err := sql.Open("sqlite", dsn)
 	if err != nil {

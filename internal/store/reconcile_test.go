@@ -105,9 +105,9 @@ func TestReconcileIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// An engine that came up empty means every torrent is gone, not that
-// reconciliation should be skipped.
-func TestReconcileWithEmptyEngineOrphansEverything(t *testing.T) {
+// rqbit answers before it has reloaded its session, so an empty listing at
+// startup is no evidence that anything is gone.
+func TestReconcileLeavesEverythingOnAnEmptyListing(t *testing.T) {
 	s := newTestStore(t)
 
 	addTorrent(t, s, "aaaa", 1)
@@ -115,8 +115,11 @@ func TestReconcileWithEmptyEngineOrphansEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if matched != 0 || orphaned != 1 {
+	if matched != 0 || orphaned != 0 {
 		t.Fatalf("matched=%d orphaned=%d", matched, orphaned)
+	}
+	if id, ok := rqbitID(t, s, "aaaa"); !ok || id != 1 {
+		t.Fatalf("the stored id was cleared: %d %v", id, ok)
 	}
 }
 

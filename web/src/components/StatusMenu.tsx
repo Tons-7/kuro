@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { LIST_STATUSES, type ListStatus } from '../lib/api'
 import { useSetStatus } from '../lib/queries'
 import { cx } from '../lib/format'
-import { useDismiss } from './ui'
+import { useDismiss, useModalFocus } from './ui'
 
 /**
  * The bookmark control. On the sites this is modelled on the bookmark button
@@ -25,7 +25,13 @@ export function StatusMenu({
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close)
   const trigger = useRef<HTMLButtonElement>(null)
-  const setStatus = useSetStatus()
+  // In a portal, the menu is at the end of the page's tab order; opening it
+  // moves focus in, and closing hands it back to the button.
+  const menuRef = useRef<HTMLDivElement>(null)
+  useModalFocus(menuRef, open)
+  const setStatus = useSetStatus({ inline: true })
+  // Rewatching starts the show over (progress and ticks reset), so it asks once.
+  const [confirmRewatch, setConfirmRewatch] = useState(false)
 
   const active = LIST_STATUSES.find((s) => s.value === current)
 
@@ -49,6 +55,8 @@ export function StatusMenu({
           e.preventDefault()
           e.stopPropagation()
           setOpen((v) => !v)
+          setConfirmRewatch(false)
+          setStatus.reset()
         }}
         className={cx(
           'flex items-center gap-1.5 rounded-md font-medium transition-colors',
@@ -64,6 +72,7 @@ export function StatusMenu({
 
       {open && menu && createPortal(
         <div
+          ref={menuRef}
           role="menu"
           data-portal-menu
           style={{ top: menu.top, left: menu.left }}
@@ -77,9 +86,20 @@ export function StatusMenu({
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
+                if (status.value === 'REPEATING' && current !== 'REPEATING' && !confirmRewatch) {
+                  setConfirmRewatch(true)
+                  return
+                }
+                setConfirmRewatch(false)
+                // A failure keeps the menu open with the reason, not a silent no-op.
                 setStatus.mutate(
                   { animeId, status: status.value as ListStatus },
-                  { onSettled: () => { setOpen(false); onDone?.() } },
+                  {
+                    onSuccess: () => {
+                      setOpen(false)
+                      onDone?.()
+                    },
+                  },
                 )
               }}
               className={cx(
@@ -89,10 +109,17 @@ export function StatusMenu({
                   : 'text-base-200 hover:bg-base-750',
               )}
             >
-              {status.label}
+              {status.value === 'REPEATING' && confirmRewatch
+                ? 'Restart from ep 1?'
+                : status.label}
               {status.value === current && <CheckIcon />}
             </button>
           ))}
+          {setStatus.isError && (
+            <p className="border-t border-base-750 px-3 py-1.5 text-xs text-recap">
+              {(setStatus.error as Error).message}
+            </p>
+          )}
 
         </div>,
         document.body,

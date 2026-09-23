@@ -69,7 +69,10 @@ export function useAired(hours = 48) {
   return useQuery({
     queryKey: ['aired', hours, start],
     queryFn: () =>
-      api.get<{ items: ScheduleItem[] }>(`/api/schedule${query({ start, days: 3 })}`),
+      // The window has to reach now, whatever the span.
+      api.get<{ items: ScheduleItem[] }>(
+        `/api/schedule${query({ start, days: Math.min(28, Math.ceil(hours / 24) + 1) })}`,
+      ),
     staleTime: 5 * 60_000,
     // New episodes appear on their own; leaving the page open should not mean
     // looking at a list from hours ago.
@@ -158,9 +161,10 @@ export function useRecommendations(animeId: number | undefined) {
   return useQuery({
     enabled: !!animeId,
     queryKey: ['recommend', animeId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api.get<{ items: DiscoverItem[]; source: string }>(
         `/api/recommend${query({ anime: animeId, limit: 18 })}`,
+        signal,
       ),
     staleTime: 60 * 60_000,
   })
@@ -198,22 +202,34 @@ export function useSetPref() {
   return useMutation({
     mutationFn: (v: { key: string; value: string; animeId?: number }) =>
       api.post('/api/prefs', v),
-    onSuccess: () => {
+    onSuccess: (_res, v) => {
+      // Titles are picked server-side on nearly every list, wherever the
+      // setting was changed from.
+      if (v.key === 'display.titles') {
+        void qc.invalidateQueries()
+        return
+      }
       void qc.invalidateQueries({ queryKey: ['prefs'] })
       void qc.invalidateQueries({ queryKey: ['settings'] })
     },
   })
 }
 
-export function useSetStatus() {
+/** inline: the caller shows the error itself, so no toast. */
+export function useSetStatus({ inline = false }: { inline?: boolean } = {}) {
   const qc = useQueryClient()
   return useMutation({
+    meta: { inline },
     mutationFn: (v: { animeId: number; status: ListStatus; score?: number }) =>
       api.post('/api/status', v),
     // The tag appears in several places at once, so everything showing list
     // state has to be refreshed rather than just the card that was clicked.
+    // Episodes too: a rewatch clears every tick.
     onSuccess: () => {
-      for (const key of ['library', 'continue', 'discover', 'browse', 'schedule', 'anime']) {
+      for (const key of [
+        'library', 'continue', 'discover', 'browse', 'schedule', 'anime',
+        'episodes', 'franchise', 'recommend', 'aired', 'bookmarks', 'search',
+      ]) {
         void qc.invalidateQueries({ queryKey: [key] })
       }
     },
@@ -269,6 +285,10 @@ export interface SetupState {
   ready: boolean
   /** Torrent sites in config.toml. None ship with kuro. */
   indexers: number
+  /** [[indexer]] blocks skipped at startup, with the reason. */
+  badIndexers?: string[]
+  /** Where history lives when data_dir is empty. */
+  defaultDataDir?: string
   configPath: string
   /** Database and window profile: AppData, or a data folder beside the exe. */
   dataDir: string

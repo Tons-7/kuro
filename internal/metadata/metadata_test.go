@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -281,6 +282,36 @@ func TestFlagsFallsBackWhenThePrimaryIsDown(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Episode != 7 {
 		t.Fatalf("got %+v, want the fallback's episode 7", got)
+	}
+}
+
+// A mirror that has not caught up answers 404; the other may list the show, and
+// when neither does the answer is "not yet", not a permanent "no flags".
+func TestFlagsTriesTheOtherHostWhenOneHasNothing(t *testing.T) {
+	var jikanListed bool
+	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !jikanListed {
+			io.WriteString(w, `{"data":[],"pagination":{"has_next_page":false}}`)
+			return
+		}
+		io.WriteString(w, `{"data":[{"mal_id":3,"filler":false,"recap":true}],
+		  "pagination":{"has_next_page":false}}`)
+	}))
+	t.Cleanup(jikan.Close)
+	missing := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(missing.Close)
+
+	c := New()
+	c.SetURL("tenrai", missing.URL)
+	c.SetURL("jikan", jikan.URL)
+
+	if _, err := c.Flags(context.Background(), 20); !errors.Is(err, ErrNotListed) {
+		t.Fatalf("err = %v, want ErrNotListed", err)
+	}
+	jikanListed = true
+	got, err := c.Flags(context.Background(), 20)
+	if err != nil || len(got) != 1 || !got[0].Recap {
+		t.Fatalf("got %+v, %v; want jikan's recap", got, err)
 	}
 }
 

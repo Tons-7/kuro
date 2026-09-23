@@ -275,13 +275,60 @@ func TestSubtitleAndFontExtraction(t *testing.T) {
 	}
 
 	if len(info.Attachments) > 0 {
-		fonts, err := subs.ExtractFonts(ctx, clip, dir)
+		fonts, err := subs.ExtractFonts(ctx, clip, dir, info.Attachments)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(fonts) == 0 {
 			t.Error("no fonts extracted; styled signs would render with substitutes")
 		}
+	}
+}
+
+// Attachment names come from whoever made the release; one naming a path
+// outside the fonts folder must land inside it.
+func TestExtractFontsKeepsHostileNamesInside(t *testing.T) {
+	ffmpeg, ffprobe := binaries(t)
+	root := t.TempDir()
+	work := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	font := filepath.Join(root, "font.ttf")
+	if err := os.WriteFile(font, []byte("not really a font"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	clip := filepath.Join(root, "hostile.mkv")
+	out, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=1",
+		"-attach", font, "-metadata:s:t", "mimetype=application/x-truetype-font",
+		"-metadata:s:t", "filename=../../../evil.ttf",
+		"-c:v", "libx264", "-preset", "ultrafast", clip).CombinedOutput()
+	if err != nil {
+		t.Fatalf("build clip: %v %s", err, out)
+	}
+	info, err := NewProber(ffprobe).Probe(context.Background(), clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Attachments) != 1 {
+		t.Fatalf("attachments = %+v", info.Attachments)
+	}
+
+	fonts, err := NewSubtitles(ffmpeg).ExtractFonts(context.Background(), clip, work, info.Attachments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, escaped := range []string{
+		filepath.Join(root, "evil.ttf"), filepath.Join(root, "a", "evil.ttf"), filepath.Join(work, "evil.ttf"),
+	} {
+		if _, err := os.Stat(escaped); err == nil {
+			t.Errorf("wrote outside the fonts folder: %s", escaped)
+		}
+	}
+	if len(fonts) != 1 || fonts[0].Name != "evil.ttf" {
+		t.Errorf("fonts = %+v, want evil.ttf inside the folder", fonts)
 	}
 }
 
@@ -295,7 +342,7 @@ func TestExtractFontsWithNoAttachments(t *testing.T) {
 		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=3",
 		"-c:v", "libx264", "-preset", "ultrafast", plain).Run()
 
-	fonts, err := NewSubtitles(ffmpeg).ExtractFonts(context.Background(), plain, dir)
+	fonts, err := NewSubtitles(ffmpeg).ExtractFonts(context.Background(), plain, dir, nil)
 	if err != nil {
 		t.Fatalf("a file with no fonts is not an error: %v", err)
 	}

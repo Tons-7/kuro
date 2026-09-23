@@ -5,18 +5,22 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"kuro/internal/db"
 	"kuro/internal/store"
 	"kuro/internal/torrent"
 )
 
-// An engine that lists nothing is what a restart looks like before rqbit has
-// reloaded its session. Forgetting then cascades torrent_file away, which is
-// the episode's only link to the partly downloaded file.
-func TestDownloadsSurviveARestartingEngine(t *testing.T) {
+func restartFixture(t *testing.T, age time.Duration) (*Cache, *store.Store, *fakeRqbit) {
+	t.Helper()
+	old := forgetAge
+	forgetAge = age
+	t.Cleanup(func() { forgetAge = old })
+
 	engine := newFakeRqbit()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
@@ -29,107 +33,140 @@ func TestDownloadsSurviveARestartingEngine(t *testing.T) {
 	if err := conn.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-
 	st := store.New(conn)
+	c := NewCache(st, torrent.NewClient(srv.URL), t.TempDir(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return c, st, engine
+}
+
+func record(t *testing.T, st *store.Store, hash, name string, fileIndex int) {
+	t.Helper()
 	ctx := context.Background()
-	if err := st.EnsureAnime(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
 	if err := st.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash: "abc", RqbitID: 7, Name: "Frieren - 05", AnimeID: 1, EpKey: "5",
-		FileIndex: 0, FilePath: "Frieren - 05.mkv", TotalSize: 1 << 30,
+		InfoHash: hash, RqbitID: 7, Name: name, FileIndex: fileIndex,
+		FilePath: name, TotalSize: 1 << 30,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetCacheBytes(ctx, "abc", 0, 1<<29, false); err != nil {
+	if err := st.SetCacheBytes(ctx, hash, fileIndex, 1<<29, false); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	c := NewCache(st, torrent.NewClient(srv.URL), t.TempDir(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
-
-	if err := c.forgetVanished(ctx); err != nil {
-		t.Fatal(err)
+func passes(t *testing.T, c *Cache, n int) {
+	t.Helper()
+	for range n {
+		if err := c.forgetVanished(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	entries, err := st.CacheEntries(ctx)
+}
+
+func remaining(t *testing.T, st *store.Store) int {
+	t.Helper()
+	entries, err := st.CacheEntries(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("the download was forgotten on the first empty listing: %+v", entries)
-	}
-	rec, ok, err := st.TorrentForEpisode(ctx, 1, "5")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || rec.InfoHash != "abc" {
-		t.Errorf("the episode lost its download: %+v (found %v)", rec, ok)
-	}
+	return len(entries)
+}
 
-	// Absent again: now it really is gone.
-	if err := c.forgetVanished(ctx); err != nil {
-		t.Fatal(err)
+// An engine listing nothing is one still reloading its session: forgetting
+// then would cascade every episode's link to its file away.
+func TestEmptyListingNeverForgets(t *testing.T) {
+	c, st, _ := restartFixture(t, 0)
+	record(t, st, "abc", "Frieren - 05", 0)
+
+	passes(t, c, 3)
+	if n := remaining(t, st); n != 1 {
+		t.Fatalf("forgotten on empty listings: %d left", n)
 	}
-	entries, err = st.CacheEntries(ctx)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestADownloadTheEngineKeepsNotListingIsForgotten(t *testing.T) {
+	c, st, engine := restartFixture(t, 0)
+	engine.ids[9] = "other"
+	record(t, st, "abc", "Frieren - 05", 0)
+
+	passes(t, c, 1)
+	if n := remaining(t, st); n != 1 {
+		t.Fatalf("forgotten on the first absence: %d left", n)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("a download the engine keeps not listing should be forgotten: %+v", entries)
+	passes(t, c, 1)
+	if n := remaining(t, st); n != 0 {
+		t.Fatalf("still on record after two absences: %d left", n)
 	}
 }
 
 // The count is consecutive: a download that comes back is not half-forgotten.
 func TestAbsenceCountResetsWhenTheEngineListsItAgain(t *testing.T) {
-	engine := newFakeRqbit()
-	srv := httptest.NewServer(engine.handler())
-	t.Cleanup(srv.Close)
+	c, st, engine := restartFixture(t, 0)
+	engine.ids[9] = "other"
+	record(t, st, "abc", "held", 0)
 
-	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	if err := conn.Migrate(); err != nil {
-		t.Fatal(err)
-	}
-
-	st := store.New(conn)
-	ctx := context.Background()
-	if err := st.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash: "abc", RqbitID: 7, Name: "held", FilePath: "held.mkv", TotalSize: 1 << 30,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetCacheBytes(ctx, "abc", 0, 1<<29, false); err != nil {
-		t.Fatal(err)
-	}
-
-	c := NewCache(st, torrent.NewClient(srv.URL), t.TempDir(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err := c.forgetVanished(ctx); err != nil {
-		t.Fatal(err)
-	}
-
+	passes(t, c, 1)
 	engine.mu.Lock()
 	engine.ids[7] = "abc"
 	engine.mu.Unlock()
-	if err := c.forgetVanished(ctx); err != nil {
-		t.Fatal(err)
-	}
-
+	passes(t, c, 1)
 	engine.mu.Lock()
 	delete(engine.ids, 7)
 	engine.mu.Unlock()
-	if err := c.forgetVanished(ctx); err != nil {
+	passes(t, c, 1)
+
+	if n := remaining(t, st); n != 1 {
+		t.Fatalf("one absence after it was listed again must not forget it: %d left", n)
+	}
+}
+
+// A pack has a row per episode; one pass used to count its absence once per row.
+func TestAPackCountsOneAbsencePerPass(t *testing.T) {
+	c, st, engine := restartFixture(t, 0)
+	engine.ids[9] = "other"
+	record(t, st, "pack", "Show S01", 1)
+	record(t, st, "pack", "Show S01", 2)
+
+	passes(t, c, 1)
+	if n := remaining(t, st); n != 2 {
+		t.Fatalf("a pack was forgotten in a single pass: %d left", n)
+	}
+}
+
+func TestForgettingWaitsOutTheAge(t *testing.T) {
+	c, st, engine := restartFixture(t, time.Hour)
+	engine.ids[9] = "other"
+	record(t, st, "abc", "Frieren - 05", 0)
+
+	passes(t, c, 3)
+	if n := remaining(t, st); n != 1 {
+		t.Fatalf("forgotten before it had been gone long: %d left", n)
+	}
+}
+
+// The engine losing a kept download says nothing about the file: while it is
+// still on disk, it stays listed.
+func TestAKeptDownloadStillOnDiskStays(t *testing.T) {
+	c, st, engine := restartFixture(t, 0)
+	engine.ids[9] = "other"
+	record(t, st, "abc", "Frieren - 05.mkv", 0)
+	if _, err := st.KeepDownload(context.Background(), "abc", true); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(c.dir, "Frieren - 05.mkv")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := st.CacheEntries(ctx)
-	if err != nil {
+	passes(t, c, 3)
+	if n := remaining(t, st); n != 1 {
+		t.Fatalf("a kept download with its file on disk was forgotten: %d left", n)
+	}
+
+	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("one absence after it was listed again must not forget it: %+v", entries)
+	passes(t, c, 1)
+	if n := remaining(t, st); n != 0 {
+		t.Fatalf("its file is gone too, so it should be: %d left", n)
 	}
 }

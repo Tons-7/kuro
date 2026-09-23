@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ const listingHTML = `<!DOCTYPE html><html><body>
   </td>
   <td class="text-center">
     <a href="/download/1.torrent"><i class="fa"></i></a>
-    <a href="magnet:?xt=urn:btih:ABCDEF0123456789&amp;dn=Frieren&amp;tr=http%3A%2F%2Fx"><i class="fa"></i></a>
+    <a href="magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&amp;dn=Frieren&amp;tr=http%3A%2F%2Fx"><i class="fa"></i></a>
   </td>
   <td class="text-center">1.4 GiB</td>
   <td class="text-center" data-timestamp="1786148760">2026-08-06 17:50</td>
@@ -35,7 +36,7 @@ const listingHTML = `<!DOCTYPE html><html><body>
   <td><a href="/?c=1_2" title="Anime - English-translated"><img src="x.png"></a></td>
   <td colspan="2"><a href="/view/2" title="[Reup] Some Show - 03 [720p].mkv">[Reup] Some Show - 03 [720p].mkv</a></td>
   <td class="text-center">
-    <a href="magnet:?xt=urn:btih:0011223344556677"><i class="fa"></i></a>
+    <a href="magnet:?xt=urn:btih:0011223344556677001122334455667700112233"><i class="fa"></i></a>
   </td>
   <td class="text-center">512.0 MiB</td>
   <td class="text-center" data-timestamp="1786000000">2026-08-05 09:00</td>
@@ -86,7 +87,7 @@ func TestSearchUsesSortedListing(t *testing.T) {
 	if first.Title != "[SubsPlease] Sousou no Frieren - 10 (1080p) [7D35515E].mkv" {
 		t.Errorf("title = %q; the comments anchor should not win", first.Title)
 	}
-	if first.InfoHash != "abcdef0123456789" {
+	if first.InfoHash != "abcdef0123456789abcdef0123456789abcdef01" {
 		t.Errorf("infohash = %q", first.InfoHash)
 	}
 	if first.Size != 1503238553 {
@@ -166,29 +167,27 @@ func TestSearchHTMLHandlesEmptyAndBrokenPages(t *testing.T) {
 		}
 	})
 
-	t.Run("truncated markup", func(t *testing.T) {
+	// Rows present but none readable is a changed layout, which must surface
+	// rather than read as "no release found" for every show.
+	t.Run("unrecognised rows", func(t *testing.T) {
 		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `<table class="torrent-list"><tbody><tr class="x"><td>`)
 		})
-		// html.Parse repairs broken markup rather than failing, so the row is
-		// simply skipped for having too few cells.
-		got, err := n.Search(context.Background(), Query{Text: "x"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(got) != 0 {
-			t.Fatalf("got %d results from a truncated row", len(got))
+		if _, err := n.Search(context.Background(), Query{Text: "x"}); err == nil {
+			t.Fatal("want an error when no row parses")
 		}
 	})
 }
 
 func TestInfoHashFromMagnet(t *testing.T) {
 	tests := map[string]string{
-		"magnet:?xt=urn:btih:ABCDEF&dn=x": "abcdef",
-		"magnet:?dn=x&xt=urn:btih:ABCDEF": "abcdef",
-		"magnet:?xt=urn:btih:abcdef":      "abcdef",
-		"magnet:?dn=nothing":              "",
-		"":                                "",
+		"magnet:?xt=urn:btih:" + strings.Repeat("AB", 20) + "&dn=x": strings.Repeat("ab", 20),
+		"magnet:?dn=x&xt=urn:btih:" + strings.Repeat("AB", 20):      strings.Repeat("ab", 20),
+		"magnet:?xt=urn:btih:abcdef":                                "",
+		"magnet:?xt=urn:btih:" + strings.Repeat("a", 41):            "",
+		"magnet:?xt=urn:btih:" + strings.Repeat("g", 40):            "",
+		"magnet:?dn=nothing":                                        "",
+		"":                                                          "",
 		// TokyoTosho writes base32, which has to come back as hex.
 		"magnet:?xt=urn:btih:OALRUVZ3XR6CGN6JHMX3A7RWFQPA4T35&tr=x": "70171a573bbc7c2337c93b2fb07e362c1e0e4f7d",
 		"magnet:?xt=urn:btih:oalruvz3xr6cgn6jhmx3a7rwfqpa4t35":      "70171a573bbc7c2337c93b2fb07e362c1e0e4f7d",

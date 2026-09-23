@@ -26,7 +26,7 @@ func TestEvictionOrderNeverOffersPinned(t *testing.T) {
 	got := evictionOrder([]store.CacheEntry{
 		entry("pinned", 1<<30, 100, true, false),
 		entry("old", 1<<30, 50, false, false),
-	})
+	}, nil)
 
 	if len(got) != 1 || got[0].InfoHash != "old" {
 		t.Fatalf("order = %+v", got)
@@ -38,7 +38,7 @@ func TestEvictionOrderIsOldestFirst(t *testing.T) {
 		entry("newest", 1<<30, 300, false, false),
 		entry("oldest", 1<<30, 100, false, false),
 		entry("middle", 1<<30, 200, false, false),
-	})
+	}, nil)
 
 	want := []string{"oldest", "middle", "newest"}
 	for i, w := range want {
@@ -54,7 +54,7 @@ func TestProtectedEntriesAreSacrificedLast(t *testing.T) {
 	got := evictionOrder([]store.CacheEntry{
 		entry("watching-old", 1<<30, 10, false, true),
 		entry("finished-new", 1<<30, 900, false, false),
-	})
+	}, nil)
 
 	if len(got) != 2 {
 		t.Fatalf("got %d candidates", len(got))
@@ -68,7 +68,7 @@ func TestProtectedEntriesAreSacrificedLast(t *testing.T) {
 }
 
 func TestEvictionOrderEmptyAndAllPinned(t *testing.T) {
-	if got := evictionOrder(nil); len(got) != 0 {
+	if got := evictionOrder(nil, nil); len(got) != 0 {
 		t.Fatalf("got %d candidates from nothing", len(got))
 	}
 
@@ -76,7 +76,7 @@ func TestEvictionOrderEmptyAndAllPinned(t *testing.T) {
 		entry("a", 1<<30, 1, true, false),
 		entry("b", 1<<30, 2, true, true),
 	}
-	if got := evictionOrder(allPinned); len(got) != 0 {
+	if got := evictionOrder(allPinned, nil); len(got) != 0 {
 		t.Fatalf("got %d candidates when everything is pinned", len(got))
 	}
 }
@@ -89,7 +89,7 @@ func TestPinCoversEverySiblingOfTheSameTorrent(t *testing.T) {
 	idle := entry("batch", 1<<30, 10, false, false)
 	idle.FileIndex = 7
 
-	if got := evictionOrder([]store.CacheEntry{playing, idle}); len(got) != 0 {
+	if got := evictionOrder([]store.CacheEntry{playing, idle}, nil); len(got) != 0 {
 		t.Fatalf("offered %+v from a torrent with a file playing", got)
 	}
 }
@@ -176,9 +176,20 @@ func TestEvictionOrderNeverOffersAnUnfinishedDownload(t *testing.T) {
 	downloading := entry("downloading", 8<<30, 0, false, false)
 	downloading.Complete = false
 
-	got := evictionOrder([]store.CacheEntry{downloading, entry("watched", 1<<30, 500, false, false)})
+	got := evictionOrder([]store.CacheEntry{downloading, entry("watched", 1<<30, 500, false, false)}, nil)
 	if len(got) != 1 || got[0].InfoHash != "watched" {
 		t.Fatalf("order = %+v, want only the finished download", got)
+	}
+}
+
+// A download whose swarm died would hold the budget for good.
+func TestEvictionOrderOffersAStalledDownload(t *testing.T) {
+	stuck := entry("stuck", 8<<30, 0, false, false)
+	stuck.Complete = false
+
+	got := evictionOrder([]store.CacheEntry{stuck}, map[string]bool{"stuck": true})
+	if len(got) != 1 || got[0].InfoHash != "stuck" {
+		t.Fatalf("order = %+v, want the stalled download offered", got)
 	}
 }
 
@@ -188,7 +199,7 @@ func TestEvictionOrderSparesEverySiblingOfAnUnfinishedTorrent(t *testing.T) {
 	second := entry("batch", 4<<30, 20, false, false)
 	second.Complete = false
 
-	if got := evictionOrder([]store.CacheEntry{first, second}); len(got) != 0 {
+	if got := evictionOrder([]store.CacheEntry{first, second}, nil); len(got) != 0 {
 		t.Fatalf("order = %+v, want nothing evictable", got)
 	}
 }
@@ -197,7 +208,7 @@ func TestEvictionOrderNeverOffersKept(t *testing.T) {
 	kept := entry("kept", 1<<30, 10, false, false)
 	kept.Kept = true
 
-	got := evictionOrder([]store.CacheEntry{kept, entry("cached", 1<<30, 500, false, false)})
+	got := evictionOrder([]store.CacheEntry{kept, entry("cached", 1<<30, 500, false, false)}, nil)
 	if len(got) != 1 || got[0].InfoHash != "cached" {
 		t.Fatalf("order = %+v, want only the cached entry", got)
 	}

@@ -26,6 +26,10 @@ func Build(kind, base string, adult bool) (Source, error) {
 		}
 		return NewNyaa(base), nil
 	case KindTokyoTosho:
+		// It would search the general Anime category and find nothing adult.
+		if adult {
+			return nil, fmt.Errorf("indexer %q: adult is only supported for %q sites", kind, KindNyaa)
+		}
 		return NewTokyoTosho(base), nil
 	}
 	return nil, fmt.Errorf("indexer type %q: want %q or %q", kind, KindNyaa, KindTokyoTosho)

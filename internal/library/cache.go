@@ -24,13 +24,66 @@ type Cache struct {
 	dir     string
 	log     *slog.Logger
 
-	// Refreshes in a row the engine has not listed a download.
+	// Downloads the engine has stopped listing, and since when.
 	mu     sync.Mutex
-	absent map[string]int
+	absent map[string]*absence
+	// Unfinished downloads by their bytes, and when those last changed.
+	progress map[string]mark
+
+	sweeping sync.Mutex
+}
+
+type mark struct {
+	bytes int64
+	since time.Time
+}
+
+// A var so tests need not wait.
+var stalledAfter = 12 * time.Hour
+
+// watch notes an unfinished download's progress; stalled reads it back.
+func (c *Cache) watch(hash string, bytes int64, done bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	hash = strings.ToLower(hash)
+	if done {
+		delete(c.progress, hash)
+		return
+	}
+	if m, ok := c.progress[hash]; ok && m.bytes == bytes {
+		return
+	}
+	c.progress[hash] = mark{bytes: bytes, since: time.Now()}
+}
+
+func (c *Cache) stalled() map[string]bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string]bool{}
+	for hash, m := range c.progress {
+		if time.Since(m.since) >= stalledAfter {
+			out[hash] = true
+		}
+	}
+	return out
+}
+
+type absence struct {
+	count int
+	since time.Time
 }
 
 func NewCache(s *store.Store, tc *torrent.Client, dir string, log *slog.Logger) *Cache {
-	return &Cache{store: s, torrent: tc, dir: dir, log: log, absent: map[string]int{}}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return &Cache{store: s, torrent: tc, dir: dir, log: log,
+		absent: map[string]*absence{}, progress: map[string]mark{}}
+}
+
+// owns: kuro only ever deletes what downloads into its own cache directory.
+func (c *Cache) owns(d torrent.Detail) bool {
+	return torrent.Within(c.dir, d.OutputFolder)
 }
 
 type SweepReport struct {
@@ -45,6 +98,9 @@ type SweepReport struct {
 // episodes of shows still in progress. Pinned and kept files are never evicted
 // and kept ones are not in the usage either.
 func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
+	// "Sweep now" and the scheduled one must not double-count an absence.
+	c.sweeping.Lock()
+	defer c.sweeping.Unlock()
 	if err := c.refresh(ctx); err != nil {
 		c.log.Warn("refresh cache sizes", "err", err)
 	}
@@ -66,7 +122,7 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 	}
 
 	gone := map[string]bool{}
-	for _, e := range evictionOrder(usage.Entries) {
+	for _, e := range evictionOrder(usage.Entries, c.stalled()) {
 		if rep.After <= usage.Budget {
 			break
 		}
@@ -94,12 +150,13 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 }
 
 // A pin or a keep covers its whole torrent: eviction deletes every file of it.
-func evictionOrder(entries []store.CacheEntry) []store.CacheEntry {
+func evictionOrder(entries []store.CacheEntry, stalled map[string]bool) []store.CacheEntry {
 	held := map[string]bool{}
 	for _, e := range entries {
 		// Unfinished too: rqbit allocated the whole file at the start, so
-		// deleting one frees nothing and loses every byte transferred.
-		if e.Pinned || e.Kept || !e.Complete {
+		// deleting one frees nothing and loses every byte transferred. A stalled
+		// one goes.
+		if e.Pinned || e.Kept || (!e.Complete && !stalled[strings.ToLower(e.InfoHash)]) {
 			held[e.InfoHash] = true
 		}
 	}
@@ -180,7 +237,7 @@ func (c *Cache) AutoDelete(ctx context.Context, animeID int) (int, error) {
 		if veto[hash] {
 			continue
 		}
-		if err := c.evict(ctx, store.CacheEntry{InfoHash: hash, RqbitID: c.rqbitID(ctx, hash)}); err != nil {
+		if err := c.evict(ctx, store.CacheEntry{InfoHash: hash}); err != nil {
 			c.log.Warn("auto-delete watched", "hash", hash, "err", err)
 			continue
 		}
@@ -256,30 +313,32 @@ func (c *Cache) Remove(ctx context.Context, infoHash string) (int64, error) {
 	if !found {
 		// Known to the engine but never tracked, which adoption normally fixes.
 		if id, ok := c.liveID(ctx, infoHash); ok {
+			d, err := c.torrent.Details(ctx, id)
+			if err != nil {
+				return 0, err
+			}
+			if !c.owns(d) {
+				return 0, fmt.Errorf("that download is not in kuro's cache folder")
+			}
 			return 0, c.torrent.Delete(ctx, id)
 		}
 		return 0, fmt.Errorf("no download for %s", infoHash)
 	}
 
-	return freed, c.evict(ctx, store.CacheEntry{
-		InfoHash: infoHash,
-		RqbitID:  c.rqbitID(ctx, infoHash),
-	})
+	return freed, c.evict(ctx, store.CacheEntry{InfoHash: infoHash})
 }
 
-// Clear removes every download that is not playing. completedOnly keeps the
-// ones still fetching.
+// Clear removes downloads neither playing nor kept; completedOnly spares unfinished ones.
 func (c *Cache) Clear(ctx context.Context, completedOnly bool) (int, int64, error) {
 	entries, err := c.store.CacheEntries(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	// Evicting deletes the whole torrent, so one pinned file protects every
-	// other file sharing its hash.
+	// Eviction takes the whole torrent: one protected file protects all of it.
 	held := map[string]bool{}
 	for _, e := range entries {
-		if e.Pinned {
+		if e.Pinned || e.Kept || (completedOnly && !e.Complete) {
 			held[strings.ToLower(e.InfoHash)] = true
 		}
 	}
@@ -291,9 +350,6 @@ func (c *Cache) Clear(ctx context.Context, completedOnly bool) (int, int64, erro
 	for _, e := range entries {
 		hash := strings.ToLower(e.InfoHash)
 		if held[hash] || done[hash] {
-			continue
-		}
-		if completedOnly && !e.Complete {
 			continue
 		}
 		if err := c.evict(ctx, e); err != nil {
@@ -321,13 +377,6 @@ func (c *Cache) liveID(ctx context.Context, infoHash string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-func (c *Cache) rqbitID(ctx context.Context, infoHash string) *int {
-	if id, ok := c.liveID(ctx, infoHash); ok {
-		return &id
-	}
-	return nil
 }
 
 // Progress is what has been fetched, not what the file costs on disk: rqbit
@@ -460,12 +509,20 @@ func (c *Cache) Progress(ctx context.Context) (map[string]Progress, error) {
 // "not yet", not "gone".
 const forgetAfter = 2
 
-// missing counts consecutive refreshes without this download in the listing.
-func (c *Cache) missing(hash string) int {
+// A var so tests need not wait.
+var forgetAge = 10 * time.Minute
+
+// missing counts one more absence; true once gone long enough to forget.
+func (c *Cache) missing(hash string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.absent[hash]++
-	return c.absent[hash]
+	a := c.absent[hash]
+	if a == nil {
+		a = &absence{since: time.Now()}
+		c.absent[hash] = a
+	}
+	a.count++
+	return a.count >= forgetAfter && time.Since(a.since) >= forgetAge
 }
 
 func (c *Cache) present(hashes map[string]struct{}) {
@@ -494,37 +551,70 @@ func (c *Cache) forgetVanished(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Nothing listed while downloads are on record is an engine still loading.
+	if len(held) == 0 {
+		return nil
+	}
 
-	dropped := map[string]bool{}
+	// Per torrent, not per row: a pack has a row for each episode.
+	gone := map[string][]store.CacheEntry{}
 	for _, e := range entries {
 		hash := strings.ToLower(e.InfoHash)
-		if _, ok := held[hash]; ok || dropped[hash] {
+		if _, ok := held[hash]; !ok {
+			gone[hash] = append(gone[hash], e)
+		}
+	}
+
+	var dropped int
+	for hash, rows := range gone {
+		if !c.missing(hash) || c.keptOnDisk(rows) {
 			continue
 		}
 		// Forgetting cascades the episode's link to the file away.
-		if c.missing(hash) < forgetAfter {
-			continue
-		}
-		if err := c.store.DropTorrentCache(ctx, e.InfoHash); err != nil {
+		if err := c.store.DropTorrentCache(ctx, rows[0].InfoHash); err != nil {
 			return err
 		}
-		dropped[hash] = true
+		dropped++
 	}
-	if len(dropped) > 0 {
-		c.log.Info("forgot downloads the engine no longer holds", "count", len(dropped))
+	if dropped > 0 {
+		c.log.Info("forgot downloads the engine no longer holds", "count", dropped)
 	}
 	return nil
 }
 
+// keptOnDisk: a kept download still on disk stays on record.
+func (c *Cache) keptOnDisk(rows []store.CacheEntry) bool {
+	for _, e := range rows {
+		if e.Kept && e.Name != "" {
+			if _, err := os.Stat(filepath.Join(c.dir, e.Name)); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// evict looks the id up by hash: a stored one can name another torrent by now.
 func (c *Cache) evict(ctx context.Context, e store.CacheEntry) error {
-	if c.torrent != nil && e.RqbitID != nil {
-		// Delete removes the data; forgetting would leave the files behind.
+	if c.torrent != nil {
 		// With no engine to delete through, the record has to stay too.
-		if err := c.torrent.Delete(ctx, *e.RqbitID); err != nil {
-			if errors.Is(err, torrent.ErrUnavailable) {
+		live, err := c.torrent.Live(ctx)
+		if err != nil {
+			return err
+		}
+		if id, ok := live[strings.ToLower(e.InfoHash)]; ok {
+			d, err := c.torrent.Details(ctx, id)
+			if err != nil {
 				return err
 			}
-			c.log.Warn("delete torrent", "id", *e.RqbitID, "err", err)
+			if !c.owns(d) {
+				c.log.Warn("not deleting a download outside the cache folder", "hash", e.InfoHash, "folder", d.OutputFolder)
+			} else if err := c.torrent.Delete(ctx, id); err != nil {
+				if errors.Is(err, torrent.ErrUnavailable) {
+					return err
+				}
+				c.log.Warn("delete torrent", "id", id, "err", err)
+			}
 		}
 	}
 	return c.store.DropTorrentCache(ctx, e.InfoHash)
@@ -547,6 +637,10 @@ func (c *Cache) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	live, err := c.torrent.Live(ctx)
+	if err != nil {
+		return err
+	}
 
 	// Entries are per file, so a season pack would otherwise ask the engine for
 	// the same torrent once per episode, twice over.
@@ -554,10 +648,10 @@ func (c *Cache) refresh(ctx context.Context) error {
 	seenDetail := map[int]torrent.Detail{}
 
 	for _, e := range entries {
-		if e.RqbitID == nil {
+		id, ok := live[strings.ToLower(e.InfoHash)]
+		if !ok {
 			continue
 		}
-		id := *e.RqbitID
 		stats, known := seenStats[id]
 		if !known {
 			s, err := c.torrent.Stats(ctx, id)
@@ -572,17 +666,19 @@ func (c *Cache) refresh(ctx context.Context) error {
 			d, err := c.torrent.Details(ctx, id)
 			if err != nil {
 				c.log.Warn("measure download", "id", id, "err", err)
+				continue
 			}
 			detail, seenDetail[id] = d, d
 		}
 
-		bytes := stats.ProgressBytes
-		if held := heldBytes(detail, e.FileIndex); held > bytes {
-			bytes = held
+		// A pack's file is charged and finished on its own.
+		bytes, done := heldBytes(detail, e.FileIndex), stats.FileDone(detail, e.FileIndex)
+		if e.FileIndex == store.WholeTorrent {
+			bytes, done = max(bytes, stats.ProgressBytes), stats.Finished
 		}
+		c.watch(e.InfoHash, stats.ProgressBytes, stats.Finished)
 
-		if err := c.store.SetCacheBytes(ctx, e.InfoHash, e.FileIndex,
-			bytes, stats.Finished); err != nil {
+		if err := c.store.SetCacheBytes(ctx, e.InfoHash, e.FileIndex, bytes, done); err != nil {
 			return err
 		}
 	}
@@ -640,6 +736,10 @@ func (c *Cache) adopt(ctx context.Context) error {
 		if _, ok := tracked[hash]; ok {
 			continue
 		}
+		// Another install's or program's download would be swept as ours.
+		if d, err := c.torrent.Details(ctx, t.ID); err != nil || !c.owns(d) {
+			continue
+		}
 		if err := c.store.TrackTorrent(ctx, hash, t.ID, t.Name); err != nil {
 			c.log.Warn("track torrent", "hash", hash, "err", err)
 			continue
@@ -652,56 +752,102 @@ func (c *Cache) adopt(ctx context.Context) error {
 	return nil
 }
 
-// Not downloads: transcode output, scrub sheets and a staged update all live
-// in the cache directory too.
-var ours = map[string]bool{"hls": true, "thumbs": true, "update": true}
+// SessionDirName is rqbit's torrent list, kept beside the downloads it names.
+const SessionDirName = "rqbit-session"
 
-// Orphans are cache-directory files belonging to no torrent the engine knows
-// about; nothing else deletes them and they escape the budget.
-func (c *Cache) Orphans(ctx context.Context) (files int, bytes int64, err error) {
-	dir := c.dir
-	live, err := c.torrent.List(ctx)
+// Not downloads: transcode output, scrub sheets, a staged update and the
+// engine's session all live in the cache directory too.
+var ours = map[string]bool{"hls": true, "thumbs": true, "update": true, SessionDirName: true}
+
+type Orphan struct {
+	Name  string `json:"name"`
+	Bytes int64  `json:"bytes"`
+}
+
+// ErrEngineLoading: mid-reload, live downloads would look orphaned.
+var ErrEngineLoading = errors.New("the torrent engine is still loading its downloads; try again in a minute")
+
+// A var so tests need not wait.
+var orphanSettle = 3 * time.Second
+
+// Orphans are cache entries no download claims: listed on dryRun, else deleted.
+func (c *Cache) Orphans(ctx context.Context, dryRun bool) ([]Orphan, error) {
+	first, err := c.torrent.List(ctx)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
-
-	keep := map[string]struct{}{}
-	for _, t := range live.Torrents {
-		if t.Name != "" {
-			keep[strings.ToLower(t.Name)] = struct{}{}
+	known, err := c.store.TorrentNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(first.Torrents) == 0 && len(known) > 0 {
+		return nil, ErrEngineLoading
+	}
+	if !dryRun {
+		// Two listings that agree: rqbit answers before it has reloaded everything.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(orphanSettle):
+		}
+		second, err := c.torrent.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(second.Torrents) != len(first.Torrents) {
+			return nil, ErrEngineLoading
 		}
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, 0, err
+	keep := map[string]bool{}
+	for _, name := range known {
+		keep[strings.ToLower(name)] = true
+	}
+	for _, t := range first.Torrents {
+		keep[strings.ToLower(t.Name)] = true
+		// On disk: its folder, or each file when written straight into the cache.
+		d, err := c.torrent.Details(ctx, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		if rel, err := filepath.Rel(c.dir, d.OutputFolder); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			keep[strings.ToLower(strings.Split(filepath.ToSlash(rel), "/")[0])] = true
+			continue
+		}
+		for _, f := range d.Files {
+			if len(f.Components) > 0 {
+				keep[strings.ToLower(f.Components[0])] = true
+			}
+			keep[strings.ToLower(f.Name)] = true
+		}
 	}
 
+	entries, err := os.ReadDir(c.dir)
+	if err != nil {
+		return nil, err
+	}
+
+	out := []Orphan{}
 	for _, e := range entries {
 		name := e.Name()
-		// The cache directory is shared: these belong to other parts of the app
-		// and each has its own lifecycle.
-		if ours[name] || strings.HasPrefix(name, "chapters-") {
+		if ours[name] || strings.HasPrefix(name, "chapters-") || keep[strings.ToLower(name)] {
 			continue
 		}
-		if _, wanted := keep[strings.ToLower(name)]; wanted {
-			continue
+		path := filepath.Join(c.dir, name)
+		o := Orphan{Name: name, Bytes: dirSize(path)}
+		if !dryRun {
+			if err := os.RemoveAll(path); err != nil {
+				c.log.Warn("remove orphaned download", "path", name, "err", err)
+				continue
+			}
 		}
-
-		path := filepath.Join(dir, name)
-		size := dirSize(path)
-		if err := os.RemoveAll(path); err != nil {
-			c.log.Warn("remove orphaned download", "path", name, "err", err)
-			continue
-		}
-		files++
-		bytes += size
+		out = append(out, o)
 	}
 
-	if files > 0 {
-		c.log.Info("removed orphaned downloads", "files", files, "freedMB", bytes>>20)
+	if !dryRun && len(out) > 0 {
+		c.log.Info("removed orphaned downloads", "files", len(out))
 	}
-	return files, bytes, nil
+	return out, nil
 }
 
 func dirSize(path string) int64 {
@@ -724,22 +870,4 @@ func dirSize(path string) int64 {
 		return nil
 	})
 	return total
-}
-
-// Run sweeps periodically. Downloads grow between plays, so the budget has to
-// be enforced continuously rather than only when playback starts.
-func (c *Cache) Run(ctx context.Context, every time.Duration) {
-	if every <= 0 {
-		every = 2 * time.Minute
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(every):
-		}
-		if _, err := c.Sweep(ctx); err != nil {
-			c.log.Warn("cache sweep", "err", err)
-		}
-	}
 }

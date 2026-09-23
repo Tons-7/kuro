@@ -31,6 +31,11 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	num := func(key string) int { n, _ := strconv.Atoi(q.Get(key)); return n }
 
+	if studio := num("studio"); studio > 0 {
+		s.browseStudio(w, r, studio)
+		return
+	}
+
 	result, err := s.anilist.BrowseMedia(r.Context(), anilist.Browse{
 		Search:        q.Get("q"),
 		Genres:        csv(q.Get("genres")),
@@ -63,9 +68,93 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// browseStudio lists a studio's works. AniList cannot filter the media query
+// by studio, so format, status and genre narrow each page here instead.
+func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	perPage, _ := strconv.Atoi(q.Get("perPage"))
+	name, result, err := s.anilist.StudioMedia(r.Context(), studio, q.Get("sort"), page, perPage)
+	if err != nil {
+		s.fail(w, "studio", err)
+		return
+	}
+
+	formats, statuses, genres := csv(q.Get("formats")), csv(q.Get("statuses")), csv(q.Get("genres"))
+	kept := result.Media[:0]
+	for _, m := range result.Media {
+		if len(formats) > 0 && !containsFold(formats, deref(m.Format)) {
+			continue
+		}
+		if len(statuses) > 0 && !containsFold(statuses, deref(m.Status)) {
+			continue
+		}
+		if !hasAll(m.Genres, genres) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+
+	send(w, http.StatusOK, map[string]any{
+		"items":   s.decorate(r, kept),
+		"page":    max(page, 1),
+		"hasMore": result.HasNextPage,
+		"total":   result.Total,
+		"studio":  map[string]any{"id": studio, "name": name},
+	})
+}
+
+// studios answers the browse filter's studio search.
+func (s *Server) studios(w http.ResponseWriter, r *http.Request) {
+	search := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(search) < 2 {
+		send(w, http.StatusOK, map[string]any{"studios": []anilist.Studio{}})
+		return
+	}
+	found, err := s.anilist.SearchStudios(r.Context(), search)
+	if err != nil {
+		s.fail(w, "studios", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"studios": found})
+}
+
+func containsFold(list []string, v string) bool {
+	for _, x := range list {
+		if strings.EqualFold(x, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func hasAll(have, want []string) bool {
+	for _, w := range want {
+		if !containsFold(have, w) {
+			return false
+		}
+	}
+	return true
+}
+
+// remember keeps whatever AniList returned, so every show seen is saved.
+func (s *Server) remember(r *http.Request, media []anilist.Media) {
+	if s.importer != nil {
+		s.importer.Remember(r.Context(), media)
+	}
+}
+
 // decorate turns AniList media into cards: resolved title plus whether it is
 // already on the user's list, which every grid in the UI needs.
 func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem {
+	s.remember(r, media)
 	onList, err := s.store.ListEntries(r.Context())
 	if err != nil {
 		s.log.Warn("list entries", "err", err)
@@ -91,6 +180,10 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 			Score:       m.AverageScore,
 			Popularity:  m.Popularity,
 			Genres:      m.Genres,
+			MalID:       m.IDMal,
+			StartDate:   isoDate(m.StartDate),
+			EndDate:     isoDate(m.EndDate),
+			Duration:    m.Duration,
 			Description: m.Description,
 			OnList:      listed,
 			Progress:    entry.Progress,
@@ -101,6 +194,12 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 		}
 		if m.Title.Romaji != nil {
 			it.Romaji = *m.Title.Romaji
+		}
+		if m.NextAiring != nil {
+			it.NextEpisode, it.NextAiringAt = m.NextAiring.Episode, int64(m.NextAiring.AiringAt)
+		}
+		for _, n := range m.Studios.Nodes {
+			it.Studios = append(it.Studios, anilist.Studio{ID: n.ID, Name: n.Name})
 		}
 		it.Title = store.PickTitle(titles, it.Romaji, it.English)
 		items = append(items, it)
@@ -178,9 +277,12 @@ func (s *Server) filters(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			genres, tags = fresh, freshTags
-			s.vocab.mu.Lock()
-			s.vocab.genres, s.vocab.tags, s.vocab.fetched = fresh, freshTags, time.Now()
-			s.vocab.mu.Unlock()
+			// A saved answer is shown but not held for a day as if fetched.
+			if !anilist.UsedSaved(r.Context()) {
+				s.vocab.mu.Lock()
+				s.vocab.genres, s.vocab.tags, s.vocab.fetched = fresh, freshTags, time.Now()
+				s.vocab.mu.Unlock()
+			}
 		}
 	}
 

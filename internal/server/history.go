@@ -2,14 +2,13 @@ package server
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"kuro/internal/store"
 )
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	page, err := s.store.History(r.Context(), paging(r))
+	page, err := s.store.History(r.Context(), store.ParsePaging(r.URL.Query(), 40, 200))
 	if err != nil {
 		s.fail(w, "history", err)
 		return
@@ -36,7 +35,7 @@ func (s *Server) forgetHistory(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if !body.All && body.AnimeID <= 0 {
+	if !body.All && body.AnimeID == 0 {
 		send(w, http.StatusBadRequest, map[string]any{
 			"error": "animeId is required unless clearing everything",
 		})
@@ -57,10 +56,4 @@ func (s *Server) forgetHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, http.StatusOK, map[string]any{"removed": removed})
-}
-
-func paging(r *http.Request) store.Paging {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	perPage, _ := strconv.Atoi(r.URL.Query().Get("perPage"))
-	return store.Paging{Page: page, PerPage: perPage}
 }

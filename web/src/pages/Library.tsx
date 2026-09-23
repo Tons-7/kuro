@@ -38,7 +38,8 @@ export function Library() {
     const next = new URLSearchParams(params)
     if (q) next.set('q', q)
     else next.delete('q')
-    next.delete('page')
+    // Only a changed search resets the page; mounting (Back from a show) must not.
+    if ((params.get('q') ?? '') !== q) next.delete('page')
     if (next.toString() !== params.toString()) setParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q])
@@ -66,6 +67,8 @@ export function Library() {
     const next = new URLSearchParams(params)
     next.set('page', String(n))
     setParams(next)
+    // The pager sits under the grid; the next page starts at the top.
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   return (

@@ -30,6 +30,19 @@ func newScanner(t *testing.T) (*Scanner, *store.Store) {
 	return NewScanner(st, slog.New(slog.NewTextHandler(io.Discard, nil))), st
 }
 
+// Confidence 1 means assigned by hand and is never changed by a rescan; the raw
+// match score (6 and up) stored as confidence froze every guess that way.
+func TestScanConfidenceStaysBelowAHandAssignment(t *testing.T) {
+	for _, score := range []float64{6, 16, 30, 200} {
+		if c := scanConfidence(score); c >= 1 || c <= 0 {
+			t.Errorf("score %v stored as %v", score, c)
+		}
+	}
+	if scanConfidence(30) <= scanConfidence(6) {
+		t.Error("a better match must still rank above a weaker one")
+	}
+}
+
 // write creates a file large enough to count as an episode.
 func write(t *testing.T, path string, size int) {
 	t.Helper()

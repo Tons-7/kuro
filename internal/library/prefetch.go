@@ -41,6 +41,23 @@ type Prefetcher struct {
 	// Releases resolved ahead of play, in memory only: play uses one to skip the
 	// indexer search, and nothing touches the engine until then.
 	prepared map[string]preparedRelease
+	// Torrents this process started or resumed, which the startup quiet leaves be.
+	claimed map[string]bool
+}
+
+func (p *Prefetcher) claim(hash string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.claimed == nil {
+		p.claimed = map[string]bool{}
+	}
+	p.claimed[strings.ToLower(hash)] = true
+}
+
+func (p *Prefetcher) Claimed(hash string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.claimed[strings.ToLower(hash)]
 }
 
 // Resolved as an episode starts, taken when it ends, so it must outlast one.
@@ -311,10 +328,17 @@ func (p *Prefetcher) Download(ctx context.Context, animeID, episode, season int,
 		if _, err := p.store.KeepDownload(ctx, rec.InfoHash, true); err != nil {
 			return err
 		}
-		if id, ok := p.resume(ctx, animeID, episode); ok {
+		id, running, err := p.resume(ctx, rec)
+		switch {
+		case errors.Is(err, errNotInEngine):
+			// Recorded, but the engine lost it: fetched again below.
+		case err != nil:
+			return err
+		case !running:
+			return nil
+		default:
 			return p.awaitOrStop(ctx, id, stall)
 		}
-		return nil
 	}
 
 	id, started, err := p.fetch(ctx, animeID, episode, season, prefs, true)
@@ -336,27 +360,46 @@ func (p *Prefetcher) awaitOrStop(ctx context.Context, id int, stall time.Duratio
 	return err
 }
 
-// resume restarts a part-downloaded episode, reporting whether there was one.
-func (p *Prefetcher) resume(ctx context.Context, animeID, episode int) (int, bool) {
-	t, ok, err := p.store.TorrentForEpisode(ctx, animeID, epKey(episode))
-	if err != nil || !ok {
-		return 0, false
+var errNotInEngine = errors.New("not held by the engine")
+
+// resume restarts a held, unfinished episode, by hash: ids change across restarts.
+func (p *Prefetcher) resume(ctx context.Context, rec store.TorrentRecord) (id int, running bool, err error) {
+	live, err := p.torrent.Live(ctx)
+	if err != nil {
+		return 0, false, err
 	}
-	// rqbit numbers torrents from zero and renumbers them across restarts, so
-	// a recorded id on its own could name a different download entirely.
-	details, err := p.torrent.Details(ctx, t.RqbitID)
-	if err != nil || !strings.EqualFold(details.InfoHash, t.InfoHash) {
-		return 0, false
+	id, ok := live[strings.ToLower(rec.InfoHash)]
+	if !ok {
+		return 0, false, errNotInEngine
 	}
-	if stats, err := p.torrent.Stats(ctx, t.RqbitID); err != nil || stats.Finished {
-		return 0, false
+	stats, err := p.torrent.Stats(ctx, id)
+	if err != nil {
+		return 0, false, err
+	}
+	if stats.Finished {
+		return id, false, nil
 	}
 
-	if err := p.torrent.Start(ctx, t.RqbitID); err != nil {
-		p.log.Debug("resume part-downloaded episode", "torrent", t.RqbitID, "err", err)
+	p.claim(rec.InfoHash)
+	if err := p.torrent.Start(ctx, id); err != nil {
+		p.log.Debug("resume part-downloaded episode", "torrent", id, "err", err)
 	}
-	p.log.Info("resuming part-downloaded episode", "anime", animeID, "episode", episode)
-	return t.RqbitID, true
+	p.log.Info("resuming part-downloaded episode", "anime", rec.AnimeID, "episode", rec.EpKey)
+	return id, true, nil
+}
+
+// inEngine: recorded and still held. Unanswered counts as held, not a refetch.
+func (p *Prefetcher) inEngine(ctx context.Context, animeID, episode int) bool {
+	rec, ok := p.held(ctx, animeID, episode)
+	if !ok {
+		return false
+	}
+	live, err := p.torrent.Live(ctx)
+	if err != nil {
+		return true
+	}
+	_, ok = live[strings.ToLower(rec.InfoHash)]
+	return ok
 }
 
 // Dead swarms cost the inspect timeout each; three is enough to get past them.
@@ -366,7 +409,7 @@ const fetchAttempts = 3
 // numbers from zero, so the id alone cannot say. keep puts the episode in the
 // kept tier, which the cache budget does not apply to.
 func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, prefs score.Preferences, keep bool) (int, bool, error) {
-	if _, ok := p.held(ctx, animeID, episode); ok {
+	if p.inEngine(ctx, animeID, episode) {
 		return 0, false, nil
 	}
 
@@ -441,10 +484,16 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 	if added == nil {
 		return 0, false, lastErr
 	}
-	if err := p.torrent.WaitLive(ctx, added.ID, 2*time.Minute); err != nil {
-		return 0, false, err
+	p.claim(best.Torrent.InfoHash)
+	err = p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
+	if err == nil {
+		err = p.torrent.Prewarm(ctx, added.ID, index, 2<<20)
 	}
-	if err := p.torrent.Prewarm(ctx, added.ID, index, 2<<20); err != nil {
+	if err != nil {
+		// Cancelled or dead half way: stopped, not left fetching unrecorded.
+		if perr := p.torrent.Pause(context.WithoutCancel(ctx), added.ID); perr != nil {
+			p.log.Warn("stop abandoned download", "torrent", added.ID, "err", perr)
+		}
 		return 0, false, err
 	}
 

@@ -558,13 +558,13 @@ func (s *Store) EpisodesStale(ctx context.Context, animeID int, maxAge time.Dura
 		animeID, animeID, animeID, animeID).Scan(&stored, &incomplete, &status, &expected); err != nil {
 		return true
 	}
-	if stored == 0 {
-		return true
-	}
-
-	airing := status == "RELEASING" || status == "NOT_YET_RELEASED"
-	if incomplete == 0 && stored >= expected && !airing {
-		return false
+	// Nothing stored may be all there is; the fetch marker still counts, or an
+	// uncovered show waits on the source every time its page opens.
+	if stored > 0 {
+		airing := status == "RELEASING" || status == "NOT_YET_RELEASED"
+		if incomplete == 0 && stored >= expected && !airing {
+			return false
+		}
 	}
 	if maxAge <= 0 {
 		return true
@@ -693,16 +693,38 @@ func episodesKey(animeID int) string {
 // FlagsFetched records the attempt, not the result. A show with no filler and
 // no recaps returns nothing to store, and inferring "not fetched" from an
 // absence of rows restarts the crawl on every page load.
+// flagsRetry is how long a provisional answer stands: an airing show, or one
+// the source did not list yet, gains flagged episodes later.
+const flagsRetry = 7 * 24 * time.Hour
+
 func (s *Store) FlagsFetched(ctx context.Context, malID int) bool {
 	if malID == 0 {
 		return true
 	}
-	at, err := s.SourceRefreshedAt(ctx, flagsKey(malID))
-	return err == nil && !at.IsZero()
+	var at int64
+	var final int
+	if err := s.r.QueryRowContext(ctx,
+		`SELECT refreshed_at, records FROM corpus_source WHERE name = ?`,
+		flagsKey(malID)).Scan(&at, &final); err != nil {
+		return false
+	}
+	return final > 0 || time.Since(time.Unix(at, 0)) < flagsRetry
 }
 
-func (s *Store) MarkFlagsFetched(ctx context.Context, malID int) error {
-	return s.MarkSource(ctx, flagsKey(malID), 1)
+// MarkFlagsFetched records a crawl; final ones are never repeated.
+func (s *Store) MarkFlagsFetched(ctx context.Context, malID int, final bool) error {
+	records := 0
+	if final {
+		records = 1
+	}
+	return s.MarkSource(ctx, flagsKey(malID), records)
+}
+
+// Finished reports whether a show has stopped airing.
+func (s *Store) Finished(ctx context.Context, animeID int) bool {
+	var status string
+	s.r.QueryRowContext(ctx, `SELECT coalesce(status, '') FROM anime WHERE id = ?`, animeID).Scan(&status)
+	return status == "FINISHED"
 }
 
 func flagsKey(malID int) string {

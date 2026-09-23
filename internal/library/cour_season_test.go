@@ -27,6 +27,26 @@ var broadcastForm = []struct {
 	{"[AnoZu] Bleach S17E43 1080p CR WEB-DL AAC 2.0 H.264", false},
 }
 
+// A pack stating no range could hold any episode; the watcher used to take it
+// as proof the next one was out and announce it.
+func TestUnnumberedPackConfirmsNothing(t *testing.T) {
+	st := bleachStore(t)
+	ctx := context.Background()
+	f := NewFinder(st, fixedIndexer{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	titles, _ := st.SearchTitles(ctx, tybwCalamity)
+	english, _ := st.EnglishTitle(ctx, tybwCalamity)
+	req := f.numbering(ctx, Request{AnimeID: tybwCalamity, Episode: 2}, titles, english)
+
+	pack := parse.Parse("[ASW] Bleach - Sennen Kessen-hen [1080p HEVC x265 10Bit][AAC] (Batch)")
+	if confirms(pack, req) {
+		t.Error("a pack stating no range confirmed episode 2")
+	}
+	ranged := parse.Parse("[ASW] Bleach - Sennen Kessen-hen - Kashin-tan (01-13) [1080p] [Batch]")
+	if !confirms(ranged, req) {
+		t.Error("a pack whose stated range holds episode 2 should confirm it")
+	}
+}
+
 func TestBroadcastSeasonReleasesReachALaterCour(t *testing.T) {
 	st := bleachStore(t)
 	ctx := context.Background()

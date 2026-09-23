@@ -51,6 +51,16 @@ func (c *Client) setBase(base string) {
 	c.mu.Unlock()
 }
 
+// Addr is the engine's host:port as currently used, after any port fallback.
+func (c *Client) Addr() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if u, err := url.Parse(c.base); err == nil {
+		return u.Host
+	}
+	return ""
+}
+
 func (c *Client) url(path string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -107,7 +117,9 @@ type Stats struct {
 	ProgressBytes int64  `json:"progress_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	Finished      bool   `json:"finished"`
-	Live          *struct {
+	// Per file, in the order of Detail.Files.
+	FileProgress []int64 `json:"file_progress"`
+	Live         *struct {
 		DownloadSpeed struct {
 			Mbps float64 `json:"mbps"`
 		} `json:"download_speed"`
@@ -126,6 +138,14 @@ func (s Stats) Peers() int {
 		return 0
 	}
 	return s.Live.Snapshot.PeerStats.Live
+}
+
+// FileDone falls back to the torrent's state without per-file progress.
+func (s Stats) FileDone(d Detail, i int) bool {
+	if i < 0 || i >= len(d.Files) || i >= len(s.FileProgress) {
+		return s.Finished
+	}
+	return d.Files[i].Length > 0 && s.FileProgress[i] >= d.Files[i].Length
 }
 
 func (s Stats) Percent() float64 {
@@ -318,7 +338,21 @@ func (c *Client) readRange(ctx context.Context, stream, spec string, window int6
 		return fmt.Errorf("prewarm %s: %w", spec, err)
 	}
 	defer res.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(res.Body, window))
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		return fmt.Errorf("prewarm %s: engine answered %s", spec, res.Status)
+	}
+	// Headers come before any byte; only a full read proves delivery.
+	want := window
+	if res.ContentLength >= 0 && res.ContentLength < want {
+		want = res.ContentLength
+	}
+	n, err := io.Copy(io.Discard, io.LimitReader(res.Body, window))
+	if err != nil {
+		return fmt.Errorf("prewarm %s: %w", spec, err)
+	}
+	if n < want {
+		return fmt.Errorf("prewarm %s: got %d of %d bytes", spec, n, want)
+	}
 	return nil
 }
 
@@ -406,10 +440,10 @@ func (s Stats) Checking() bool { return s.State == "initializing" && !s.Finished
 // PauseUnfinished stops every part-downloaded torrent at startup: rqbit resumes
 // its whole session on launch, so without this the queue downloads all at once.
 // keep exempts a torrent; ones still checking are counted for a later pass.
-func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string) bool) (paused, kept, checking int, err error) {
+func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string) bool) (paused, kept int, checking []string, err error) {
 	list, err := c.List(ctx)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	for _, t := range list.Torrents {
@@ -418,7 +452,7 @@ func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string)
 			continue
 		}
 		if stats.Checking() {
-			checking++
+			checking = append(checking, strings.ToLower(t.InfoHash))
 			continue
 		}
 		if keep != nil && keep(strings.ToLower(t.InfoHash)) {

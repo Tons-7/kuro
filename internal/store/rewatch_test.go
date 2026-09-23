@@ -53,11 +53,15 @@ func TestRewatchStartsOver(t *testing.T) {
 		t.Errorf("the first finish date was lost: %q -> %q", completedAt, kept)
 	}
 	var watched int
-	var position float64
-	s.r.QueryRow(`SELECT coalesce(sum(watched),0), coalesce(max(position_s),0) FROM playback WHERE anime_id = 7`).
-		Scan(&watched, &position)
+	var position, played float64
+	s.r.QueryRow(`SELECT coalesce(sum(watched),0), coalesce(max(position_s),0), coalesce(max(played_s),0) FROM playback WHERE anime_id = 7`).
+		Scan(&watched, &position, &played)
 	if watched != 0 || position != 0 {
 		t.Errorf("the first watch's ticks/positions survived: watched=%d position=%v", watched, position)
+	}
+	// Left over, a scrub to the end of the rewatch counted as watching it.
+	if played != 0 {
+		t.Errorf("the first watch's played time survived: %v", played)
 	}
 	// Nothing part way, so "continue" is episode 1, not a leftover position.
 	if _, ok, _ := s.LastInProgress(ctx, 7); ok {

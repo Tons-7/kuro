@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"kuro/internal/library"
 )
 
 type trackerStatus struct {
@@ -13,9 +15,11 @@ type trackerStatus struct {
 	HasSecret  bool   `json:"hasSecret"`
 	Configured bool   `json:"configured"`
 	Connected  bool   `json:"connected"`
-	User       string `json:"user,omitempty"`
-	Redirect   string `json:"redirect"`
-	Register   string `json:"register"`
+	// The token is stored but the tracker refused it: expired or revoked.
+	Reconnect bool   `json:"reconnect"`
+	User      string `json:"user,omitempty"`
+	Redirect  string `json:"redirect"`
+	Register  string `json:"register"`
 	// False for MyAnimeList: its public clients authenticate with PKCE alone.
 	SecretRequired bool `json:"secretRequired"`
 }
@@ -26,6 +30,7 @@ func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
 	anilistID, anilistSecret := s.anilistCreds(ctx)
 	anilistUser, _ := s.store.Setting(ctx, "anilist.user_name")
 	anilistToken, _ := s.store.Setting(ctx, "anilist.token")
+	authError, _ := s.store.Setting(ctx, library.AuthErrorSetting)
 
 	list := []trackerStatus{{
 		Provider:       "anilist",
@@ -34,6 +39,7 @@ func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
 		HasSecret:      anilistSecret != "",
 		Configured:     anilistID != "",
 		Connected:      anilistToken != "",
+		Reconnect:      anilistToken != "" && authError != "",
 		User:           anilistUser,
 		Redirect:       s.cfg.RedirectURI(),
 		Register:       "https://anilist.co/settings/developer",

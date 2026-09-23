@@ -284,6 +284,9 @@ func underTemp(dir string) bool {
 
 // os.UserConfigDir resolves to Roaming on Windows, where a live WAL database
 // would be synced across machines. Local is the correct home for it.
+// DefaultDataDir is where the data lives when data_dir is empty.
+func DefaultDataDir() string { return dataDir() }
+
 func dataDir() string {
 	if d := os.Getenv("LOCALAPPDATA"); d != "" {
 		return filepath.Join(d, "kuro")

@@ -150,10 +150,11 @@ const entryUpdateSet = `
 // aborts the whole sync. Reconciling on anime_id too lets the local row adopt
 // the real id instead. The merge guard skips a row with an unpushed edit,
 // which under an upsert is a no-op rather than the failing insert it replaces.
+// It also skips a remote row older than our last push's, which would undo it.
 func buildUpsertEntry(guard bool) string {
 	where := ""
 	if guard {
-		where = " WHERE list_entry.dirty = 0"
+		where = " WHERE list_entry.dirty = 0 AND excluded.remote_updated_at >= list_entry.remote_updated_at"
 	}
 	return `
 INSERT INTO list_entry (
@@ -331,9 +332,13 @@ LIMIT ?3 OFFSET ?4`
 // Continue watching: episodes started but not finished, most recent first. The
 // filter lives inside the window so the row shows the episode that qualified the
 // show. "Not finished" is position vs threshold (same rule as ResumeAt); the 15s
-// floor matches resumable() so the rail and the resume prompt agree.
+// floor matches resumable() so the rail and the resume prompt agree. The
+// threshold is the show's own where it has one, as ResumeAt's is.
 const inProgress = `dismissed = 0 AND position_s >= 15
-      AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * ?1)
+      AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * coalesce(
+          (SELECT CAST(value AS REAL) FROM anime_pref
+           WHERE anime_id = playback.anime_id AND key = 'sync.progress_at'
+             AND CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 1), ?1))
       AND NOT (coalesce(duration_s, 0) <= 0 AND watched = 1)`
 
 // Two ways to continue: an episode stopped part way, or the next one of a show

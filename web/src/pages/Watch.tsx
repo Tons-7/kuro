@@ -14,10 +14,10 @@ import { cx } from '../lib/format'
 import { useEpisodes, usePrefs, useSetPref } from '../lib/queries'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
-import { EpisodeList } from '../components/EpisodeList'
+import { EpisodeList, isUnaired } from '../components/EpisodeList'
 import { ReleasePicker } from '../components/ReleasePicker'
 import { StatusMenu } from '../components/StatusMenu'
-import { Badge, ErrorState, Segmented, Spinner } from '../components/ui'
+import { Badge, Button, ErrorState, Segmented, Spinner, useDocumentTitle } from '../components/ui'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
@@ -35,6 +35,15 @@ export function Watch() {
 
   const effective = prefs.data?.effective ?? {}
   const flag = (key: string) => effective[key] === 'true'
+  const subLanguagesRaw = effective['subtitle.languages']
+  const subLanguages = useMemo(() => {
+    try {
+      const parsed = JSON.parse(subLanguagesRaw || '["en"]')
+      return Array.isArray(parsed) && parsed.length > 0 ? (parsed as string[]) : ['en']
+    } catch {
+      return ['en']
+    }
+  }, [subLanguagesRaw])
   const external = effective['playback.player'] !== 'browser' && !!effective['playback.player']
 
   // Write where the shown value came from, or a per-show override keeps
@@ -47,32 +56,44 @@ export function Watch() {
       animeId: key in overrides ? id : undefined,
     })
 
+  // Per-episode choices carry their episode: reset in an effect, they reached
+  // the next episode's play a render late, hand-picked release and all.
+  const epKey = `${id}-${ep}`
+
   // Waiting for preferences before resolving a release stops the browser
   // player starting a stream that mpv is about to take over.
   // Opting into a raw is per attempt, never remembered: it is a "this episode
   // is not subbed yet" decision, not a preference.
-  const [allowRaw, setAllowRaw] = useState(false)
-  useEffect(() => setAllowRaw(false), [id, ep])
+  const [rawFor, setRawFor] = useState('')
+  const allowRaw = rawFor === epKey
+  const setAllowRaw = (on: boolean) => setRawFor(on ? epKey : '')
 
-  // Sub or dub for this episode only. Null means whatever the setting says;
-  // choosing here must not quietly rewrite that for every other show.
-  const [audio, setAudio] = useState<AudioChoice | null>(null)
-  useEffect(() => setAudio(null), [id, ep])
+  // Sub or dub for this show: saved as its own preference, so the next episode
+  // keeps it without rewriting the setting for every other show. Held here
+  // too, so the switch is instant rather than waiting on the save.
+  const [audioPick, setAudioPick] = useState<{ key: number; audio: AudioChoice } | null>(null)
+  const audio = audioPick?.key === id ? audioPick.audio : null
+  const setAudio = (a: AudioChoice | null) => {
+    setAudioPick(a ? { key: id, audio: a } : null)
+    if (a) setPref.mutate({ key: 'audio.prefer', value: a, animeId: id })
+  }
   const wantAudio: AudioChoice =
     audio ?? ((effective['audio.prefer'] as AudioChoice | undefined) ?? 'sub')
 
   // A release chosen by hand, for this episode only.
-  const [infoHash, setInfoHash] = useState<string | undefined>()
+  const [hashPick, setHashPick] = useState<{ key: string; hash: string } | null>(null)
+  const infoHash = hashPick?.key === epKey ? hashPick.hash : undefined
+  const setInfoHash = (hash?: string) => setHashPick(hash ? { key: epKey, hash } : null)
   const [picking, setPicking] = useState(false)
-  useEffect(() => setInfoHash(undefined), [id, ep])
 
   const play = useQuery({
     enabled: id !== 0 && ep > 0 && prefs.isSuccess,
     queryKey: ['play', id, ep, external, allowRaw, wantAudio, infoHash],
-    queryFn: () =>
+    // Audio only when chosen here, so a held release in the other one is replaced.
+    queryFn: ({ signal }) =>
       api.post<PlaySession>('/api/play', {
-        animeId: id, episode: ep, external, allowRaw, audio: wantAudio, infoHash,
-      }),
+        animeId: id, episode: ep, external, allowRaw, audio: audio ?? undefined, infoHash,
+      }, signal),
     retry: false,
     staleTime: Infinity,
     gcTime: 0,
@@ -100,12 +121,12 @@ export function Watch() {
   // AniSkip matches on the episode's real length, known only once the stream is
   // open. Remembered, since an audio switch briefly clears it and the query
   // would fall back to the empty answer from before the stream existed.
-  const [episodeLength, setEpisodeLength] = useState(0)
-  useEffect(() => setEpisodeLength(0), [id, ep])
+  const [lengthFor, setLengthFor] = useState<{ key: string; seconds: number } | null>(null)
+  const episodeLength = lengthFor?.key === epKey ? lengthFor.seconds : 0
   useEffect(() => {
     const seconds = Math.round(stream.data?.duration ?? 0)
-    if (seconds > 0) setEpisodeLength(seconds)
-  }, [stream.data?.duration])
+    if (seconds > 0) setLengthFor({ key: epKey, seconds })
+  }, [stream.data?.duration, epKey])
 
   const skips = useQuery({
     enabled: id !== 0 && ep > 0 && episodeLength > 0,
@@ -118,6 +139,7 @@ export function Watch() {
   })
 
   const download = useMutation({
+    meta: { inline: true },
     mutationFn: () => api.post('/api/download', { animeId: id, episode: ep }),
   })
   // The page no longer remounts, so "Queued" would follow you to the next one.
@@ -151,10 +173,14 @@ export function Watch() {
   const list = episodes.data?.items ?? []
   const current = list.find((e) => e.number === ep)
   // The next episode worth playing: with the filler rule on, the next that is
-  // neither filler nor a recap. Mirrors store.NextEpisode.
+  // neither filler nor a recap. Mirrors store.NextEpisode, which also refuses
+  // one still to broadcast: auto-next into it lands on a failed search.
   const skipFiller = flag('playback.skip_filler')
   const next = list.find(
-    (e) => e.number > ep && !(skipFiller && (e.filler === 'filler' || e.recap)),
+    (e) =>
+      e.number > ep &&
+      !isUnaired(e) &&
+      !(skipFiller && (e.filler === 'filler' || e.recap)),
   )
   const hasNext = !!next
 
@@ -164,6 +190,7 @@ export function Watch() {
   const episodeLabel = [`Episode ${current?.display ?? ep}`, current?.titleEn]
     .filter(Boolean)
     .join(' · ')
+  useDocumentTitle(showTitle ? `${showTitle} · Ep ${current?.display ?? ep}` : undefined)
 
   const reportProgress = useCallback(
     (position: number, duration: number, played: number) => {
@@ -196,13 +223,16 @@ export function Watch() {
     void qc.invalidateQueries({ queryKey: ['anime', id] })
     setEndedKey(`${id}-${ep}`)
   }, [id, ep, qc])
+  const clearEnded = useCallback(() => setEndedKey(null), [])
 
   // The idle reaper took the session while the tab was backgrounded. Replaying
   // /api/play revives a suspended torrent, then reopening the stream rebuilds
   // the transcode session under the same playlist URL — no refresh needed.
+  // Throws when the reopen fails, so the player shows it instead of rebuilding
+  // against a session that is not there.
   const recoverSession = useCallback(async () => {
-    await qc.invalidateQueries({ queryKey: ['play', id, ep] })
-    await qc.invalidateQueries({ queryKey: ['stream', id, ep] })
+    await qc.invalidateQueries({ queryKey: ['play', id, ep] }, { throwOnError: true })
+    await qc.invalidateQueries({ queryKey: ['stream', id, ep] }, { throwOnError: true })
   }, [qc, id, ep])
 
   // Releasing the transcode session frees an ffmpeg process; leaving it to the
@@ -266,12 +296,16 @@ export function Watch() {
                   skips={skips.data?.ranges ?? []}
                   autoSkip={autoSkip}
                   autoPlay={flag('playback.autoplay')}
+                  subLanguages={subLanguages}
                   upscale={upscaling}
                   title={showTitle}
                   subtitle={episodeLabel}
                   onProgress={reportProgress}
                   onEnded={onEnded}
                   onNext={hasNext ? goNext : undefined}
+                  // Back into the finished episode: the countdown must not
+                  // take the viewer away mid-rewatch.
+                  onResume={clearEnded}
                   onSessionLost={recoverSession}
                   // Inside the player, or fullscreen hides it while it counts.
                   // The failure too, or swapping the player out drops fullscreen —
@@ -286,6 +320,15 @@ export function Watch() {
                         rawTitle={failure?.rawTitle}
                         onRetry={() => play.refetch()}
                         onPlayRaw={() => setAllowRaw(true)}
+                        onPick={() => setPicking(true)}
+                      />
+                    ) : stream.isError && !stream.data ? (
+                      // The release was found; opening it is what failed.
+                      <NoRelease
+                        inPlayer
+                        message={(stream.error as Error).message}
+                        animeId={id}
+                        onRetry={() => stream.refetch()}
                         onPick={() => setPicking(true)}
                       />
                     ) : ended && next ? (
@@ -303,30 +346,39 @@ export function Watch() {
             </div>
 
             <div className="space-y-3 p-3 sm:px-0 sm:pt-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  to={`/anime/${id}`}
-                  className="mr-auto text-sm text-base-300 transition-colors hover:text-white"
-                >
-                  ← Back to series
-                </Link>
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                {/* What is playing, and the way back to its page. */}
+                <div className="mr-auto min-w-0">
+                  <Link
+                    to={`/anime/${id}`}
+                    className="group inline-flex items-center gap-1.5 font-display text-xl font-bold tracking-tight text-white transition-colors hover:text-accent-200 sm:text-2xl"
+                  >
+                    <span className="line-clamp-1">{showTitle || 'Series'}</span>
+                    <span className="text-base-500 transition-transform group-hover:translate-x-0.5">›</span>
+                  </Link>
+                  <p className="mt-0.5 line-clamp-1 text-sm text-base-400">{episodeLabel}</p>
+                </div>
 
-                <StatusMenu animeId={id} current={detail.data?.listStatus} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusMenu animeId={id} current={detail.data?.listStatus} />
 
-                <button
-                  onClick={() => setPicking(true)}
-                  className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 transition-colors hover:bg-base-700"
-                >
-                  {infoHash ? 'Release chosen' : 'Choose release'}
-                </button>
+                  <Button onClick={() => setPicking(true)}>
+                    {infoHash ? 'Release chosen' : 'Choose release'}
+                  </Button>
 
-                <button
-                  onClick={() => download.mutate()}
-                  disabled={held || download.isPending || download.isSuccess}
-                  className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 transition-colors hover:bg-base-700 disabled:opacity-60"
-                >
-                  {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download episode'}
-                </button>
+                  <Button
+                    onClick={() => download.mutate()}
+                    disabled={held || download.isPending || download.isSuccess}
+                  >
+                    {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download'}
+                  </Button>
+
+                  {hasNext && (
+                    <Button variant="primary" onClick={goNext}>
+                      Next episode ›
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 rounded-lg bg-base-900/60 p-2.5 shadow-card">
@@ -336,6 +388,10 @@ export function Watch() {
                   </Badge>
                 )}
 
+                {/* Three scopes here; each group says which. */}
+                <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">
+                  This show
+                </span>
                 {/* Switching resolves a different release, so it reloads rather
                     than swapping a track — most releases carry one language. */}
                 <Segmented
@@ -349,6 +405,17 @@ export function Watch() {
                   ]}
                 />
 
+                <Toggle
+                  label="Skip filler"
+                  on={skipFiller}
+                  onChange={(v) =>
+                    setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })
+                  }
+                />
+
+                <span className="ml-1 border-l border-base-800 pl-3 text-[10px] font-semibold tracking-wider text-base-500 uppercase">
+                  Everywhere
+                </span>
                 {/* Flipping a toggle here becomes the new default, which is
                     what the setting means from then on. */}
                 <Toggle
@@ -370,13 +437,6 @@ export function Watch() {
                   label="Skip ending"
                   on={flag('playback.autoskip_ed')}
                   onChange={setFlag('playback.autoskip_ed')}
-                />
-                <Toggle
-                  label="Skip filler"
-                  on={skipFiller}
-                  onChange={(v) =>
-                    setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })
-                  }
                 />
 
                 {!playingInMpv && (
@@ -417,7 +477,7 @@ export function Watch() {
               Episodes
             </h2>
             {list.length > 0 ? (
-              <EpisodeList animeId={id} episodes={list} progress={ep - 1} current={ep} compact />
+              <EpisodeList animeId={id} episodes={list} current={ep} compact />
             ) : (
               <p className="rounded-lg border border-base-850 p-4 text-sm text-base-500">
                 No episode list available.
@@ -439,6 +499,7 @@ export function Watch() {
         <ReleasePicker
           animeId={id}
           episode={ep}
+          audio={wantAudio}
           current={play.data?.infoHash}
           onClose={() => setPicking(false)}
           onPick={(hash) => {
@@ -541,7 +602,7 @@ function NoRelease({
   // Covering a player rather than standing in for one.
   inPlayer?: boolean
   onRetry: () => void
-  onPlayRaw: () => void
+  onPlayRaw?: () => void
   onPick: () => void
 }) {
   return (

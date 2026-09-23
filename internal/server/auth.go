@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"kuro/internal/library"
 	"kuro/internal/store"
 )
 
@@ -74,11 +75,12 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.store.SetSettings(ctx, map[string]string{
-		"anilist.token":      token.AccessToken,
-		"anilist.expires_at": strconv.FormatInt(token.ExpiresAt().Unix(), 10),
-		"anilist.user_id":    strconv.Itoa(viewer.ID),
-		"anilist.user_name":  viewer.Name,
-		"anilist.score_fmt":  viewer.MediaListOptions.ScoreFormat,
+		"anilist.token":          token.AccessToken,
+		"anilist.expires_at":     strconv.FormatInt(token.ExpiresAt().Unix(), 10),
+		"anilist.user_id":        strconv.Itoa(viewer.ID),
+		"anilist.user_name":      viewer.Name,
+		"anilist.score_fmt":      viewer.MediaListOptions.ScoreFormat,
+		library.AuthErrorSetting: "",
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -93,12 +95,13 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 // AniList has no revocation endpoint, so this is local; the grant stays on the account.
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	err := s.store.SetSettings(r.Context(), map[string]string{
-		"anilist.token":      "",
-		"anilist.expires_at": "",
-		"anilist.user_id":    "",
-		"anilist.user_name":  "",
-		"anilist.score_fmt":  "",
-		"anilist.state":      "",
+		"anilist.token":          "",
+		"anilist.expires_at":     "",
+		"anilist.user_id":        "",
+		"anilist.user_name":      "",
+		"anilist.score_fmt":      "",
+		"anilist.state":          "",
+		library.AuthErrorSetting: "",
 	})
 	if err != nil {
 		s.fail(w, "anilist logout", err)

@@ -7,7 +7,7 @@ import { browseSeason, currentSeason, nextSeason } from '../lib/season'
 import { useAired, useDiscover, useHome, useNow } from '../lib/queries'
 import { Hero } from '../components/Hero'
 import { HoverInfo } from '../components/HoverInfo'
-import { PosterCard, toCard } from '../components/PosterCard'
+import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
 import { Rail, RailItem } from '../components/Rail'
 import { ReleasedCard } from '../components/ReleasedCard'
 import { Popularity, ScheduleWidget } from '../components/Sidebar'
@@ -126,7 +126,7 @@ function ContinueCard({ item }: { item: LibraryItem }) {
     <div className="group/continue relative">
       {/* Removing only takes it off this row; progress and the list tag are
           untouched, which is the difference from marking it watched. */}
-      <div className="absolute top-1.5 right-1.5 z-10 opacity-0 transition-opacity group-hover/continue:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+      <div className="absolute top-1.5 right-1.5 z-10 opacity-0 transition-opacity group-hover/continue:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
         {confirming ? (
           <div className="flex items-center gap-1 rounded-md bg-base-950/90 p-1 ring-1 ring-base-700 backdrop-blur-sm">
             <button
@@ -168,6 +168,12 @@ function ContinueCard({ item }: { item: LibraryItem }) {
           id: item.id,
           title: item.title,
           episodes: item.episodes,
+          aired: item.nextEpisode ? item.nextEpisode - 1 : null,
+          status: item.nextEpisode ? 'RELEASING' : null,
+          nextEpisode: item.nextEpisode,
+          nextAiringAt: item.nextAiringAt,
+          cover: item.cover,
+          color: item.color,
           progress: item.progress,
           play: { to: `/watch/${item.id}/${episode}`, label: `Resume ep ${episode}` },
         }}
@@ -182,14 +188,26 @@ function ContinueCard({ item }: { item: LibraryItem }) {
                 className="size-full object-cover object-center transition-transform duration-300 group-hover/continue:scale-105"
               />
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-base-950/90 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/30 to-transparent" />
 
-            <div className="absolute inset-x-0 bottom-0 p-2">
-              <p className="mb-1 text-[11px] text-base-300">
-                Episode {episode}
-                {resume && resume.position > 0 && ` · ${clockTime(resume.position)}`}
+            <span className="absolute top-2 left-2 rounded-md bg-base-950/80 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white backdrop-blur-sm">
+              EP {episode}
+            </span>
+            <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover/continue:opacity-100">
+              <span className="grid size-11 place-items-center rounded-full bg-white/95 text-base-950 shadow-lg">
+                <PlayIcon />
+              </span>
+            </span>
+
+            <div className="absolute inset-x-0 bottom-0 p-2.5">
+              <p className="mb-1.5 text-[11px] font-medium text-base-200">
+                {resume && resume.position > 0 && resume.duration
+                  ? `${clockTime(Math.max(0, resume.duration - resume.position))} left`
+                  : resume && resume.position > 0
+                    ? `Paused at ${clockTime(resume.position)}`
+                    : 'Up next'}
               </p>
-              {percent > 0 && <ProgressBar value={percent} />}
+              {percent > 0 && <ProgressBar value={percent} className="h-1.5 bg-white/15" />}
             </div>
           </div>
         </Link>

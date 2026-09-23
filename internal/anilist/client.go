@@ -31,9 +31,11 @@ const (
 )
 
 type Client struct {
-	http      *http.Client
-	limiter   *rate.Limiter
-	log       *slog.Logger
+	http    *http.Client
+	limiter *rate.Limiter
+	log     *slog.Logger
+	// Set by login and logout while requests are in flight.
+	tokenMu   sync.RWMutex
 	token     string
 	endpoint  string
 	oauthBase string
@@ -43,6 +45,8 @@ type Client struct {
 
 	mu          sync.Mutex
 	pausedUntil time.Time
+	downUntil   time.Time
+	archive     Archive
 }
 
 type Option func(*Client)
@@ -72,8 +76,19 @@ func New(log *slog.Logger, opts ...Option) *Client {
 	return c
 }
 
-func (c *Client) SetToken(token string) { c.token = token }
-func (c *Client) Authenticated() bool   { return c.token != "" }
+func (c *Client) SetToken(token string) {
+	c.tokenMu.Lock()
+	c.token = token
+	c.tokenMu.Unlock()
+}
+
+func (c *Client) bearer() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
+func (c *Client) Authenticated() bool { return c.bearer() != "" }
 
 // GraphQLError carries AniList's error array. Validation is populated when a
 // mutation is rejected field by field.
@@ -112,13 +127,14 @@ type response struct {
 // queryAnonymous runs a document with the account's token withheld, which is
 // the only way to see titles AniList hides from it.
 func (c *Client) queryAnonymous(ctx context.Context, query string, vars map[string]any, out any) error {
-	if c.token == "" {
+	if c.bearer() == "" {
 		return errors.New("anilist: already anonymous")
 	}
 	// Shared cache: the key carries the token, so the two cannot cross.
 	anon := &Client{
 		http: c.http, limiter: c.limiter, log: c.log,
 		endpoint: c.endpoint, oauthBase: c.oauthBase, cache: c.cache,
+		archive: c.archiver(),
 	}
 	return anon.Query(ctx, query, vars, out)
 }
@@ -135,9 +151,16 @@ func (c *Client) Query(ctx context.Context, query string, vars map[string]any, o
 		return c.execute(ctx, query, body, out)
 	}
 
-	key := cacheKey(query, body, c.token)
+	key := cacheKey(query, body, c.bearer())
 	if data, ok := c.cache.get(key); ok {
+		servedFrom(ctx).noteLive()
 		return decodeInto(data, out)
+	}
+
+	saved := archiveKey(body, c.bearer() != "")
+	// AniList failed moments ago: a saved answer beats waiting out the retries.
+	if c.isDown() && c.fromArchive(ctx, saved, out) {
+		return nil
 	}
 
 	// Another caller is already asking for exactly this. Wait for it and take
@@ -146,19 +169,47 @@ func (c *Client) Query(ctx context.Context, query string, vars map[string]any, o
 	if !mine {
 		wg.Wait()
 		if data, ok := c.cache.get(key); ok {
+			servedFrom(ctx).noteLive()
 			return decodeInto(data, out)
+		}
+		if c.isDown() && c.fromArchive(ctx, saved, out) {
+			return nil
 		}
 		// It failed, and the reason is worth reproducing rather than reporting
 		// second-hand.
-		return c.execute(ctx, query, body, out)
+		return c.fetch(ctx, query, body, key, saved, out)
 	}
 	defer c.cache.done(key, wg)
+	return c.fetch(ctx, query, body, key, saved, out)
+}
 
+// fetch asks AniList, keeps the answer, and falls back to the saved one only
+// when AniList could not be reached.
+func (c *Client) fetch(ctx context.Context, query string, body []byte, key, saved string, out any) error {
 	var data json.RawMessage
 	if err := c.execute(ctx, query, body, &data); err != nil {
+		if !unreachable(ctx, err) {
+			return err
+		}
+		c.markDown()
+		if c.fromArchive(ctx, saved, out) {
+			c.log.Warn("anilist unreachable, answering from the saved copy", "err", err)
+			return nil
+		}
 		return err
 	}
 	c.cache.put(key, data)
+	// Only what pages read is kept: background batches never ask twice.
+	if served := servedFrom(ctx); served != nil {
+		served.noteLive()
+		if archive := c.archiver(); archive != nil {
+			go func() {
+				if err := archive.SaveAnswer(context.WithoutCancel(ctx), saved, data); err != nil {
+					c.log.Debug("save anilist answer", "err", err)
+				}
+			}()
+		}
+	}
 	return decodeInto(data, out)
 }
 
@@ -180,6 +231,20 @@ func decodeInto(data []byte, out any) error {
 }
 
 func (c *Client) execute(ctx context.Context, query string, body []byte, out any) error {
+	return c.run(ctx, body, out, true)
+}
+
+// MutateOnce is for a mutation that is not safe to repeat, like a toggle: a
+// failure that may have been applied is returned, not retried.
+func (c *Client) MutateOnce(ctx context.Context, query string, vars map[string]any, out any) error {
+	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
+	if err != nil {
+		return err
+	}
+	return c.run(ctx, body, out, false)
+}
+
+func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool) error {
 	for attempt := 0; ; attempt++ {
 		if err := c.limiter.Wait(ctx); err != nil {
 			return err
@@ -190,7 +255,7 @@ func (c *Client) execute(ctx context.Context, query string, body []byte, out any
 
 		res, raw, err := c.post(ctx, body)
 		if err != nil {
-			if attempt < maxRetries {
+			if repeatable && attempt < maxRetries {
 				c.sleep(ctx, backoff(attempt))
 				continue
 			}
@@ -208,9 +273,9 @@ func (c *Client) execute(ctx context.Context, query string, body []byte, out any
 			continue
 
 		// 403 means the API is temporarily disabled rather than a permissions
-		// problem, so it is worth retrying.
+		// problem, so it is worth retrying. A 5xx may have been applied.
 		case res.StatusCode == http.StatusForbidden || res.StatusCode >= 500:
-			if attempt < maxRetries {
+			if (repeatable || res.StatusCode == http.StatusForbidden) && attempt < maxRetries {
 				c.sleep(ctx, backoff(attempt))
 				continue
 			}
@@ -249,8 +314,8 @@ func (c *Client) post(ctx context.Context, body []byte) (*http.Response, []byte,
 	// AniList's edge answers 403 "API temporarily disabled" to requests without
 	// one, whatever the user agent. Sent on every call since 2026-09-09.
 	req.Header.Set("Referer", Referer)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token := c.bearer(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	res, err := c.http.Do(req)

@@ -64,6 +64,24 @@ func TestEpisodesStaleFinishedAndComplete(t *testing.T) {
 	}
 }
 
+// A show the source does not cover stores nothing; that answer is kept for the
+// refresh window instead of re-asked on every page load.
+func TestEmptyEpisodeFetchIsRemembered(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 3, "FINISHED", 12)
+
+	if !s.EpisodesStale(ctx, 3, time.Hour) {
+		t.Fatal("never fetched, must be stale")
+	}
+	if err := s.MarkEpisodesFetched(ctx, 3, 0); err != nil {
+		t.Fatal(err)
+	}
+	if s.EpisodesStale(ctx, 3, time.Hour) {
+		t.Error("an empty answer moments ago was asked for again")
+	}
+}
+
 func TestStillGapsAndFill(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

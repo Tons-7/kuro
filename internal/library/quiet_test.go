@@ -79,6 +79,75 @@ func TestQuietRevisitsTorrentsStillChecking(t *testing.T) {
 	t.Fatal("the torrent was never paused once its check ended")
 }
 
+// The re-check passes are for what was being verified at launch. A download the
+// queue started since used to be paused by the next pass and then dropped.
+func TestQuietLeavesDownloadsStartedSinceLaunch(t *testing.T) {
+	var mu sync.Mutex
+	polls := 0
+	var paused []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.URL.Path == "/torrents":
+			io.WriteString(w, `{"torrents":[{"id":1,"info_hash":"AAAA","name":"a"},{"id":2,"info_hash":"BBBB","name":"b"}]}`)
+		case strings.Contains(r.URL.Path, "/1/stats"):
+			polls++
+			if polls <= 2 {
+				io.WriteString(w, `{"state":"initializing","finished":false,"progress_bytes":1,"total_bytes":10}`)
+			} else {
+				io.WriteString(w, `{"state":"live","finished":false,"progress_bytes":4,"total_bytes":10}`)
+			}
+		case strings.Contains(r.URL.Path, "/2/stats"):
+			// Paused at launch; the queue resumed it afterwards.
+			if polls <= 1 {
+				io.WriteString(w, `{"state":"paused","finished":false,"progress_bytes":1,"total_bytes":10}`)
+			} else {
+				io.WriteString(w, `{"state":"live","finished":false,"progress_bytes":4,"total_bytes":10}`)
+			}
+		case strings.HasSuffix(r.URL.Path, "/pause"):
+			paused = append(paused, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.Migrate()
+	st := store.New(conn)
+
+	was := quietRecheck
+	quietRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { quietRecheck = was })
+
+	d := NewDownloader(st, NewPrefetcher(st, nil, torrent.NewClient(srv.URL), discard()), nil, discard())
+	d.Quiet(context.Background())
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := append([]string(nil), paused...)
+		mu.Unlock()
+		if len(got) > 0 {
+			if len(got) != 1 || got[0] != "/torrents/1/pause" {
+				t.Fatalf("paused %v; only the one checking at launch", got)
+			}
+			time.Sleep(100 * time.Millisecond)
+			mu.Lock()
+			defer mu.Unlock()
+			if len(paused) != 1 {
+				t.Fatalf("paused %v; the download started since was paused too", paused)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the torrent checking at launch was never paused")
+}
+
 func TestProgressReportsCheckingNotPaused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

@@ -32,6 +32,8 @@ func TestDownloadPromotesTheCachedCopy(t *testing.T) {
 	if err := st.SetCacheBytes(ctx, goodHash, 0, 100, true); err != nil {
 		t.Fatal(err)
 	}
+	engine.ids[1] = goodHash
+	engine.finished[goodHash] = true
 
 	// A nil finder: reaching the search at all is a panic, which is the point.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

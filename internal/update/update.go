@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -274,9 +275,46 @@ func (u *Updater) apply(ctx context.Context, rel Release) error {
 		return fmt.Errorf("replace executable: %w", err)
 	}
 	if err := u.launch(u.exe); err != nil {
+		// Put the running version back, or nothing is left to start next time.
+		if rerr := Rollback(u.exe); rerr != nil {
+			u.log.Error("restore the previous version", "err", rerr)
+		}
 		return fmt.Errorf("start the new version: %w", err)
 	}
 	return nil
+}
+
+// Rollback puts the previous binary back in place of a new one that failed.
+func Rollback(exe string) error {
+	old := exe + ".old"
+	if _, err := os.Stat(old); err != nil {
+		return err
+	}
+	failed := exe + ".failed"
+	os.Remove(failed)
+	if err := os.Rename(exe, failed); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(old, exe); err != nil {
+		os.Rename(failed, exe)
+		return err
+	}
+	return nil
+}
+
+// Handover reports a start by an update, which is the only time a failed
+// start should fall back to the previous binary.
+func Handover(args []string) bool {
+	return slices.Contains(args, "--wait-for")
+}
+
+// Relaunch starts exe as a plain launch, for handing back to a restored version.
+func Relaunch(exe string) error {
+	cmd := exec.Command(exe)
+	cmd.Dir = filepath.Dir(exe)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	config.Detach(cmd)
+	return cmd.Start()
 }
 
 func (u *Updater) download(ctx context.Context, url, dest string) error {
@@ -411,11 +449,12 @@ func swap(exe, fresh string) error {
 	return nil
 }
 
-// Cleanup removes what the last update left behind. Called at startup, when
-// the old binary has exited and can be deleted.
+// Cleanup removes what the last update left behind. Called once this version
+// is serving: until then .old is the way back.
 func Cleanup(exe string) {
 	os.Remove(exe + ".old")
 	os.Remove(exe + ".new")
+	os.Remove(exe + ".failed")
 }
 
 // relaunch starts the new binary outside this process's job object, told to

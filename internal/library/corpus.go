@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -40,28 +41,34 @@ type Report struct {
 
 func (i *Ingester) Run(ctx context.Context, force bool) (Report, error) {
 	var rep Report
+	var seedErr error
 
+	// A failed seed must not also cost the day's new-season discovery.
 	if due, _ := i.due(ctx, "manami", seedInterval, force); due {
 		n, err := i.seed(ctx)
-		if err != nil {
-			return rep, fmt.Errorf("seed: %w", err)
-		}
 		rep.Seeded = n
+		if err != nil {
+			seedErr = fmt.Errorf("seed: %w", err)
+		}
 	}
 
 	if due, _ := i.due(ctx, "animeapi", discoverInterval, force); due {
-		missing, err := i.discover(ctx)
+		missing, upstream, err := i.discover(ctx)
 		if err != nil {
-			return rep, fmt.Errorf("discover: %w", err)
+			return rep, errors.Join(seedErr, fmt.Errorf("discover: %w", err))
 		}
 		rep.Discovered = len(missing)
 
 		rep.Fetched, rep.Titles, rep.Dead, err = i.fetchTitles(ctx, missing)
 		if err != nil {
-			return rep, fmt.Errorf("fetch titles: %w", err)
+			return rep, errors.Join(seedErr, fmt.Errorf("fetch titles: %w", err))
+		}
+		// Marked only once fetched, so a retry picks up the rest.
+		if err := i.store.MarkSource(ctx, "animeapi", upstream); err != nil {
+			return rep, errors.Join(seedErr, err)
 		}
 	}
-	return rep, nil
+	return rep, seedErr
 }
 
 func (i *Ingester) due(ctx context.Context, name string, every time.Duration, force bool) (bool, error) {
@@ -104,10 +111,10 @@ func (i *Ingester) seed(ctx context.Context) (int, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return total, err
 	}
 	if err := flush(); err != nil {
-		return 0, err
+		return total, err
 	}
 
 	i.log.Info("corpus seeded", "anime", total, "titles", titles)
@@ -115,14 +122,14 @@ func (i *Ingester) seed(ctx context.Context) (int, error) {
 }
 
 // discover diffs a daily-rebuilt id list against stored ids to notice new seasons.
-func (i *Ingester) discover(ctx context.Context) ([]int, error) {
+func (i *Ingester) discover(ctx context.Context) ([]int, int, error) {
 	live, err := i.fetcher.AnimeAPI(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	known, err := i.store.KnownIDs(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	missing := make([]int, 0, 512)
@@ -133,7 +140,7 @@ func (i *Ingester) discover(ctx context.Context) ([]int, error) {
 	}
 
 	i.log.Info("id discovery", "upstream", len(live), "known", len(known), "new", len(missing))
-	return missing, i.store.MarkSource(ctx, "animeapi", len(live))
+	return missing, len(live), nil
 }
 
 // Ids that return nothing are recorded so they are never requested again.
@@ -142,7 +149,8 @@ func (i *Ingester) fetchTitles(ctx context.Context, ids []int) (fetched, titles,
 		chunk := ids[start:min(start+batchSize, len(ids))]
 
 		media, err := i.al.MediaByIDs(ctx, chunk)
-		if err != nil {
+		incomplete := errors.Is(err, anilist.ErrIncomplete)
+		if err != nil && !incomplete {
 			return fetched, titles, dead, err
 		}
 
@@ -162,7 +170,7 @@ func (i *Ingester) fetchTitles(ctx context.Context, ids []int) (fetched, titles,
 
 		var gone []int
 		for _, id := range chunk {
-			if _, ok := found[id]; !ok {
+			if _, ok := found[id]; !ok && !incomplete {
 				gone = append(gone, id)
 			}
 		}

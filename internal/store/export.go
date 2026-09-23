@@ -97,7 +97,8 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 	defer tx.Rollback()
 
 	for _, e := range entries {
-		if e.AnimeID <= 0 {
+		// Negative ids are MAL-only titles, which export writes out too.
+		if e.AnimeID == 0 {
 			rep.Skipped++
 			continue
 		}

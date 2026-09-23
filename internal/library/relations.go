@@ -74,6 +74,11 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 		frontier = next
 	}
 
+	// A walk over saved answers is not a fetch: marking it would hold off the
+	// real one for a week.
+	if anilist.UsedSaved(ctx) {
+		return 0, nil
+	}
 	if err := r.store.MarkRelationsFetched(ctx, append(walked, animeID)); err != nil {
 		r.log.Warn("record relation fetch", "anime", animeID, "err", err)
 	}

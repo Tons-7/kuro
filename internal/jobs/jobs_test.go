@@ -119,15 +119,87 @@ func TestTriggerRunsImmediately(t *testing.T) {
 		Run: func(context.Context) error { runs.Add(1); return nil },
 	})
 
-	if err := s.Trigger(context.Background(), "manual"); err != nil {
+	if err := s.Trigger("manual"); err != nil {
 		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for runs.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
 	if runs.Load() != 1 {
 		t.Fatalf("runs = %d", runs.Load())
 	}
-	if err := s.Trigger(context.Background(), "missing"); err == nil {
+	if err := s.Trigger("missing"); err == nil {
 		t.Error("triggering an unknown job should error")
 	}
+}
+
+// Run now must say so when nothing ran, and must not be cancelled with the
+// request that asked.
+func TestTriggerWhileRunningSaysSo(t *testing.T) {
+	s := newScheduler()
+	release := make(chan struct{})
+	s.Add(Job{
+		Name: "slow", Every: time.Hour,
+		Run: func(ctx context.Context) error {
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	})
+	s.Start(context.Background())
+	defer close(release)
+
+	if err := s.Trigger("slow"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Trigger("slow"); !errors.Is(err, ErrRunning) {
+		t.Fatalf("second trigger = %v, want ErrRunning", err)
+	}
+}
+
+// A manual success clears the failure count, or a recovered job stays backed
+// off for hours.
+func TestAManualSuccessResetsBackoff(t *testing.T) {
+	s := newScheduler()
+	var fail atomic.Bool
+	fail.Store(true)
+	s.Add(Job{
+		Name: "flaky", Every: time.Hour,
+		Run: func(context.Context) error {
+			if fail.Load() {
+				return errors.New("down")
+			}
+			return nil
+		},
+	})
+	e := s.entry("flaky")
+	s.execute(context.Background(), e)
+	if e.consecutive != 1 {
+		t.Fatalf("consecutive = %d after a failure", e.consecutive)
+	}
+	fail.Store(false)
+	if err := s.Trigger("flaky"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		e.mu.Lock()
+		done := !e.running && e.runs == 2
+		c := e.consecutive
+		e.mu.Unlock()
+		if done {
+			if c != 0 {
+				t.Fatalf("consecutive = %d after a manual success", c)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the manual run never finished")
 }
 
 // A persistently broken job should stop hammering whatever it depends on.

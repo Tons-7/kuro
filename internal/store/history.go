@@ -90,10 +90,11 @@ func (s *Store) ForgetHistory(ctx context.Context, animeID int, epKey string) (i
 		err error
 	)
 	switch {
-	case animeID > 0 && epKey != "":
+	// Negative ids are MAL-only shows, not "everything".
+	case animeID != 0 && epKey != "":
 		res, err = s.w.ExecContext(ctx,
 			`DELETE FROM playback WHERE anime_id = ? AND ep_key = ?`, animeID, epKey)
-	case animeID > 0:
+	case animeID != 0:
 		res, err = s.w.ExecContext(ctx, `DELETE FROM playback WHERE anime_id = ?`, animeID)
 	default:
 		res, err = s.w.ExecContext(ctx, `DELETE FROM playback`)

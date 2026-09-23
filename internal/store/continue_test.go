@@ -50,6 +50,33 @@ func TestContinueWatchingOffersTheNextEpisode(t *testing.T) {
 	}
 }
 
+// A show's own threshold decides "finished" on the rail as it does for resume,
+// or 85% under a 0.8 threshold shows Resume and then starts from zero.
+func TestContinueWatchingUsesTheShowsThreshold(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 1, "FINISHED", 12)
+	s.SetListStatus(ctx, 1, StatusCurrent, -1)
+	s.MarkWatched(ctx, 1, 1)
+	if err := s.SetAnimePref(ctx, 1, "sync.progress_at", "0.8"); err != nil {
+		t.Fatal(err)
+	}
+	playThrough(t, s, 1, "2", 0, 1190, 1400)
+
+	page, err := s.ContinueWatching(ctx, Paging{Page: 1, PerPage: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range page.Items {
+		if r := it.Resume; r != nil && r.EpKey == "2" && r.Position > 0 {
+			t.Fatalf("episode 2 at 85%% offered as a resume under a 0.8 threshold: %+v", r)
+		}
+	}
+	if at, _ := s.ResumeAt(ctx, 1, "2"); at != 0 {
+		t.Fatalf("ResumeAt = %v; the two rules disagree", at)
+	}
+}
+
 // A rewatch resets every position, so the show has to come back through the
 // next-episode path rather than vanishing until something is left half watched.
 func TestContinueWatchingSurvivesARewatch(t *testing.T) {

@@ -214,7 +214,15 @@ func (s *Store) SaveRelations(ctx context.Context, rels []Relation) error {
 // numbers each member in broadcast order. Side stories and spin-offs are
 // deliberately excluded: they are related, but they are not seasons.
 func (s *Store) RebuildFranchises(ctx context.Context) (int, error) {
-	rows, err := s.r.QueryContext(ctx,
+	// Edges read inside the write, or two rebuilds can commit an older graph
+	// over a newer one.
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx,
 		`SELECT anime_id, related_id FROM relation WHERE kind IN ('PREQUEL','SEQUEL')`)
 	if err != nil {
 		return 0, err
@@ -235,18 +243,12 @@ func (s *Store) RebuildFranchises(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	dates, err := s.startDates(ctx)
+	dates, err := startDates(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
 
 	seen := map[int]bool{}
-	tx, err := s.w.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
 	if _, err := tx.ExecContext(ctx, `DELETE FROM franchise`); err != nil {
 		return 0, err
 	}
@@ -267,7 +269,7 @@ func (s *Store) RebuildFranchises(ctx context.Context) (int, error) {
 		// Broadcast order, not graph order: the edges give no direction, and a
 		// missing date must not reorder the rest.
 		sort.Slice(members, func(i, j int) bool {
-			di, dj := dates[members[i]], dates[members[j]]
+			di, dj := dateOf(dates, members[i]), dateOf(dates, members[j])
 			if di != dj {
 				return di < dj
 			}
@@ -302,10 +304,18 @@ func component(start int, adj map[int][]int, seen map[int]bool) []int {
 	return out
 }
 
+// A member with no row at all is an announced sequel not yet in the corpus.
+func dateOf(dates map[int]int, id int) int {
+	if d, ok := dates[id]; ok {
+		return d
+	}
+	return 99999999
+}
+
 // A missing date sorts last rather than first, so an unaired sequel does not
 // become season one.
-func (s *Store) startDates(ctx context.Context) (map[int]int, error) {
-	rows, err := s.r.QueryContext(ctx, `
+func startDates(ctx context.Context, tx *sql.Tx) (map[int]int, error) {
+	rows, err := tx.QueryContext(ctx, `
 		SELECT anime_id,
 		       coalesce(nullif(replace(coalesce(start_date,''), '-', ''), ''), '99999999')
 		FROM (

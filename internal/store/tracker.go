@@ -18,13 +18,15 @@ type TrackerEntry struct {
 	Repeat int
 	// Score on kuro's 0-100 scale; each tracker converts.
 	Score int
+	// LastScore is what the tracker was last told, so a 0 now is a clear.
+	LastScore int
 }
 
 // pendingMAL selects entries whose local progress or status differs from what
 // MyAnimeList was last told. Anime with no MAL id are skipped; animeID 0 means all.
 const pendingMAL = `
 	SELECT e.anime_id, a.mal_id, coalesce(e.status, ''), e.progress,
-	       coalesce(a.episode_count, 0), e.repeat_count, e.score
+	       coalesce(a.episode_count, 0), e.repeat_count, e.score, coalesce(p.score, 0)
 	FROM list_entry e
 	JOIN anime a ON a.id = e.anime_id
 	LEFT JOIN tracker_push p ON p.tracker = ? AND p.anime_id = e.anime_id
@@ -42,7 +44,7 @@ const pendingMAL = `
 func (s *Store) PendingMALPush(ctx context.Context, tracker string, animeID int) (TrackerEntry, error) {
 	var e TrackerEntry
 	err := s.r.QueryRowContext(ctx, pendingMAL, tracker, animeID, 1).Scan(
-		&e.AnimeID, &e.RemoteID, &e.Status, &e.Progress, &e.Episodes, &e.Repeat, &e.Score)
+		&e.AnimeID, &e.RemoteID, &e.Status, &e.Progress, &e.Episodes, &e.Repeat, &e.Score, &e.LastScore)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TrackerEntry{}, nil
 	}
@@ -59,12 +61,19 @@ func (s *Store) PendingMALPushes(ctx context.Context, tracker string, limit int)
 	var out []TrackerEntry
 	for rows.Next() {
 		var e TrackerEntry
-		if err := rows.Scan(&e.AnimeID, &e.RemoteID, &e.Status, &e.Progress, &e.Episodes, &e.Repeat, &e.Score); err != nil {
+		if err := rows.Scan(&e.AnimeID, &e.RemoteID, &e.Status, &e.Progress, &e.Episodes, &e.Repeat, &e.Score, &e.LastScore); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ForgetPushed drops what a tracker was told, so the next account connected is
+// read as new rather than as edits to the last one's list.
+func (s *Store) ForgetPushed(ctx context.Context, tracker string) error {
+	_, err := s.w.ExecContext(ctx, `DELETE FROM tracker_push WHERE tracker = ?`, tracker)
+	return err
 }
 
 // MarkPushed records what the tracker now holds. Storing the value rather than

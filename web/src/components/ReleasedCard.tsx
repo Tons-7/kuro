@@ -19,6 +19,7 @@ export function ReleasedCard({ item, tags }: { item: ScheduleItem; tags?: boolea
           english: item.english,
           format: item.format,
           color: item.colour,
+          cover: item.cover,
           progress: item.progress,
           play: { to: watch, label: `Play ep ${item.episode}` },
         }}

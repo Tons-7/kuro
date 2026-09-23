@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -35,6 +36,29 @@ type discoverItem struct {
 	// Which list it is on. Status above is the airing state, so without this a
 	// card cannot tell "completed" from "never added".
 	ListStatus *string `json:"listStatus,omitempty"`
+
+	// For the hover card: episodes out so far (next minus one while airing),
+	// when it started, who made it, and where it lives on MyAnimeList.
+	MalID        *int             `json:"malId,omitempty"`
+	NextEpisode  int              `json:"nextEpisode,omitempty"`
+	NextAiringAt int64            `json:"nextAiringAt,omitempty"`
+	StartDate    string           `json:"startDate,omitempty"`
+	EndDate      string           `json:"endDate,omitempty"`
+	Duration     *int             `json:"duration,omitempty"`
+	Studios      []anilist.Studio `json:"studios,omitempty"`
+}
+
+// isoDate is a FuzzyDate as far as it is known: 2021-04-11, 2021-04 or 2021.
+func isoDate(d anilist.FuzzyDate) string {
+	switch {
+	case d.Year == nil:
+		return ""
+	case d.Month == nil:
+		return strconv.Itoa(*d.Year)
+	case d.Day == nil:
+		return fmt.Sprintf("%04d-%02d", *d.Year, *d.Month)
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", *d.Year, *d.Month, *d.Day)
 }
 
 // Each window costs ~30s of upstream calls, too long to sit behind a tab click.
@@ -75,7 +99,10 @@ func (s *Server) ranked(r *http.Request, sort string, page, perPage int) (anilis
 	if err != nil {
 		return anilist.DiscoverPage{}, err
 	}
-	s.rising.put(sort, result)
+	// Held for hours, so only a live answer.
+	if !anilist.UsedSaved(r.Context()) {
+		s.rising.put(sort, result)
+	}
 	return result, nil
 }
 

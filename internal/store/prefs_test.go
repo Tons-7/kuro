@@ -124,6 +124,31 @@ func TestBookmarks(t *testing.T) {
 	}
 }
 
+// A note saved on blur and a Favourite click landing together must both stick.
+func TestPatchBookmarkKeepsUntouchedFields(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 1, "FINISHED", 12)
+	note, yes := "gem", true
+
+	if err := s.PatchBookmark(ctx, 1, BookmarkPatch{Note: &note}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PatchBookmark(ctx, 1, BookmarkPatch{Favourite: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Bookmark(ctx, 1)
+	if !b.Favourite || b.Note != "gem" {
+		t.Fatalf("bookmark = %+v, want favourite with the note kept", b)
+	}
+
+	empty := ""
+	s.PatchBookmark(ctx, 1, BookmarkPatch{Note: &empty})
+	if b, _ := s.Bookmark(ctx, 1); b.Note != "" || !b.Favourite {
+		t.Fatalf("clearing the note: %+v", b)
+	}
+}
+
 func TestRecentlyWatchedOrdersByLastPlayed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

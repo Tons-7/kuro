@@ -27,6 +27,9 @@ func TestBuildRejectsWhatItCannotRead(t *testing.T) {
 	if _, err := Build("torznab", "https://example.test", false); err == nil {
 		t.Error("an unknown type should be refused, not silently searched")
 	}
+	if _, err := Build("tokyotosho", "https://example.test", true); err == nil {
+		t.Error("adult tokyotosho would search the general category; refuse it")
+	}
 	for _, bad := range []string{"", "example.test", "/feed", "ftp://"} {
 		if _, err := Build("nyaa", bad, false); err == nil {
 			t.Errorf("url %q should be refused", bad)

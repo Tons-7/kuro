@@ -85,6 +85,60 @@ func TestNotifiesOnceTheEpisodeHasAired(t *testing.T) {
 	}
 }
 
+// Notifications and auto-download are separate switches: turning off the bell
+// used to stop every auto-download with it.
+func TestAutoDownloadWithNotificationsOff(t *testing.T) {
+	anHourAgo := time.Now().Add(-time.Hour).Unix()
+	st := airingStore(t, 6, anHourAgo, 5)
+	ctx := context.Background()
+	if err := st.SetSetting(ctx, "notify.enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting(ctx, "autodownload.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	source := fixedIndexer{results: []indexer.Torrent{
+		release("1111111111111111111111111111111111111111",
+			"[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 06 [1080p].mkv", 40),
+	}}
+	w := NewWatcher(st, NewFinder(st, source, log), source, log).
+		WithDownloader(NewDownloader(st, NewPrefetcher(st, nil, nil, log), nil, log))
+	rep, err := w.Poll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rep.Notified != 0 {
+		t.Errorf("notified %d times with notifications off", rep.Notified)
+	}
+	queued, _ := st.QueuedDownloads(ctx)
+	if rep.Downloaded != 1 || len(queued) != 1 || queued[0].Episode != 6 {
+		t.Fatalf("downloaded %d, queue %+v; want episode 6 queued", rep.Downloaded, queued)
+	}
+}
+
+// Someone saving the season for later still gets every aired week, not only
+// the one after their progress.
+func TestAnnouncesEveryAiredEpisodePastProgress(t *testing.T) {
+	tomorrow := time.Now().Add(24 * time.Hour).Unix()
+	st := airingStore(t, 6, tomorrow, 3)
+	results := []indexer.Torrent{
+		release("4444444444444444444444444444444444444444",
+			"[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 04 [1080p].mkv", 40),
+		release("5555555555555555555555555555555555555555",
+			"[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 05 [1080p].mkv", 40),
+	}
+
+	if rep := pollWith(t, st, results); rep.Notified != 2 {
+		t.Fatalf("notified %d, want episodes 4 and 5", rep.Notified)
+	}
+	if rep := pollWith(t, st, results); rep.Notified != 0 {
+		t.Fatalf("second poll notified %d again", rep.Notified)
+	}
+}
+
 // A pack that states no range covers nothing in particular; announcing one
 // claims an episode that may not exist yet.
 func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {

@@ -46,7 +46,7 @@ func ParsePaging(q url.Values, defaultPerPage, maxPerPage int) Paging {
 
 // Callers query perPage+1 so HasMore needs no second query.
 func NewPage[T any](items []T, p Paging, total int) Page[T] {
-	hasMore := len(items) > p.PerPage
+	hasMore := p.PerPage > 0 && len(items) > p.PerPage
 	if hasMore {
 		items = items[:p.PerPage]
 	}

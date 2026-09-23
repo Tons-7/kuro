@@ -5,6 +5,7 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"kuro/internal/anilist"
@@ -12,9 +13,14 @@ import (
 )
 
 type Importer struct {
-	store *store.Store
-	al    *anilist.Client
-	log   *slog.Logger
+	store  *store.Store
+	al     *anilist.Client
+	log    *slog.Logger
+	recent recentIDs
+
+	// OnNewTitles runs when Remember adds anime the corpus lacked, so the
+	// matcher's index can be rebuilt to include them.
+	OnNewTitles func()
 }
 
 func NewImporter(s *store.Store, al *anilist.Client, log *slog.Logger) *Importer {
@@ -60,8 +66,13 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 		ids = ids[len(batch):]
 
 		media, err := i.al.MediaByIDs(ctx, batch)
-		if err != nil {
+		incomplete := errors.Is(err, anilist.ErrIncomplete)
+		if err != nil && !incomplete {
 			return saved, err
+		}
+		// An old answer is neither new data nor proof an id is gone.
+		if anilist.UsedSaved(ctx) {
+			return saved, nil
 		}
 		n, err := i.Save(ctx, media)
 		if err != nil {
@@ -77,7 +88,7 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 		}
 		var missing []int
 		for _, id := range batch {
-			if !returned[id] {
+			if !returned[id] && !incomplete {
 				missing = append(missing, id)
 			}
 		}
@@ -91,7 +102,8 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 // Save stores media the caller already has, so viewing a page keeps the local
 // record current instead of refetching later.
 func (i *Importer) Save(ctx context.Context, media []anilist.Media) (int, error) {
-	if len(media) == 0 {
+	// Stamping an old answer synced now would pass it off as current.
+	if len(media) == 0 || anilist.UsedSaved(ctx) {
 		return 0, nil
 	}
 	rows := make([]store.Anime, 0, len(media))

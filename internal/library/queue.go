@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,8 +19,9 @@ import (
 type Downloader struct {
 	store    *store.Store
 	prefetch *Prefetcher
-	prefs    func(context.Context) score.Preferences
-	log      *slog.Logger
+	// A show's own preferences, over the global ones.
+	prefs func(ctx context.Context, animeID int) score.Preferences
+	log   *slog.Logger
 
 	// Woken on a new entry so a queued episode starts at once rather than on
 	// the next tick.
@@ -27,6 +29,8 @@ type Downloader struct {
 
 	mu      sync.Mutex
 	current *inFlight
+	// Paused from the downloads list: the only pause that drops a queued episode.
+	userPaused map[string]bool
 	// Stream sessions currently watching. A queued download shares the on-screen
 	// episode's connection, so on a slow line the queue waits.
 	watching map[string]struct{}
@@ -46,7 +50,7 @@ func (f *inFlight) session() string {
 	return fmt.Sprintf("%d-%s", f.animeID, f.epKey)
 }
 
-func NewDownloader(s *store.Store, p *Prefetcher, prefs func(context.Context) score.Preferences, log *slog.Logger) *Downloader {
+func NewDownloader(s *store.Store, p *Prefetcher, prefs func(context.Context, int) score.Preferences, log *slog.Logger) *Downloader {
 	return &Downloader{
 		store:    s,
 		prefetch: p,
@@ -152,7 +156,8 @@ func (d *Downloader) Quiet(ctx context.Context) {
 	if d == nil || d.prefetch == nil || d.prefetch.torrent == nil {
 		return
 	}
-	if d.quiet(ctx) == 0 {
+	pending := d.quiet(ctx, nil)
+	if len(pending) == 0 {
 		return
 	}
 	recheck := quietRecheck
@@ -164,34 +169,50 @@ func (d *Downloader) Quiet(ctx context.Context) {
 				return
 			case <-time.After(recheck):
 			}
-			if d.quiet(ctx) == 0 {
+			// Only what was verifying at launch; the rest was started since.
+			if pending = d.quiet(ctx, pending); len(pending) == 0 {
 				return
 			}
 		}
 	}()
 }
 
-// quiet is one pass; it reports how many torrents were still checking.
-func (d *Downloader) quiet(ctx context.Context) int {
-	var keep func(string) bool
+// quiet is one pass over only (all when nil); it returns those still checking.
+func (d *Downloader) quiet(ctx context.Context, only map[string]bool) map[string]bool {
+	var started map[string]bool
 	if prefs, err := d.store.Prefs(ctx, 0); err == nil && prefs.Bool("cache.prefetch_full") {
-		started, err := d.store.StartedTorrents(ctx)
-		if err != nil {
+		if started, err = d.store.StartedTorrents(ctx); err != nil {
 			d.log.Warn("list started downloads", "err", err)
 		}
-		keep = func(hash string) bool { return started[hash] }
+	}
+	pinned := map[string]bool{}
+	if entries, err := d.store.CacheEntries(ctx); err == nil {
+		for _, e := range entries {
+			if e.Pinned {
+				pinned[strings.ToLower(e.InfoHash)] = true
+			}
+		}
+	}
+	keep := func(hash string) bool {
+		return started[hash] || pinned[hash] || d.prefetch.Claimed(hash) || (only != nil && !only[hash])
 	}
 
 	paused, kept, checking, err := d.prefetch.torrent.PauseUnfinished(ctx, keep)
 	if err != nil {
 		d.log.Warn("quiet the torrent engine", "err", err)
-		return 0
+		return nil
 	}
-	if paused > 0 || kept > 0 || checking > 0 {
+	if paused > 0 || len(checking) > 0 {
 		d.log.Info("part-downloaded torrents on startup",
-			"paused", paused, "leftDownloading", kept, "stillChecking", checking)
+			"paused", paused, "leftDownloading", kept, "stillChecking", len(checking))
 	}
-	return checking
+	still := map[string]bool{}
+	for _, hash := range checking {
+		if only == nil || only[hash] {
+			still[hash] = true
+		}
+	}
+	return still
 }
 
 func (d *Downloader) Run(ctx context.Context) {
@@ -245,6 +266,33 @@ func (d *Downloader) Cancel(ctx context.Context, animeID int, epKey string) (int
 	return removed, nil
 }
 
+// SetUserPaused records a pause or resume from the downloads list.
+func (d *Downloader) SetUserPaused(hash string, paused bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.userPaused == nil {
+		d.userPaused = map[string]bool{}
+	}
+	if paused {
+		d.userPaused[strings.ToLower(hash)] = true
+	} else {
+		delete(d.userPaused, strings.ToLower(hash))
+	}
+}
+
+func (d *Downloader) pausedByUser(ctx context.Context, animeID int, ep string) bool {
+	rec, ok, err := d.store.TorrentForEpisode(ctx, animeID, ep)
+	if err != nil || !ok {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.userPaused[strings.ToLower(rec.InfoHash)]
+}
+
 func (d *Downloader) step(parent context.Context) bool {
 	next, ok, err := d.store.NextQueued(parent)
 	if err != nil {
@@ -265,7 +313,7 @@ func (d *Downloader) step(parent context.Context) bool {
 	d.current = &inFlight{animeID: next.AnimeID, epKey: next.EpKey, stop: stop}
 	d.mu.Unlock()
 
-	err = d.prefetch.Download(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent), queueStall)
+	err = d.prefetch.Download(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent, next.AnimeID), queueStall)
 
 	d.mu.Lock()
 	d.current = nil
@@ -289,8 +337,14 @@ func (d *Downloader) step(parent context.Context) bool {
 		return true
 
 	// Pausing one from the downloads list is a decision, not a failure: drop it
-	// and move on rather than leaving a red row behind.
+	// and move on rather than leaving a red row behind. Any other pause requeues.
 	case errors.Is(err, torrent.ErrPaused):
+		if !d.pausedByUser(parent, next.AnimeID, next.EpKey) {
+			if _, err := d.store.RequeueActive(parent, next.AnimeID, next.EpKey); err != nil {
+				d.log.Warn("requeue paused download", "err", err)
+			}
+			return true
+		}
 		d.log.Info("queued download paused",
 			"anime", next.AnimeID, "episode", next.Episode)
 		err = nil

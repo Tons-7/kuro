@@ -61,6 +61,43 @@ func TestMALPullAppliesASiteEditAndFlagsItForAniList(t *testing.T) {
 	}
 }
 
+// MAL keeps whole points, so an 85 goes up as 9 and comes back as 9. Reading
+// that back as 90 rounded every score, and pushed the rounding to AniList.
+func TestMALPullKeepsAFinerScore(t *testing.T) {
+	up := &malServer{list: `{"data":[
+	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},
+	   "list_status":{"status":"watching","num_episodes_watched":6,"score":9,
+	                  "updated_at":"2026-08-01T00:00:00+00:00"}}],
+	  "paging":{}}`}
+	sync, st := newMALSync(t, up)
+	ctx := context.Background()
+
+	addAnime(t, st, 154587, 52991, 28)
+	st.MarkWatched(ctx, 154587, 6)
+	if err := st.SetListStatus(ctx, 154587, "CURRENT", 85); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sync.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.ClearDirty(ctx, 154587, 1, 1)
+
+	imp, err := sync.Pull(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imp.Applied != 0 {
+		t.Fatalf("pull applied %d entries; nothing changed on MAL", imp.Applied)
+	}
+	e, _ := st.ListEntry(ctx, 154587)
+	if e.Score != 85 {
+		t.Fatalf("score = %d, want 85 kept", e.Score)
+	}
+	if dirty, _ := st.DirtyEntries(ctx, 0); len(dirty) != 0 {
+		t.Fatalf("dirty = %+v; nothing should go back to AniList", dirty)
+	}
+}
+
 func TestMALPullCreatesEntriesKuroLacks(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},

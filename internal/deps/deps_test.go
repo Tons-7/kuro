@@ -11,6 +11,36 @@ import (
 	"testing"
 )
 
+// The binary is moved aside, never truncated, and a copy that fails leaves the old one in place.
+func TestInstallReplacesWholeOrNotAtAll(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "rqbit.exe")
+	if err := os.WriteFile(dest, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(dir, "download")
+	if err := os.WriteFile(src, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := install(src, dest); err != nil {
+		t.Fatalf("replacing the binary: %v", err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "new" {
+		t.Fatalf("dest = %q, want the new binary", got)
+	}
+
+	if err := install(filepath.Join(dir, "missing"), dest); err == nil {
+		t.Fatal("a failed copy reported success")
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "new" {
+		t.Fatalf("a failed install damaged the binary: %q", got)
+	}
+	if _, err := os.Stat(dest + ".new"); err == nil {
+		t.Error("the failed copy was left behind")
+	}
+}
+
 func TestKnownComponents(t *testing.T) {
 	for _, name := range []string{"rqbit", "ffmpeg", "mpv", "anime4k"} {
 		if !Known(name) {
@@ -19,6 +49,18 @@ func TestKnownComponents(t *testing.T) {
 	}
 	if Known("definitely-not-a-component") {
 		t.Error("an unknown name must not be installable")
+	}
+}
+
+// Another algorithm's digest compared as sha256 would refuse every install.
+func TestSha256OfIgnoresOtherAlgorithms(t *testing.T) {
+	if got := sha256Of("sha256:ab12"); got != "ab12" {
+		t.Errorf("sha256 digest = %q", got)
+	}
+	for _, d := range []string{"sha512:ab12", "ab12", ""} {
+		if got := sha256Of(d); got != "" {
+			t.Errorf("sha256Of(%q) = %q, want empty", d, got)
+		}
 	}
 }
 

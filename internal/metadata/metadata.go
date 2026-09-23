@@ -6,6 +6,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -494,6 +495,9 @@ type jikanResponse struct {
 // Flags fetches per-episode filler and recap booleans; recap exists nowhere in
 // the filler dataset, so this is its only source. Called lazily per show since
 // Jikan paginates at 100 and allows ~3 req/s.
+// ErrNotListed: no source lists the show's episodes yet.
+var ErrNotListed = errors.New("episode flags: episodes not listed yet")
+
 func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 	if malID == 0 {
 		return nil, nil
@@ -508,29 +512,41 @@ func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 	}
 	host := -1
 
+	fetch := func(h, page int) (jikanResponse, error) {
+		var res jikanResponse
+		body, err := c.get(ctx, c.url(hosts[h].name, fmt.Sprintf(hosts[h].pattern, malID, page)))
+		if err != nil {
+			return res, err
+		}
+		if err := json.Unmarshal(body, &res); err != nil {
+			return res, fmt.Errorf("episode flags: %w", err)
+		}
+		return res, nil
+	}
+
 	var out []EpisodeFlags
 	for page := 1; page <= 20; page++ {
-		var body []byte
+		var res jikanResponse
 		var err error
 
 		if host >= 0 {
-			body, err = c.get(ctx, c.url(hosts[host].name, fmt.Sprintf(hosts[host].pattern, malID, page)))
+			res, err = fetch(host, page)
 		} else {
-			for i, h := range hosts {
-				body, err = c.get(ctx, c.url(h.name, fmt.Sprintf(h.pattern, malID, page)))
-				if err == nil {
+			// A mirror that has not caught up answers 404 or nothing; the
+			// other may have the episodes.
+			for i := range hosts {
+				res, err = fetch(i, page)
+				if err == nil && len(res.Data) > 0 {
 					host = i
 					break
 				}
 			}
+			if err == nil && len(res.Data) == 0 {
+				return nil, ErrNotListed
+			}
 		}
 		if err != nil {
 			return out, err
-		}
-
-		var res jikanResponse
-		if err := json.Unmarshal(body, &res); err != nil {
-			return out, fmt.Errorf("episode flags: %w", err)
 		}
 		if len(res.Data) == 0 {
 			break

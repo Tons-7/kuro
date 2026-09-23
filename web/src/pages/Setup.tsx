@@ -5,7 +5,7 @@ import { cx } from '../lib/format'
 import { useSetup } from '../lib/queries'
 import { ComponentState } from '../components/ComponentState'
 import { WhereThingsGo } from '../components/WhereThingsGo'
-import { Badge, ErrorState, Skeleton } from '../components/ui'
+import { Badge, Button, ErrorState, LinkButton, Skeleton } from '../components/ui'
 
 /**
  * What kuro needs before it can play anything, and what each piece is for.
@@ -26,6 +26,7 @@ export function SetupPage() {
   })
 
   const install = useMutation({
+    meta: { inline: true },
     mutationFn: (name: string) => api.post(`/api/setup/install/${name}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['setup'] }),
   })
@@ -85,6 +86,11 @@ export function SetupPage() {
                   latest={c.latest}
                   onInstall={() => install.mutate(c.name)}
                   pending={install.isPending && install.variables === c.name}
+                  requestError={
+                    install.isError && install.variables === c.name
+                      ? (install.error as Error).message
+                      : undefined
+                  }
                 />
               </div>
             </li>
@@ -143,6 +149,19 @@ export function SetupPage() {
             </pre>
           </>
         )}
+        {(data.badIndexers ?? []).length > 0 && (
+          <div className="mt-3 rounded-md border border-recap/40 bg-recap/10 p-3 text-sm">
+            <p className="text-base-100">
+              {data.badIndexers!.length === 1 ? 'One block was' : `${data.badIndexers!.length} blocks were`}{' '}
+              skipped. Fix {data.badIndexers!.length === 1 ? 'it' : 'them'} and restart:
+            </p>
+            <ul className="mt-1 list-disc pl-5 text-xs text-base-300">
+              {data.badIndexers!.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {missing.length > 0 ? (
@@ -153,13 +172,13 @@ export function SetupPage() {
             <code className="text-base-300">{data.binDir}</code>.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button
+            <Button
+              variant="primary"
               onClick={() => fetchable.forEach((c) => install.mutate(c.name))}
               disabled={fetchable.length === 0}
-              className="rounded-md bg-accent-500 px-4 py-2 text-sm font-medium text-white hover:bg-accent-600 disabled:opacity-50"
             >
               Install {fetchable.length === 1 ? fetchable[0].label.toLowerCase() : 'everything missing'}
-            </button>
+            </Button>
             {/* Always a way out: most of these are optional, an install can
                 fail, and own-files viewers need none of them. */}
             <Link to="/" className="text-sm text-base-400 transition-colors hover:text-base-100">
@@ -169,13 +188,13 @@ export function SetupPage() {
         </section>
       ) : (
         <section className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4">
-          <p className="text-sm text-base-100">Everything is installed.</p>
-          <Link
-            to="/"
-            className="mt-3 inline-block rounded-md bg-accent-500 px-4 py-2 text-sm font-medium text-white hover:bg-accent-600"
-          >
+          <p className="text-sm text-base-100">
+            Everything is installed.
+            {data.indexers === 0 && ' Add a release source above to be able to play anything.'}
+          </p>
+          <LinkButton to="/" variant="primary" className="mt-3">
             Start watching
-          </Link>
+          </LinkButton>
         </section>
       )}
 

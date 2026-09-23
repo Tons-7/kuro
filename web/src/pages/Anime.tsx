@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, statusLabel, type Bookmark, type DiscoverItem } from '../lib/api'
-import { clockTime, cx, relativeTime, tint } from '../lib/format'
+import { clockTime, cx, readableTint, relativeTime, tint } from '../lib/format'
 import {
   useEpisodes,
   useFranchise,
@@ -17,12 +17,12 @@ import {
 } from '../lib/queries'
 import { CharacterRail } from '../components/CharacterRail'
 import { ShowExtra } from '../components/ShowExtra'
-import { EpisodeList } from '../components/EpisodeList'
+import { EpisodeList, isUnaired } from '../components/EpisodeList'
 import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
 import { Rail, RailItem } from '../components/Rail'
 import { StatusMenu } from '../components/StatusMenu'
 import { TrailerOverlay } from '../components/TrailerOverlay'
-import { Badge, ErrorState, Skeleton, useDismiss } from '../components/ui'
+import { Badge, ErrorState, Skeleton, useDismiss, useDocumentTitle } from '../components/ui'
 
 /** AniList and Jikan describe an anime differently; only the overlap is used. */
 interface AnimeDetail {
@@ -56,11 +56,146 @@ interface AnimeDetail {
     averageScore?: number
     season?: string
     seasonYear?: number
+    // AniList carries ids (linkable to Browse); Jikan only names.
+    studios?: { nodes?: { id: number; name: string }[] } | string[]
+    source?: string
+    duration?: number
+    startDate?: FuzzyDate
+    endDate?: FuzzyDate
+    nextAiringEpisode?: { episode: number; airingAt: number } | null
     // Jikan shape
     romaji?: string
     cover?: string
     Description?: string
   }
+}
+
+interface FuzzyDate {
+  year?: number | null
+  month?: number | null
+  day?: number | null
+}
+
+function fuzzy(d?: FuzzyDate): string | null {
+  if (!d?.year) return null
+  if (!d.month) return String(d.year)
+  return new Date(d.year, d.month - 1, d.day ?? 1).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    ...(d.day ? { day: 'numeric' } : {}),
+  })
+}
+
+const STATUS: Record<string, { label: string; tone: string; live?: boolean }> = {
+  RELEASING: { label: 'Airing', tone: 'text-emerald-300 ring-emerald-400/40', live: true },
+  FINISHED: { label: 'Finished', tone: 'text-base-200 ring-white/15' },
+  NOT_YET_RELEASED: { label: 'Upcoming', tone: 'text-sky-300 ring-sky-400/40' },
+  HIATUS: { label: 'On hiatus', tone: 'text-amber-300 ring-amber-400/40' },
+  CANCELLED: { label: 'Cancelled', tone: 'text-red-300 ring-red-400/40' },
+}
+
+/** The facts under the title, as chips: what, how long, how far along, and how good. */
+function FactChips({ media }: { media: AnimeDetail['anime'] }) {
+  const status = media.status ? STATUS[media.status] : undefined
+  const aired = media.nextAiringEpisode ? media.nextAiringEpisode.episode - 1 : null
+  const episodes =
+    media.status === 'RELEASING' && aired && media.episodes && aired < media.episodes
+      ? `${aired}/${media.episodes} eps`
+      : media.episodes
+        ? `${media.episodes} ${media.episodes === 1 ? 'ep' : 'eps'}`
+        : aired
+          ? `${aired} eps`
+          : null
+  const chip = 'flex items-center gap-1.5 rounded-lg bg-base-950/60 px-2.5 py-1 ring-1 backdrop-blur-md'
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
+      {media.averageScore ? (
+        <span className={cx(chip, 'text-amber-300 ring-amber-400/30')}>★ {(media.averageScore / 10).toFixed(1)}</span>
+      ) : null}
+      {media.format && (
+        <span className={cx(chip, 'text-base-100 uppercase ring-white/10')}>{media.format.replace('_', ' ')}</span>
+      )}
+      {episodes && <span className={cx(chip, 'text-base-100 uppercase ring-white/10')}>{episodes}</span>}
+      {media.duration ? <span className={cx(chip, 'text-base-300 ring-white/10')}>{media.duration} min</span> : null}
+      {status && (
+        <span className={cx(chip, 'uppercase', status.tone)}>
+          {status.live && (
+            <span className="relative flex size-1.5">
+              <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative size-1.5 rounded-full bg-emerald-400" />
+            </span>
+          )}
+          {status.label}
+        </span>
+      )}
+      {media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > Date.now() && (
+        <span className={cx(chip, 'text-emerald-300 ring-emerald-400/30')}>
+          Ep {media.nextAiringEpisode.episode} {relativeTime(media.nextAiringEpisode.airingAt)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Aired, studio, source: the second things people look for, in one grid. */
+function FactGrid({ media }: { media: AnimeDetail['anime'] }) {
+  const start = fuzzy(media.startDate)
+  const end = fuzzy(media.endDate)
+  const aired = start ? (media.status === 'RELEASING' ? `${start} – now` : end && end !== start ? `${start} – ${end}` : start) : null
+  const rows: Array<[string, ReactNode]> = []
+  if (aired) rows.push(['Aired', aired])
+  if (media.studios && (Array.isArray(media.studios) ? media.studios.length : media.studios.nodes?.length))
+    rows.push(['Studio', <Studios key="s" studios={media.studios} bare />])
+  if (media.source) rows.push(['Source', media.source.replace(/_/g, ' ').toLowerCase()])
+  if (media.season && media.seasonYear)
+    rows.push(['Season', `${media.season.charAt(0)}${media.season.slice(1).toLowerCase()} ${media.seasonYear}`])
+  if (rows.length === 0) return null
+  return (
+    <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+      {rows.map(([label, value]) => (
+        <div key={label} className="min-w-0">
+          <dt className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">{label}</dt>
+          <dd className="mt-0.5 truncate text-base-100 capitalize">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/** Who made it; an AniList studio opens its other work in Browse. */
+function Studios({
+  studios,
+  bare,
+}: {
+  studios?: { nodes?: { id: number; name: string }[] } | string[]
+  /** Without the leading separator, for use in a labelled grid. */
+  bare?: boolean
+}) {
+  const list = Array.isArray(studios)
+    ? studios.map((name) => ({ id: 0, name }))
+    : (studios?.nodes ?? [])
+  if (list.length === 0) return null
+  return (
+    <span>
+      {!bare && '· '}
+      {list.map((s, i) => (
+        <span key={`${s.id}-${s.name}`}>
+          {i > 0 && ', '}
+          {s.id ? (
+            <Link
+              to={`/browse?studio=${s.id}&studioName=${encodeURIComponent(s.name)}`}
+              className="text-base-200 underline decoration-base-600 underline-offset-2 transition-colors hover:text-white hover:decoration-accent-400"
+              title={`More from ${s.name}`}
+            >
+              {s.name}
+            </Link>
+          ) : (
+            s.name
+          )}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 /**
@@ -133,8 +268,15 @@ export function Anime() {
 
   const refreshQueue = () => qc.invalidateQueries({ queryKey: ['download-queue'] })
 
+  // Exactly the aired episodes not already on disk: the server alone could only
+  // count to a total, which an airing show often does not have.
+  const toDownload = (episodes.data?.items ?? [])
+    .filter((e) => !isUnaired(e) && !e.onDisk)
+    .map((e) => e.number)
   const downloadAll = useMutation({
-    mutationFn: () => api.post<{ queued: number }>('/api/download/all', { animeId: id }),
+    meta: { inline: true },
+    mutationFn: () =>
+      api.post<{ queued: number }>('/api/download/episodes', { animeId: id, episodes: toDownload }),
     onSuccess: refreshQueue,
   })
 
@@ -167,6 +309,7 @@ export function Anime() {
   const ready = detail.isSuccess && episodes.isSuccess
 
   const navigate = useNavigate()
+  useDocumentTitle(detail.data?.title)
   const rewatch = useSetStatus()
   const startRewatch = () =>
     rewatch.mutate(
@@ -185,7 +328,8 @@ export function Anime() {
   if (!Number.isFinite(id) || id === 0) {
     return <ErrorState error={new Error('Unknown anime')} />
   }
-  if (detail.isError) {
+  // A failed refresh keeps the page it already has (and any note being typed).
+  if (detail.isError && !detail.data) {
     return <ErrorState error={detail.error} retry={() => detail.refetch()} />
   }
 
@@ -209,54 +353,63 @@ export function Anime() {
         {/* Its own layer so the section stays overflow-visible (menus were
             clipped by the banner's corners); fixed height, not inset-0, so
             expanding the synopsis doesn't re-crop the image. */}
-        {banner && (
-          <div className="absolute inset-x-0 top-0 h-[26rem] overflow-hidden sm:rounded-t-xl">
-            <img src={banner} alt="" className="size-full object-cover object-center" />
-            <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/85 to-base-950/40" />
+        {/* The banner, or the cover blurred into one: a page with neither
+            read as a plain grey slab. */}
+        {(banner || cover) && (
+          <div className="absolute inset-x-0 top-0 h-[26rem] overflow-hidden sm:rounded-t-2xl">
+            <img
+              src={banner ?? cover}
+              alt=""
+              className={cx(
+                'size-full object-cover object-center',
+                !banner && 'scale-125 opacity-50 blur-2xl',
+              )}
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/80 to-base-950/30" />
+            <div className="absolute inset-0 bg-gradient-to-r from-base-950/70 to-transparent" />
           </div>
         )}
 
-        <div className="relative flex flex-col gap-5 p-4 sm:flex-row sm:p-6">
+        <div className="relative flex flex-col gap-6 p-4 sm:flex-row sm:p-8 sm:pt-28">
           {detail.isPending ? (
-            <Skeleton className="h-64 w-44 shrink-0" />
+            <Skeleton className="h-72 w-48 shrink-0 rounded-card" />
           ) : cover ? (
             <img
               src={cover}
               alt=""
-              className="h-64 w-44 shrink-0 rounded-card object-cover shadow-lift"
+              className="h-72 w-48 shrink-0 rounded-card object-cover shadow-lift ring-1 ring-white/10"
+              style={colour ? { boxShadow: `0 24px 60px -20px ${tint(colour, 0.55)}` } : undefined}
             />
           ) : null}
 
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 sm:pt-4">
             {detail.isPending ? (
-              <Skeleton className="h-8 w-2/3" />
+              <Skeleton className="h-10 w-2/3" />
             ) : (
-              <h1 className="text-2xl leading-tight font-semibold text-white text-balance sm:text-3xl">
+              <h1 className="font-display text-3xl leading-[1.1] font-bold tracking-tight text-white text-balance sm:text-5xl">
                 {detail.data?.title}
               </h1>
             )}
 
-            <div className="mt-2.5 flex flex-wrap items-center gap-2 text-sm text-base-300">
-              {media?.averageScore ? (
-                <span className="rounded-md bg-accent-500/15 px-2 py-0.5 font-medium text-accent-300">
-                  ★ {media.averageScore}
-                </span>
-              ) : null}
-              {media?.format && <span>{media.format.replace('_', ' ')}</span>}
-              {media?.episodes ? <span>· {media.episodes} episodes</span> : null}
-              {media?.seasonYear ? <span>· {media.seasonYear}</span> : null}
-              {detail.data?.source === 'corpus' && (
+            {media && <FactChips media={media} />}
+            {detail.data?.source === 'corpus' && (
+              <p className="mt-2">
                 <Badge>Limited info — MyAnimeList unreachable</Badge>
-              )}
-            </div>
+              </p>
+            )}
 
             {media?.genres && media.genres.length > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
+              <div className="mt-3 flex flex-wrap gap-1.5">
                 {media.genres.slice(0, 6).map((genre) => (
                   <Link
                     key={genre}
                     to={`/browse?genres=${encodeURIComponent(genre)}`}
-                    className="rounded-md bg-base-850/80 px-2 py-0.5 text-xs text-base-300 backdrop-blur-sm transition-colors hover:bg-base-750 hover:text-white"
+                    className="rounded-full px-3 py-1 text-xs font-medium backdrop-blur-sm transition-colors hover:bg-white/10 hover:text-white"
+                    style={{
+                      color: readableTint(colour) ?? 'var(--color-accent-300)',
+                      background: tint(colour, 0.14) ?? 'rgb(111 92 255 / 0.14)',
+                      boxShadow: `inset 0 0 0 1px ${tint(colour, 0.45) ?? 'rgb(139 124 255 / 0.4)'}`,
+                    }}
                   >
                     {genre}
                   </Link>
@@ -265,12 +418,20 @@ export function Anime() {
             )}
 
             {description && <Synopsis text={description} />}
+            {media && <FactGrid media={media} />}
 
             <div className="mt-5 flex flex-wrap items-center gap-2">
-              {action.kind === 'play' ? (
+              {/* Until the list and episodes are in, the right button is not
+                  known; guessing "Watch episode 1" then swapping misled. */}
+              {!ready ? (
+                <>
+                  <Skeleton className="h-9 w-52 rounded-md" />
+                  <Skeleton className="h-9 w-28 rounded-md" />
+                </>
+              ) : action.kind === 'play' ? (
                 <Link
                   to={`/watch/${id}/${first}`}
-                  className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-base-950 transition-transform hover:scale-[1.02] active:scale-95"
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-accent-400 to-accent-500 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_24px_-8px_rgb(111_92_255/0.7)] transition-[transform,filter] hover:scale-[1.02] hover:brightness-110 active:scale-95"
                   style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
                 >
                   <PlayIcon />
@@ -281,7 +442,7 @@ export function Anime() {
                   onClick={startRewatch}
                   disabled={rewatch.isPending}
                   title="Marks the show as rewatching, which counts progress from the start again"
-                  className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-base-950 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-60"
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-accent-400 to-accent-500 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_24px_-8px_rgb(111_92_255/0.7)] transition-[transform,filter] hover:scale-[1.02] hover:brightness-110 active:scale-95 disabled:opacity-60"
                   style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
                 >
                   <RewatchIcon />
@@ -297,7 +458,7 @@ export function Anime() {
                 </span>
               )}
 
-              <StatusMenu animeId={id} current={detail.data?.listStatus} />
+              {ready && <StatusMenu animeId={id} current={detail.data?.listStatus} />}
               {detail.isSuccess && <ScoreSelect animeId={id} score={detail.data.score ?? 0} />}
               {detail.isSuccess && (
                 <FavouriteButton animeId={id} bookmark={detail.data.bookmark} />
@@ -322,15 +483,18 @@ export function Anime() {
                   <span className="size-2 animate-pulse rounded-full bg-accent-400" />
                   {waiting} queued · stop
                 </button>
-              ) : (
+              ) : toDownload.length > 0 ? (
                 <button
                   onClick={() => downloadAll.mutate()}
                   disabled={downloadAll.isPending}
+                  title={`Queues episodes ${toDownload[0]}–${toDownload[toDownload.length - 1]}, one at a time`}
                   className="rounded-md bg-base-800/90 px-4 py-2 text-sm font-medium text-base-100 backdrop-blur-sm transition-colors hover:bg-base-700 disabled:opacity-50"
                 >
-                  {downloadAll.isPending ? 'Queuing…' : 'Download all'}
+                  {downloadAll.isPending
+                    ? 'Queuing…'
+                    : `Download ${toDownload.length === 1 ? '1 episode' : `all ${toDownload.length}`}`}
                 </button>
-              )}
+              ) : null}
             </div>
 
             {downloadAll.isError && (
@@ -387,7 +551,6 @@ export function Anime() {
           <EpisodeList
             animeId={id}
             episodes={list}
-            progress={progress}
             cover={banner ?? cover}
             upNext={action.kind === 'play' ? first : undefined}
             selectable
@@ -664,7 +827,7 @@ function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bo
 
   return (
     <button
-      onClick={() => set.mutate({ ...bookmark, favourite: !on })}
+      onClick={() => set.mutate({ favourite: !on })}
       disabled={set.isPending}
       aria-pressed={on}
       title={on ? 'Remove from favourites' : 'Add to favourites'}
@@ -678,7 +841,8 @@ function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bo
   )
 }
 
-// A private note, saved when the field loses focus.
+// A private note, saved when the field loses focus. Only the note is sent, so
+// a Favourite click landing with the blur cannot revert it.
 function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const set = useSetBookmark(animeId)
   const [text, setText] = useState(bookmark?.note ?? '')
@@ -700,7 +864,7 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
       value={text}
       onChange={(e) => setText(e.target.value)}
       onBlur={() => {
-        if (text !== (bookmark?.note ?? '')) set.mutate({ ...bookmark, note: text })
+        if (text !== (bookmark?.note ?? '')) set.mutate({ note: text })
       }}
       placeholder="Your note — only you see it"
       rows={2}

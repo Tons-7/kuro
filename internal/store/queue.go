@@ -67,24 +67,22 @@ func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int
 // NextQueued claims the oldest pending episode and marks it active, so a
 // restart mid-download does not leave a row that nothing will ever pick up.
 func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
+	// One statement: a cancel between a read and the claim would otherwise be
+	// downloaded anyway.
 	var q QueuedDownload
-	err := s.r.QueryRowContext(ctx, `
-		SELECT anime_id, ep_key, episode, season
-		FROM download_queue
-		WHERE state = 'pending'
-		ORDER BY queued_at, episode
-		LIMIT 1`).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
+	err := s.w.QueryRowContext(ctx, `
+		UPDATE download_queue SET state = 'active', started_at = ?
+		WHERE state = 'pending' AND (anime_id, ep_key) = (
+		    SELECT anime_id, ep_key FROM download_queue
+		    WHERE state = 'pending'
+		    ORDER BY queued_at, episode
+		    LIMIT 1)
+		RETURNING anime_id, ep_key, episode, season`,
+		time.Now().Unix()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
 	}
 	if err != nil {
-		return QueuedDownload{}, false, err
-	}
-
-	if _, err := s.w.ExecContext(ctx, `
-		UPDATE download_queue SET state = 'active', started_at = ?
-		WHERE anime_id = ? AND ep_key = ?`,
-		time.Now().Unix(), q.AnimeID, q.EpKey); err != nil {
 		return QueuedDownload{}, false, err
 	}
 	q.State = "active"

@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func TestAniListRunStopsOnUnauthorized(t *testing.T) {
 	sync := NewSync(st, al, discard()).WithImporter(NewImporter(st, al, discard()))
 
 	rep, err := sync.Run(ctx)
-	if err != nil || rep.Failed != 1 || rep.Pulled != 0 {
+	if !errors.Is(err, ErrReconnect) || rep.Failed != 1 || rep.Pulled != 0 {
 		t.Fatalf("report=%+v err=%v", rep, err)
 	}
 	if calls != 1 {

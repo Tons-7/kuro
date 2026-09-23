@@ -28,6 +28,14 @@ export interface CardAnime {
   description?: string | null
   /** Airing state, which the list status field shadows on a library item. */
   airing?: string | null
+  banner?: string | null
+  malId?: number | null
+  nextEpisode?: number | null
+  nextAiringAt?: number | null
+  startDate?: string | null
+  endDate?: string | null
+  duration?: number | null
+  studios?: { id: number; name: string }[] | null
 }
 
 export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
@@ -36,14 +44,15 @@ export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
   // Both carry a "status", meaning opposite things: on a search result it is
   // the airing state, on a library row the list tag.
   const fromDiscover = 'onList' in item
+  const nextEpisode = (fromDiscover ? discover.nextEpisode : library.nextEpisode) ?? null
   return {
     id: item.id,
     title: item.title,
     cover: item.cover ?? null,
     color: (discover.color ?? library.color) ?? null,
     episodes: item.episodes ?? null,
-    // A long-runner has no announced total; what has aired stands in for it.
-    aired: !item.episodes && library.nextEpisode ? library.nextEpisode - 1 : null,
+    // Out so far while airing: "10/13", or "10" for a run with no total yet.
+    aired: nextEpisode ? nextEpisode - 1 : null,
     format: discover.format ?? null,
     score: discover.score ?? null,
     progress: item.progress,
@@ -54,6 +63,14 @@ export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
     genres: discover.Genres ?? null,
     description: discover.description ?? null,
     airing: fromDiscover ? (discover.status ?? null) : null,
+    banner: discover.banner ?? null,
+    malId: discover.malId ?? null,
+    nextEpisode,
+    nextAiringAt: (fromDiscover ? discover.nextAiringAt : library.nextAiringAt) ?? null,
+    startDate: discover.startDate ?? null,
+    endDate: discover.endDate ?? null,
+    duration: discover.duration ?? null,
+    studios: discover.studios ?? null,
   }
 }
 
@@ -65,9 +82,25 @@ export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
 export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
   const href = to ?? `/anime/${anime.id}`
   const accent = tint(anime.color, 0.55)
+  const watched = anime.progress ?? 0
+  const released = anime.aired ?? anime.episodes
+  const nextEpisode =
+    anime.airing === 'NOT_YET_RELEASED' || (released && watched >= released) ? null : watched + 1
 
   return (
-    <HoverInfo anime={{ ...anime, status: anime.airing }}>
+    <HoverInfo
+      anime={{
+        ...anime,
+        status: anime.airing,
+        listStatus: anime.status,
+        play: nextEpisode
+          ? {
+              to: `/watch/${anime.id}/${nextEpisode}`,
+              label: watched > 0 ? `Continue ep ${nextEpisode}` : 'Watch ep 1',
+            }
+          : undefined,
+      }}
+    >
     <div className="group/card relative">
       <Link
         to={href}
@@ -103,48 +136,73 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
 
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-base-950/90 via-base-950/10 to-transparent opacity-80 transition-opacity duration-200 group-hover/card:opacity-100" />
 
-          {anime.badge && (
+          {anime.badge ? (
             <div className="absolute top-1.5 left-1.5">
               <Badge tone="overlay">{anime.badge}</Badge>
             </div>
-          )}
+          ) : anime.airing === 'RELEASING' ? (
+            // Airing, and how far: the thing a poster could not say before.
+            <span className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-base-950/80 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-400/30 backdrop-blur-sm">
+              <span className="size-1.5 rounded-full bg-emerald-400" />
+              {anime.aired ? `Ep ${anime.aired}` : 'Airing'}
+            </span>
+          ) : null}
 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 p-2">
             {typeof anime.percent === 'number' && anime.percent > 0 && (
               <ProgressBar value={anime.percent} className="mb-1.5" />
             )}
-            <div className="flex items-center gap-1.5 text-[11px] text-base-300">
+            {/* One line whatever the card width: on a phone's three columns the
+                episode count gives way before anything wraps. */}
+            <div className="flex items-center gap-1.5 text-[11px] whitespace-nowrap text-base-300">
               {anime.format && <span>{anime.format.replace('_', ' ')}</span>}
               {anime.episodes ? (
-                <span>· {anime.episodes} ep</span>
+                <span className="min-w-0 truncate" title={anime.aired ? `${anime.aired} of ${anime.episodes} out so far` : undefined}>
+                  · {anime.aired && anime.aired < anime.episodes ? `${anime.aired}/` : ''}
+                  {anime.episodes} ep
+                </span>
               ) : anime.aired ? (
-                <span title="Still airing; no total announced">· {anime.aired} aired</span>
+                <span className="min-w-0 truncate" title="Still airing; no total announced">· {anime.aired} aired</span>
               ) : null}
               {anime.myScore ? (
-                <span className="ml-auto text-accent-300" title="Your score">
+                <span className="ml-auto shrink-0 text-accent-300" title="Your score">
                   ★ {Math.round(anime.myScore / 10)}/10
                 </span>
               ) : anime.score ? (
-                <span className="ml-auto">★ {anime.score}</span>
+                // Out of ten, as everywhere else shows it.
+                <span className="ml-auto shrink-0 text-amber-300/90">★ {(anime.score / 10).toFixed(1)}</span>
               ) : null}
             </div>
-          </div>
-
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/card:opacity-100">
-            <span className="grid size-11 place-items-center rounded-full bg-base-950/70 ring-1 ring-white/20 backdrop-blur-sm">
-              <PlayIcon />
-            </span>
           </div>
         </div>
       </Link>
 
-      <div className="absolute top-1.5 right-1.5 opacity-0 transition-opacity duration-200 group-hover/card:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+      {/* A sibling over the poster, not inside its link: the play button plays,
+          the rest of the card opens the show. Nothing next to play, no button. */}
+      {nextEpisode && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 grid aspect-[2/3] place-items-center">
+          <Link
+            to={`/watch/${anime.id}/${nextEpisode}`}
+            aria-label={`Play episode ${nextEpisode}`}
+            title={`Play episode ${nextEpisode}`}
+            // Never on touch: unseen there, a tap on the poster's middle would
+            // play instead of opening the show.
+            className="pointer-events-auto grid size-11 place-items-center rounded-full bg-base-950/70 opacity-0 ring-1 ring-white/20 backdrop-blur-sm transition-[opacity,transform] duration-200 group-hover/card:opacity-100 hover:scale-110 hover:bg-accent-500 focus-visible:opacity-100 [@media(hover:none)]:hidden"
+          >
+            <PlayIcon />
+          </Link>
+        </div>
+      )}
+
+      {/* Shown wherever there is no hover (tablets too, not just narrow
+          screens): invisible there, it still caught taps. */}
+      <div className="absolute top-1.5 right-1.5 opacity-0 transition-opacity duration-200 group-hover/card:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
         <StatusMenu animeId={anime.id} current={anime.status} compact />
       </div>
 
       <Link to={href} className="mt-2 block">
         <p
-          className="line-clamp-2 text-sm leading-snug text-base-200 transition-colors group-hover/card:text-white"
+          className="line-clamp-2 text-sm leading-snug font-medium text-base-200 transition-colors group-hover/card:text-white"
           title={anime.title}
         >
           {anime.title}

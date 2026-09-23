@@ -130,6 +130,11 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	}
 	batches := f.searchAll(ctx, source, queries)
 
+	// Every site failing is an outage, not "nobody released it".
+	if err := allFailed(batches); err != nil {
+		return Candidates{}, err
+	}
+
 	// Trackers match every token, so one romanisation spelled differently
 	// ("Semi" for "Zemi") matches nothing. Only paid for when nothing was found.
 	if countResults(batches) == 0 {
@@ -185,6 +190,20 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	return out, nil
 }
 
+func allFailed(batches []searchBatch) error {
+	var errs []error
+	for _, b := range batches {
+		if b.err == nil {
+			return nil
+		}
+		errs = append(errs, b.err)
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("release search failed: %w", errors.Join(errs...))
+}
+
 func countResults(batches []searchBatch) int {
 	var n int
 	for _, b := range batches {
@@ -203,6 +222,11 @@ func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error)
 
 	seen := map[int]struct{}{}
 	for _, r := range found.Results {
+		// Kept for the picker, but its numbers are another show's, and a derived
+		// row is never removed.
+		if r.WrongShow {
+			continue
+		}
 		rel := r.Release
 		switch {
 		// A batch states the range it holds, which is the whole list at once.
@@ -302,13 +326,7 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 	// A caller that named no season gets the one the title states, or the first.
 	// Otherwise episode 1 would accept an "S02E01" release, a different episode.
 	if req.Season == 0 {
-		req.Season = 1
-		for _, t := range append([]string{english}, titles...) {
-			if n := parse.SeasonOf(t); n > 0 {
-				req.Season = n
-				break
-			}
-		}
+		req.Season = f.defaultSeason(ctx, req.AnimeID, append([]string{english}, titles...))
 	}
 
 	req.Alias, _ = f.store.EpisodeAlias(ctx, req.AnimeID, req.Episode)
@@ -317,6 +335,40 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 	}
 	req.Cour = f.cour(ctx, req, titles, english)
 	return req
+}
+
+// defaultSeason is the season a title states, else a sequel's numeral: roman
+// outright, a digit only when this is not the franchise's first entry (Kaiju
+// No. 8 is season one).
+func (f *Finder) defaultSeason(ctx context.Context, animeID int, titles []string) int {
+	for _, t := range titles {
+		if n := parse.SeasonOf(t); n > 0 {
+			return n
+		}
+	}
+	for _, t := range titles {
+		n, roman := parse.NumeralSeason(t)
+		if n == 0 {
+			continue
+		}
+		if roman || f.laterSeason(ctx, animeID) {
+			return n
+		}
+	}
+	return 1
+}
+
+func (f *Finder) laterSeason(ctx context.Context, animeID int) bool {
+	franchise, err := f.store.Franchise(ctx, animeID)
+	if err != nil {
+		return false
+	}
+	for _, s := range franchise.Seasons {
+		if s.ID == animeID {
+			return s.Ordinal > 1
+		}
+	}
+	return false
 }
 
 // derivedAlias counts the episode through the franchise, since catalogues no
@@ -640,7 +692,8 @@ func confirms(rel parse.Release, req Request) bool {
 		return false
 	}
 	stated, inBatch := numbered(rel, req)
-	return stated || inBatch
+	// A pack stating no range covers anything, which confirms nothing.
+	return stated || (inBatch && rel.Episode > 0)
 }
 
 // verifies rejects the demonstrably wrong episode, cour or season. A release

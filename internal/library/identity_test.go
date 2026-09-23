@@ -12,6 +12,33 @@ func identifies(t *testing.T, releaseTitle string, known ...string) bool {
 	return identifiesShow(parse.Parse(releaseTitle), releaseTitle, known)
 }
 
+// BD and dual-audio groups name both titles; one of them is enough.
+func TestEitherNameInAPairedTitle(t *testing.T) {
+	known := []string{"Kusuriya no Hitorigoto 2nd Season", "The Apothecary Diaries Season 2"}
+	for _, title := range []string{
+		"[DB] Kusuriya no Hitorigoto 2nd Season | The Apothecary Diaries Season 2 [Dual Audio 10bit 1080p][HEVC-x265]",
+		"[KawaSubs] The Apothecary Diaries - S02E20 [1080p] | Kusuriya no Hitorigoto - 44",
+	} {
+		if !identifies(t, title, known...) {
+			t.Errorf("rejected its own show: %s", title)
+		}
+	}
+	if !identifies(t, "[Cytox] DAN DA DAN S02 [1080p] | Dandadan", "Dandadan") {
+		t.Error("rejected Dandadan")
+	}
+}
+
+// A spin-off's name contains the main show's; extra words are another show.
+func TestSpinOffIsNotTheMainShow(t *testing.T) {
+	known := []string{"Tensei shitara Slime Datta Ken", "That Time I Got Reincarnated as a Slime"}
+	if identifies(t, "[SubsPlease] Tensura Nikki - Tensei Shitara Slime Datta Ken - 05 (1080p)", known...) {
+		t.Error("the spin-off passed as the main show")
+	}
+	if !identifies(t, "[SubsPlease] Tensei Shitara Slime Datta Ken - 05 (1080p)", known...) {
+		t.Error("the main show was rejected")
+	}
+}
+
 // Monster is one common word, so every search for it returned other shows and
 // the scorer preferred whichever of them was newest and highest resolution.
 func TestMonsterOnlyMatchesMonster(t *testing.T) {

@@ -88,6 +88,15 @@ type run struct {
 	stderr strings.Builder
 	from   int
 	exited chan struct{}
+	// Files older than this past a gap are an earlier pass's, kept for an
+	// instant seek but no proof of this pass's progress.
+	began time.Time
+}
+
+// wrote reports whether segment n is this pass's own output.
+func (r *run) wrote(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0 && !info.ModTime().Before(r.began)
 }
 
 // SeekHook is told where playback jumped to, as a fraction of the file, so the
@@ -187,10 +196,15 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 	}
 
 	info, err := m.prober.Probe(ctx, probeSource)
+	probed := "disk"
+	if probeSource == source {
+		probed = "source"
+	}
 	if err != nil && probeSource != source {
 		m.log.Warn("probe from disk failed, reading through the engine",
 			"session", id, "err", err)
 		info, err = m.prober.Probe(ctx, source)
+		probed = "engine"
 	}
 	if err != nil {
 		return nil, err
@@ -233,7 +247,8 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 	m.mu.Unlock()
 
 	m.log.Info("stream session opened", "id", id,
-		"duration", int(info.Duration), "plan", s.Plan.Reason)
+		"duration", int(info.Duration), "plan", s.Plan.Reason, "probed", probed,
+		"audio", len(info.Audio), "subtitles", len(info.Subtitles))
 	return s, nil
 }
 
@@ -559,7 +574,7 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 
 		// A segment is only known complete once the next one appears, the
 		// encoder has exited, or it is the last one the playlist advertises.
-		if fileReady(path) && (fileReady(s.SegmentPath(n+1)) || n >= s.Segments-1 || !s.running()) {
+		if fileReady(path) && (s.nextStarted(n) || n >= s.Segments-1 || !s.running()) {
 			s.touch()
 			return path, nil
 		}
@@ -640,11 +655,24 @@ func (s *Session) advanceHead() {
 		return
 	}
 	// A segment counts once the next one has started, the same "complete" rule
-	// WaitSegment returns on. Everything from the pass start upward was cleared
-	// at launch, so a file here is this pass's own, not a stale one.
-	for fileReady(s.SegmentPath(s.headTo+1)) && fileReady(s.SegmentPath(s.headTo+2)) {
+	// WaitSegment returns on. Only this pass's files count: one left past a gap
+	// by an earlier pass would mark a half-written segment done.
+	for s.run.wrote(s.SegmentPath(s.headTo+1)) && s.run.wrote(s.SegmentPath(s.headTo+2)) {
 		s.headTo++
 	}
+}
+
+// nextStarted is WaitSegment's completeness proof for n: the following file,
+// from the running pass when that pass is the one writing n.
+func (s *Session) nextStarted(n int) bool {
+	s.mu.Lock()
+	r := s.run
+	s.mu.Unlock()
+	next := s.SegmentPath(n + 1)
+	if r != nil && n >= r.from {
+		return r.wrote(next)
+	}
+	return fileReady(next)
 }
 
 // ensureHead starts the encoder, or moves it, when the requested segment is
@@ -799,7 +827,7 @@ func (s *Session) startLocked(from int) error {
 }
 
 func (s *Session) launch(from int) (*run, error) {
-	r := &run{from: from, exited: make(chan struct{})}
+	r := &run{from: from, exited: make(chan struct{}), began: time.Now()}
 	r.cmd = exec.Command(s.ffmpeg, s.args(float64(from)*SegmentSeconds, from)...)
 	r.cmd.Dir = s.dir
 	// Without this an encoder that dies on startup leaves no trace at all, and

@@ -385,8 +385,8 @@ func TestPauseUnfinishedKeepsWhatIsAskedFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || kept != 1 || checking != 0 {
-		t.Errorf("paused %d kept %d checking %d, want 1, 1, 0", n, kept, checking)
+	if n != 1 || kept != 1 || len(checking) != 0 {
+		t.Errorf("paused %d kept %d checking %v, want 1, 1, none", n, kept, checking)
 	}
 	if !slices.Equal(paused, []string{"/torrents/1/pause"}) {
 		t.Errorf("paused %v; only the unfinished torrent nobody asked to keep", paused)
@@ -419,8 +419,8 @@ func TestPauseUnfinishedLeavesCheckingTorrentsAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || checking != 1 {
-		t.Errorf("paused %d checking %d, want 1 and 1", n, checking)
+	if n != 1 || len(checking) != 1 {
+		t.Errorf("paused %d checking %v, want 1 and 1", n, checking)
 	}
 	if !slices.Equal(paused, []string{"/torrents/2/pause"}) {
 		t.Errorf("paused %v; the checking torrent must be left to finish", paused)

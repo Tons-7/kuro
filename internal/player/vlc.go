@@ -179,7 +179,9 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 		default:
 		}
 	}
-	var started, paused, ended bool
+	var started, paused, ended, reached bool
+	var failures int
+	const unreachableAfter = 30
 	var lastPos, lastLen float64
 	lastSkip := -1.0
 	tick := time.NewTicker(time.Second)
@@ -204,8 +206,15 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 		}
 		st, err := v.status(ctl)
 		if err != nil {
+			// The port is picked then released before VLC binds it; if another
+			// process took it, say so rather than poll a dead interface silently.
+			if failures++; failures == unreachableAfter && !reached {
+				v.log.Warn("VLC control interface unreachable; this episode will not be tracked",
+					"port", ctl.port, "err", err)
+			}
 			continue
 		}
+		reached = true
 		switch st.State {
 		case "playing", "paused":
 			started = true

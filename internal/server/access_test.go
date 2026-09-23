@@ -221,6 +221,89 @@ func TestDefaultConfigCarriesTheEngineAddress(t *testing.T) {
 	}
 }
 
+// A page on another site can make the browser POST to 127.0.0.1, where the
+// loopback exemption needs no token. Clearing downloads that way is data loss.
+func TestCrossSitePostsAreRefused(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	post := func(header map[string]string) int {
+		req := httptest.NewRequest("POST", "/api/downloads/clear?scope=all", nil)
+		req.RemoteAddr = "127.0.0.1:5555"
+		req.Host = "127.0.0.1:4321"
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for _, header := range []map[string]string{
+		{"Origin": "https://evil.example"},
+		{"Origin": "null"},
+		{"Origin": "http://127.0.0.1:8080"},
+		{"Sec-Fetch-Site": "cross-site"},
+	} {
+		if code := post(header); code != http.StatusForbidden {
+			t.Errorf("%v: status %d, want 403", header, code)
+		}
+	}
+	for _, header := range []map[string]string{
+		{"Origin": "http://127.0.0.1:4321"},
+		{"Sec-Fetch-Site": "same-origin"},
+		{}, // a script or the harness, not a browser
+	} {
+		if code := post(header); code == http.StatusForbidden {
+			t.Errorf("%v: refused kuro's own request", header)
+		}
+	}
+}
+
+// A paired phone must not point the library at the host's drives or move its
+// database, nor link the host to its own tracker account.
+func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	h.server.token = "s3cret"
+	for _, route := range []struct{ method, path, body string }{
+		{"POST", "/api/local/paths", `{"paths":["C:\\"]}`},
+		{"POST", "/api/setup/data-dir", `{"path":"\\\\attacker\\share"}`},
+		{"GET", "/api/auth/login", ""},
+		{"GET", "/api/mal/auth/login", ""},
+		{"GET", "/callback?state=x&code=y", ""},
+		{"GET", "/mal/callback?state=x&code=y", ""},
+		{"POST", "/api/access/network", `{"lan":true}`},
+	} {
+		req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
+		req.RemoteAddr = "192.168.1.50:5555"
+		req.Header.Set("Authorization", "Bearer s3cret")
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s from a paired device: %d, want 403", route.method, route.path, rec.Code)
+		}
+	}
+}
+
+// Switching network access off must shut out a phone still on a kept-alive
+// connection, token or not.
+func TestNetworkOffRefusesPairedDevices(t *testing.T) {
+	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil)
+	h.server.token = "s3cret"
+	h.server.rebind = func(string) error { return nil }
+	paired := http.Header{"Authorization": {"Bearer s3cret"}}
+
+	h.store.SetSetting(t.Context(), lanSetting, "true")
+	if res := h.from(t, "192.168.1.50:5555", "/api/health", paired); res.StatusCode != http.StatusOK {
+		t.Fatalf("network on: %d, want 200", res.StatusCode)
+	}
+	h.store.SetSetting(t.Context(), lanSetting, "false")
+	if res := h.from(t, "192.168.1.50:5555", "/api/health", paired); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("network off: %d, want 403", res.StatusCode)
+	}
+	if res := h.from(t, "127.0.0.1:5555", "/api/health", nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("host while off: %d, want 200", res.StatusCode)
+	}
+}
+
 func TestRotateIsLoopbackOnly(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -472,7 +555,7 @@ func TestAccessNetworkSwitchMovesTheListener(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/access/network", strings.NewReader(`{"lan":true}`))
 	r.RemoteAddr = "192.168.1.20:5555"
-	s.setAccessNetwork(w, r)
+	hostOnly(s.setAccessNetwork)(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("a remote caller got %d, want %d", w.Code, http.StatusForbidden)
 	}

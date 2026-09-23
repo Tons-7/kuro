@@ -14,7 +14,7 @@ func stubWindow(t *testing.T, window func(context.Context, string) *launched) *a
 	var tabs atomic.Int32
 
 	oldWindow, oldTab := showWindow, showTab
-	showWindow = func(ctx context.Context, url, _ string) *launched { return window(ctx, url) }
+	showWindow = func(ctx context.Context, url, _ string, _ bool) *launched { return window(ctx, url) }
 	showTab = func(string) { tabs.Add(1) }
 	t.Cleanup(func() { showWindow, showTab = oldWindow, oldTab })
 
@@ -162,6 +162,35 @@ func TestCloseEndsTheWindowProcess(t *testing.T) {
 	// Closing again, or a window that was never opened, is nothing.
 	w.Close()
 	(&Window{}).Close()
+}
+
+// Fullscreen unless the setting asks for a maximized window.
+func TestWindowModeFlag(t *testing.T) {
+	has := func(args []string, flag string) bool {
+		for _, a := range args {
+			if a == flag {
+				return true
+			}
+		}
+		return false
+	}
+	full := windowArgs("http://x", "p", false)
+	if !has(full, "--start-fullscreen") || has(full, "--start-maximized") {
+		t.Errorf("default = %v, want fullscreen", full)
+	}
+	max := windowArgs("http://x", "p", true)
+	if !has(max, "--start-maximized") || has(max, "--start-fullscreen") {
+		t.Errorf("maximized = %v", max)
+	}
+
+	var got bool
+	old := showWindow
+	showWindow = func(_ context.Context, _, _ string, maximized bool) *launched { got = maximized; return &launched{} }
+	t.Cleanup(func() { showWindow = old })
+	(&Window{Maximized: func() bool { return true }}).Open(context.Background(), "http://x")
+	if !got {
+		t.Error("the setting did not reach the launch")
+	}
 }
 
 func TestCloseHasNothingToDoAfterAHandOff(t *testing.T) {

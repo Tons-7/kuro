@@ -96,8 +96,8 @@ func (m *Manager) OnInstalled(hook func(name string)) {
 	m.installed = hook
 }
 
-// OnInstalling is called before a download replaces a binary; a running one
-// cannot be overwritten.
+// OnInstalling is called once a new binary is in place, to stop the old one
+// still running so the next use starts the new.
 func (m *Manager) OnInstalling(hook func(name string)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -189,13 +189,6 @@ func (m *Manager) Install(name string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 
-		m.mu.Lock()
-		before := m.installing
-		m.mu.Unlock()
-		if before != nil {
-			before(name)
-		}
-
 		if err := m.install(ctx, spec); err != nil {
 			m.log.Error("install dependency", "component", name, "err", err)
 			m.set(name, func(p *Progress) {
@@ -207,9 +200,14 @@ func (m *Manager) Install(name string) error {
 		m.set(name, func(p *Progress) { p.Stage = StageDone })
 		m.log.Info("dependency installed", "component", name)
 
+		// Only now: the old binary kept running through the download, and
+		// stopping it here makes the next use start the new one.
 		m.mu.Lock()
-		hook := m.installed
+		before, hook := m.installing, m.installed
 		m.mu.Unlock()
+		if before != nil {
+			before(name)
+		}
 		if hook != nil {
 			hook(name)
 		}
@@ -249,7 +247,8 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 	if err := os.MkdirAll(m.binDir, 0o755); err != nil {
 		return err
 	}
-	staging, err := os.MkdirTemp("", "kuro-deps-")
+	// On the bin drive: %TEMP% is on C:, which may be the drive that is full.
+	staging, err := os.MkdirTemp(m.binDir, ".install-")
 	if err != nil {
 		return err
 	}
@@ -506,21 +505,51 @@ func writeEntry(f entry, target string) error {
 
 // install replaces the target, which fails while the program is running — kuro
 // holds ffmpeg open for as long as something is playing.
+// install writes dest whole or not at all: copied beside it, then renamed in.
+// A running binary can be renamed on Windows, so it is moved aside, not
+// overwritten; a half-written copy never takes its place.
 func install(src, dest string) error {
+	fresh := dest + ".new"
+	if err := copyTo(src, fresh); err != nil {
+		os.Remove(fresh)
+		return err
+	}
+	return swapIn(fresh, dest)
+}
+
+func copyTo(src, dest string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
-		return fmt.Errorf("write %s (is it still running?): %w", filepath.Base(dest), err)
+		return fmt.Errorf("write %s: %w", filepath.Base(dest), err)
 	}
-	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
 
-	_, err = io.Copy(out, in)
-	return err
+func swapIn(fresh, dest string) error {
+	old := dest + ".old"
+	os.Remove(old)
+	if _, err := os.Stat(dest); err == nil {
+		if err := os.Rename(dest, old); err != nil {
+			os.Remove(fresh)
+			return fmt.Errorf("replace %s: %w", filepath.Base(dest), err)
+		}
+	}
+	if err := os.Rename(fresh, dest); err != nil {
+		os.Rename(old, dest)
+		return fmt.Errorf("replace %s: %w", filepath.Base(dest), err)
+	}
+	// Still running, it can't go yet; the next install clears it.
+	os.Remove(old)
+	return nil
 }
 
 func findOne(root, name string) (string, error) {

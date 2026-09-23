@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -47,6 +48,36 @@ func (s *Store) TrackTorrent(ctx context.Context, infoHash string, rqbitID int, 
 // File index for a download nobody has played, where no single file applies.
 const WholeTorrent = -1
 
+func (s *Store) HasTorrent(ctx context.Context, infoHash string) bool {
+	var n int
+	err := s.r.QueryRowContext(ctx,
+		`SELECT count(*) FROM torrent WHERE lower(info_hash) = lower(?)`, infoHash).Scan(&n)
+	return err == nil && n > 0
+}
+
+// TorrentNames lists the top-level names on disk of every download on record.
+func (s *Store) TorrentNames(ctx context.Context) ([]string, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT name FROM torrent WHERE name <> ''
+		UNION SELECT path FROM torrent_file WHERE path <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if parts := strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }); len(parts) > 0 {
+			out = append(out, parts[0])
+		}
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) DropTorrentCache(ctx context.Context, infoHash string) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -79,6 +110,8 @@ type CacheEntry struct {
 	EpKey      string `json:"epKey,omitempty"`
 	Title      string `json:"title,omitempty"`
 	LastPlayed int64  `json:"lastPlayed"`
+	// Name is the torrent's, which is what it is called on disk.
+	Name string `json:"-"`
 }
 
 // Bytes is what the budget sees; kept downloads are reported beside it.
@@ -98,7 +131,7 @@ const cacheListQuery = `
 SELECT c.info_hash, c.file_index, t.rqbit_id, c.bytes_on_disk, c.complete, c.pinned, c.kept,
        CASE WHEN e.status IN ('CURRENT','REPEATING') THEN 1 ELSE 0 END,
        f.anime_id, coalesce(f.ep_key, ''), coalesce(a.title_romaji, t.name),
-       c.last_played_at
+       c.last_played_at, t.name
 FROM cache_entry c
 JOIN torrent t           ON t.info_hash = c.info_hash
 LEFT JOIN torrent_file f ON f.info_hash = c.info_hash AND f.file_index = c.file_index
@@ -121,7 +154,7 @@ func (s *Store) CacheEntries(ctx context.Context) ([]CacheEntry, error) {
 		)
 		if err := rows.Scan(&e.InfoHash, &e.FileIndex, &e.RqbitID, &e.Bytes,
 			&complete, &pinned, &kept, &protected, &e.AnimeID, &e.EpKey, &e.Title,
-			&e.LastPlayed); err != nil {
+			&e.LastPlayed, &e.Name); err != nil {
 			return nil, err
 		}
 		e.Complete, e.Pinned, e.Kept, e.Protected = complete == 1, pinned == 1, kept == 1, protected == 1

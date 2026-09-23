@@ -203,22 +203,19 @@ func (s *Server) setWatched(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	watched := body.Watched == nil || *body.Watched
 
+	// Saved here, pushed behind the response: a tracker that is down must not
+	// fail a change that has already been made.
 	var err error
-	switch {
-	case watched && s.syncer != nil:
-		err = s.syncer.Watched(ctx, body.AnimeID, body.Episode)
-	case watched:
+	if watched {
 		_, err = s.store.MarkWatched(ctx, body.AnimeID, body.Episode)
-	default:
+	} else {
 		err = s.store.Unwatch(ctx, body.AnimeID, body.Episode)
 	}
 	if err != nil {
 		s.fail(w, "set watched", err)
 		return
 	}
-	if !watched {
-		s.pushSoon(body.AnimeID)
-	}
+	s.pushSoon(body.AnimeID)
 	if watched && s.cache != nil {
 		if _, err := s.cache.AutoDelete(ctx, body.AnimeID); err != nil {
 			s.log.Warn("auto-delete watched", "anime", body.AnimeID, "err", err)

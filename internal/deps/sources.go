@@ -23,7 +23,10 @@ type ghAsset struct {
 // sha256Of turns GitHub's prefixed digest into the bare hex the installer
 // compares against, and ignores any other algorithm it might report.
 func sha256Of(digest string) string {
-	return strings.TrimPrefix(digest, "sha256:")
+	if h, ok := strings.CutPrefix(digest, "sha256:"); ok {
+		return h
+	}
+	return ""
 }
 
 type ghRelease struct {
@@ -126,11 +129,18 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 		return Release{}, err
 	}
 	const url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
+	sum := m.publishedSum(ctx, url+".sha256")
+	if sum == "" {
+		sum = m.publishedSum(ctx, url+".sha256")
+	}
+	if sum == "" {
+		m.log.Warn("ffmpeg checksum unavailable; installing unverified")
+	}
 	return Release{
 		Version: strings.TrimSpace(string(raw)),
 		URL:     url,
 		Archive: true,
-		Digest:  m.publishedSum(ctx, url+".sha256"),
+		Digest:  sum,
 	}, nil
 }
 
@@ -205,6 +215,7 @@ func resolveAnime4K(ctx context.Context, m *Manager) (Release, error) {
 				Version: strings.TrimPrefix(release.Tag, "v"),
 				URL:     a.URL,
 				Archive: true,
+				Digest:  sha256Of(a.Digest),
 			}, nil
 		}
 	}

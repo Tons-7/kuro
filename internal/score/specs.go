@@ -141,6 +141,12 @@ func evaluateSpecs(c Candidate, prefs Preferences) []Rejection {
 
 func (r Rejection) String() string { return fmt.Sprintf("%s: %s", r.Rule, r.Reason) }
 
+// Unwanted reports a release the audio or raw choice rules out, whatever else
+// is true of it.
+func Unwanted(c Candidate, prefs Preferences) bool {
+	return (!prefs.AllowRaw && IsRaw(c)) || audioMismatch(c.Release, prefs.Audio)
+}
+
 // IsRaw reports an untranslated broadcast capture. Transport streams are
 // always raws, and trackers file them under a raw category.
 func IsRaw(c Candidate) bool {

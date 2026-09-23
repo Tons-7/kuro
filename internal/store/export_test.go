@@ -112,8 +112,7 @@ func TestImportRestoresIntoAnEmptyLibrary(t *testing.T) {
 	}
 }
 
-// An import is a merge, not a reset: a file older than what is here must not
-// wind progress back.
+// An import is a merge, not a reset: a file older than what is here must not wind progress back.
 func TestImportNeverMovesProgressBackwards(t *testing.T) {
 	st := exportStore(t)
 	ctx := context.Background()
@@ -140,24 +139,27 @@ func TestImportNeverMovesProgressBackwards(t *testing.T) {
 	}
 }
 
+// A negative id is a MAL-only title, which export writes out; only no id at all is unusable.
 func TestImportSkipsUnusableRows(t *testing.T) {
 	st := exportStore(t)
 
 	rep, err := st.ImportEntries(context.Background(), []ExportEntry{
 		{AnimeID: 0, Title: "no id"},
-		{AnimeID: -5, Title: "negative"},
+		{AnimeID: -5, Title: "MAL only", Progress: 3},
 		{AnimeID: 100, Progress: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Entries != 1 || rep.Skipped != 2 {
+	if rep.Entries != 2 || rep.Skipped != 1 {
 		t.Fatalf("report = %+v", rep)
+	}
+	if e, _ := st.ListEntry(context.Background(), -5); e.Progress != 3 {
+		t.Fatalf("MAL-only entry = %+v", e)
 	}
 }
 
-// An id the corpus has never seen still has to import: the placeholder row is
-// what keeps the foreign key.
+// An id the corpus has never seen still has to import: the placeholder row is what keeps the foreign key.
 func TestImportAcceptsUnknownAnime(t *testing.T) {
 	st := exportStore(t)
 	ctx := context.Background()

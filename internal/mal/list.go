@@ -144,8 +144,8 @@ func (c *Client) List(ctx context.Context) ([]Entry, error) {
 // "watching" with is_rewatching set, and finished rewatches are a count — sent
 // only once kuro has counted one, so a locally created row's zero cannot wipe
 // a count built up on the site. The score, on kuro's 0-100 scale, is treated
-// the same way.
-func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status string, rewatched, score int) error {
+// the same way; clearScore sends a 0 that was meant.
+func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status string, rewatched, score int, clearScore bool) error {
 	if animeID <= 0 {
 		return fmt.Errorf("mal: invalid anime id %d", animeID)
 	}
@@ -154,7 +154,7 @@ func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status s
 	if rewatched > 0 {
 		form.Set("num_times_rewatched", strconv.Itoa(rewatched))
 	}
-	if s := MALScore(score); s > 0 {
+	if s := MALScore(score); s > 0 || clearScore {
 		form.Set("score", strconv.Itoa(s))
 	}
 	if s := Status(status); s != "" {

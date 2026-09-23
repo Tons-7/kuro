@@ -86,21 +86,30 @@ func New(binary, socket string, log *slog.Logger) *MPV {
 		binary: binary,
 		socket: socket,
 		log:    log,
-		events: make(chan Event, 64),
+		events: make(chan Event, eventBuffer),
 		// fetch-deps installs the Anime4K shaders beside the binary, so the
 		// location needs no separate configuration.
 		shaders: filepath.Join(filepath.Dir(binary), "shaders"),
 	}
 }
 
-func (m *MPV) Events() <-chan Event { return m.events }
+const eventBuffer = 64
+
+// Events is the current run's: a late exit from the last mpv ended the next episode's tracking.
+func (m *MPV) Events() <-chan Event {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.events
+}
 
 func (m *MPV) Play(ctx context.Context, opts Options) error {
 	m.Stop()
 
+	events := make(chan Event, eventBuffer)
 	m.mu.Lock()
 	m.opts = opts
 	m.lastSkip = -1
+	m.events = events
 	m.mu.Unlock()
 
 	if _, err := os.Stat(m.binary); err != nil {
@@ -156,8 +165,8 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 	m.conn = conn
 	m.mu.Unlock()
 
-	go m.readLoop(conn)
-	go m.reap(cmd)
+	go m.readLoop(conn, events)
+	go m.reap(cmd, events)
 
 	for i, prop := range []string{"time-pos", "duration", "pause"} {
 		m.send(map[string]any{"command": []any{"observe_property", i + 1, prop}})
@@ -191,7 +200,7 @@ type ipcMessage struct {
 	Rsn   string          `json:"reason"`
 }
 
-func (m *MPV) readLoop(conn net.Conn) {
+func (m *MPV) readLoop(conn net.Conn, events chan Event) {
 	scan := bufio.NewScanner(conn)
 	scan.Buffer(make([]byte, 0, 8192), 1<<20)
 
@@ -210,21 +219,21 @@ func (m *MPV) readLoop(conn net.Conn) {
 			case "time-pos":
 				var pos float64
 				if json.Unmarshal(msg.Data, &pos) == nil {
-					m.onPosition(pos, duration)
+					m.onPosition(events, pos, duration)
 				}
 			case "pause":
 				var paused bool
 				json.Unmarshal(msg.Data, &paused)
-				m.emit(Event{Kind: EventPause, Paused: paused, Duration: duration})
+				emit(events, Event{Kind: EventPause, Paused: paused, Duration: duration})
 			}
 		case "end-file":
-			m.emit(Event{Kind: EventEnd, Duration: duration, Reason: msg.Rsn})
+			emit(events, Event{Kind: EventEnd, Duration: duration, Reason: msg.Rsn})
 		}
 	}
 }
 
-func (m *MPV) onPosition(pos, duration float64) {
-	m.emit(Event{Kind: EventPosition, Position: pos, Duration: duration})
+func (m *MPV) onPosition(events chan Event, pos, duration float64) {
+	emit(events, Event{Kind: EventPosition, Position: pos, Duration: duration})
 
 	m.mu.Lock()
 	opts, last := m.opts, m.lastSkip
@@ -285,7 +294,7 @@ func (m *MPV) send(cmd map[string]any) error {
 	return err
 }
 
-func (m *MPV) reap(cmd *exec.Cmd) {
+func (m *MPV) reap(cmd *exec.Cmd, events chan Event) {
 	cmd.Wait()
 	m.mu.Lock()
 	var conn net.Conn
@@ -298,7 +307,7 @@ func (m *MPV) reap(cmd *exec.Cmd) {
 	if conn != nil {
 		conn.Close()
 	}
-	m.emit(Event{Kind: EventExit})
+	emit(events, Event{Kind: EventExit})
 }
 
 func (m *MPV) Running() bool {
@@ -322,9 +331,9 @@ func (m *MPV) Stop() {
 }
 
 // Dropping events is correct: a stalled consumer must not block playback.
-func (m *MPV) emit(e Event) {
+func emit(events chan Event, e Event) {
 	select {
-	case m.events <- e:
+	case events <- e:
 	default:
 	}
 }

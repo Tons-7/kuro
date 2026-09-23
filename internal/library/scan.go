@@ -251,6 +251,11 @@ func identify(f *store.LocalFile, ix *match.Index, boosts map[int]float64) bool 
 	}
 
 	f.AnimeID = res.MediaID
-	f.Confidence = res.Score
+	// Below 1: confidence 1 is a hand assignment, which rescans never touch.
+	f.Confidence = scanConfidence(res.Score)
 	return true
+}
+
+func scanConfidence(score float64) float64 {
+	return min(score/40, 0.99)
 }

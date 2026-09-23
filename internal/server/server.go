@@ -68,7 +68,9 @@ type Server struct {
 	derivingMu sync.Mutex
 	deriving   map[int]struct{}
 
-	token string
+	// Rotated from a handler while the guard reads it.
+	tokenMu sync.RWMutex
+	token   string
 	// Set by main, which owns the listener. Nil in tests and in any build that
 	// does not serve, where switching networks is meaningless.
 	rebind     func(addr string) error
@@ -167,13 +169,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/anime/{id}/characters", s.characters)
 	mux.HandleFunc("GET /api/anime/{id}/extra", s.extra)
 	mux.HandleFunc("GET /api/browse", s.browse)
+	mux.HandleFunc("GET /api/studios", s.studios)
 	mux.HandleFunc("GET /api/filters", s.filters)
 	mux.HandleFunc("GET /api/recommend", s.recommend)
 
 	mux.HandleFunc("GET /api/local", s.localStats)
 	mux.HandleFunc("GET /api/local/files", s.localFiles)
 	mux.HandleFunc("POST /api/local/scan", s.localScan)
-	mux.HandleFunc("POST /api/local/paths", s.setLibraryPaths)
+	mux.HandleFunc("POST /api/local/paths", hostOnly(s.setLibraryPaths))
 	mux.HandleFunc("POST /api/local/assign", s.assignLocalFile)
 	mux.HandleFunc("POST /api/local/forget", s.forgetMissing)
 	mux.HandleFunc("GET /api/local/{id}/stream", s.localStream)
@@ -186,13 +189,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/trackers", s.setTracker)
 	mux.HandleFunc("GET /api/setup", s.setup)
 	mux.HandleFunc("POST /api/setup/install/{name}", s.installComponent)
-	mux.HandleFunc("POST /api/setup/data-dir", s.setDataDir)
+	mux.HandleFunc("POST /api/setup/data-dir", hostOnly(s.setDataDir))
 	mux.HandleFunc("GET /api/update", s.updateStatus)
 	mux.HandleFunc("POST /api/update/check", s.updateCheck)
 	mux.HandleFunc("POST /api/update/apply", s.updateApply)
-	mux.HandleFunc("GET /api/auth/login", s.authLogin)
+	mux.HandleFunc("GET /api/auth/login", hostOnly(s.authLogin))
 	mux.HandleFunc("POST /api/auth/logout", s.authLogout)
-	mux.HandleFunc("GET /callback", s.authCallback)
+	mux.HandleFunc("GET /callback", hostOnly(s.authCallback))
 	mux.HandleFunc("POST /api/sync", s.sync)
 	mux.HandleFunc("POST /api/play", s.play)
 	mux.HandleFunc("POST /api/stop", s.stopPlayback)
@@ -221,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/downloads/clear", s.clearDownloads)
 	mux.HandleFunc("GET /api/cache", s.cacheStatus)
 	mux.HandleFunc("POST /api/cache/sweep", s.sweepCache)
+	mux.HandleFunc("GET /api/cache/orphans", s.cleanOrphans)
 	mux.HandleFunc("POST /api/cache/orphans", s.cleanOrphans)
 
 	mux.HandleFunc("POST /api/stream/open", s.streamOpen)
@@ -251,17 +255,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/releases/check", s.checkReleases)
 
 	mux.HandleFunc("GET /api/mal", s.malStatus)
-	mux.HandleFunc("GET /api/mal/auth/login", s.malLogin)
+	mux.HandleFunc("GET /api/mal/auth/login", hostOnly(s.malLogin))
 	mux.HandleFunc("POST /api/mal/auth/logout", s.malLogout)
-	mux.HandleFunc("GET /mal/callback", s.malCallback)
+	mux.HandleFunc("GET /mal/callback", hostOnly(s.malCallback))
 	mux.HandleFunc("POST /api/mal/import", s.malImport)
 	mux.HandleFunc("POST /api/mal/favourites/import", s.malFavouritesImport)
 	mux.HandleFunc("POST /api/mal/sync", s.malPush)
 
 	mux.HandleFunc("GET /api/access", s.access)
 	mux.HandleFunc("GET /api/access/qr.svg", s.accessQR)
-	mux.HandleFunc("POST /api/access/rotate", s.rotateAccess)
-	mux.HandleFunc("POST /api/access/network", s.setAccessNetwork)
+	mux.HandleFunc("POST /api/access/rotate", hostOnly(s.rotateAccess))
+	mux.HandleFunc("POST /api/access/network", hostOnly(s.setAccessNetwork))
+	mux.HandleFunc("GET /api/access/firewall", hostOnly(s.accessFirewall))
+	mux.HandleFunc("POST /api/access/firewall", hostOnly(s.allowFirewall))
+	mux.HandleFunc("POST /api/access/network-settings", hostOnly(s.openNetworkSettings))
 
 	app := apiOnly()
 	if assets, ok := web.FS(); ok {
@@ -270,9 +277,10 @@ func (s *Server) Handler() http.Handler {
 
 	// Chosen by prefix, not a "/" mux pattern: a catch-all there would shadow every
 	// route, turning wrong-method 405s into 404s and handing the SPA to JSON callers.
+	api := served(mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			mux.ServeHTTP(w, r)
+			api.ServeHTTP(w, r)
 			return
 		}
 		// Non-API routes the mux does know, such as the OAuth callbacks.
@@ -317,6 +325,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "search", err)
 		return
 	}
+	s.remember(r, results)
 	send(w, http.StatusOK, map[string]any{"results": results})
 }
 

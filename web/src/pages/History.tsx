@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { clockTime, cx, relativeTime } from '../lib/format'
+import { clockTime, cx, groupByDay, relativeTime } from '../lib/format'
 import {
   Badge,
   Button,
@@ -52,18 +52,31 @@ export function History() {
     mutationFn: (body: Record<string, unknown>) => api.post('/api/history/forget', body),
     onSuccess: () => {
       setConfirmClear(false)
-      qc.invalidateQueries({ queryKey: ['history'] })
-      qc.invalidateQueries({ queryKey: ['home'] })
+      for (const key of ['history', 'continue', 'watch-stats', 'episodes']) {
+        void qc.invalidateQueries({ queryKey: [key] })
+      }
     },
   })
 
   const items = data?.items ?? []
+  const goTo = (n: number) => {
+    setParams({ page: String(n) })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // Removing the last entry of a later page would strand the viewer on an
+  // empty "nothing watched".
+  useEffect(() => {
+    if (data && data.items.length === 0 && page > 1) {
+      setParams({ page: String(Math.max(1, Math.ceil(data.total / 40))) }, { replace: true })
+    }
+  }, [data, page, setParams])
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Watch history"
-        meta={data ? `${data.total} episodes` : undefined}
+        meta={data?.total ? `${data.total} episodes` : undefined}
         actions={
           items.length > 0 &&
           (confirmClear ? (
@@ -98,25 +111,33 @@ export function History() {
         />
       ) : (
         <>
-          <ul className="space-y-1.5">
-            {items.map((entry) => (
-              <Row
-                key={`${entry.animeId}-${entry.epKey}`}
-                entry={entry}
-                onForget={() =>
-                  forget.mutate({ animeId: entry.animeId, epKey: entry.epKey })
-                }
-              />
+          {/* A timeline: when you watched is half of what history means. */}
+          <div className="space-y-6">
+            {groupByDay(items, (e) => e.lastPlayed).map(([label, group]) => (
+              <section key={label}>
+                <h2 className="mb-2 text-xs font-semibold tracking-wider text-base-500 uppercase">{label}</h2>
+                <ul className="space-y-1.5">
+                  {group.map((entry) => (
+                    <Row
+                      key={`${entry.animeId}-${entry.epKey}`}
+                      entry={entry}
+                      onForget={() =>
+                        forget.mutate({ animeId: entry.animeId, epKey: entry.epKey })
+                      }
+                    />
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
 
           {(page > 1 || data?.hasMore) && (
             <div className="flex items-center justify-center gap-2">
-              <PageButton disabled={page <= 1} onClick={() => setParams({ page: String(page - 1) })}>
+              <PageButton disabled={page <= 1} onClick={() => goTo(page - 1)}>
                 Previous
               </PageButton>
               <span className="text-xs text-base-500">Page {page}</span>
-              <PageButton disabled={!data?.hasMore} onClick={() => setParams({ page: String(page + 1) })}>
+              <PageButton disabled={!data?.hasMore} onClick={() => goTo(page + 1)}>
                 Next
               </PageButton>
             </div>
@@ -232,7 +253,7 @@ function Row({ entry, onForget }: { entry: HistoryEntry; onForget: () => void })
       <button
         onClick={onForget}
         aria-label="Remove from history"
-        className="shrink-0 rounded-md px-2 py-1.5 text-base-600 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-base-800 hover:text-base-200"
+        className="shrink-0 rounded-md px-2 py-1.5 text-base-600 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-base-800 hover:text-base-200 [@media(hover:none)]:opacity-100"
       >
         ✕
       </button>
@@ -250,17 +271,8 @@ function PageButton({
   children: React.ReactNode
 }) {
   return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
-      className={cx(
-        'rounded-md px-3 py-1.5 text-sm transition-colors',
-        disabled
-          ? 'cursor-default text-base-700'
-          : 'bg-base-800 text-base-100 hover:bg-base-700',
-      )}
-    >
+    <Button disabled={disabled} onClick={onClick}>
       {children}
-    </button>
+    </Button>
   )
 }

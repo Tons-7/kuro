@@ -52,8 +52,9 @@ const toggleFavouriteQuery = `mutation Favourite($animeId: Int!) {
 }`
 
 // ToggleFavourite flips the flag; AniList offers no way to set it outright, so
-// the caller has to know the current state first.
+// the caller has to know the current state first. Never retried: a toggle
+// that landed and was retried undoes itself.
 func (c *Client) ToggleFavourite(ctx context.Context, mediaID int) error {
 	var out struct{}
-	return c.Query(ctx, toggleFavouriteQuery, map[string]any{"animeId": mediaID}, &out)
+	return c.MutateOnce(ctx, toggleFavouriteQuery, map[string]any{"animeId": mediaID}, &out)
 }

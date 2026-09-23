@@ -89,7 +89,7 @@ export function Rail({
           {more && (
             <Link
               to={more.to}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-base-400 transition-colors hover:bg-base-850 hover:text-white"
+              className="flex items-center gap-1 rounded-full bg-base-900 px-3 py-1 text-xs font-semibold text-base-300 ring-1 ring-white/[0.07] transition-colors hover:bg-base-800 hover:text-white"
             >
               {more.label ?? 'See all'}
               <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden>

@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { cx } from '../lib/format'
-import { useDismiss } from './ui'
+import { useDismiss, useModalFocus } from './ui'
 
 export const ANIME4K_MODES = [
   { id: 'A', title: 'A · Restore', hint: 'Sharpens soft, blurry lines. Safe default for most 1080p web releases.' },
@@ -35,6 +35,7 @@ export function Anime4KDialog({
 }) {
   const close = useCallback(() => onClose(), [onClose])
   const panel = useDismiss<HTMLDivElement>(close)
+  useModalFocus(panel, open)
 
   if (!open) return null
 
@@ -66,6 +67,9 @@ export function Anime4KDialog({
         </div>
 
         <button
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Anime4K upscaling"
           onClick={() => onChange({ enabled: !enabled, mode })}
           className={cx(
             'mb-3 flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-sm transition-colors',
@@ -91,10 +95,16 @@ export function Anime4KDialog({
         </button>
 
         {/* Clickable while off: picking a mode is how you turn it on. */}
-        <div className={cx('space-y-1.5 transition-opacity', !enabled && 'opacity-60')}>
+        <div
+          role="radiogroup"
+          aria-label="Upscaling mode"
+          className={cx('space-y-1.5 transition-opacity', !enabled && 'opacity-60')}
+        >
           {ANIME4K_MODES.map((option) => (
             <button
               key={option.id}
+              role="radio"
+              aria-checked={mode === option.id}
               onClick={() => onChange({ enabled: true, mode: option.id })}
               className={cx(
                 'block w-full rounded-lg border px-3 py-2 text-left transition-colors',

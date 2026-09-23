@@ -12,7 +12,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, LIST_STATUSES, statusLabel, type LibraryItem } from '../lib/api'
 import { cx } from '../lib/format'
 import { usePrefs, useSetPref, useSetup } from '../lib/queries'
+import { ErrorBoundary } from './ErrorBoundary'
+import { Unpaired } from './Unpaired'
 import { NotificationPanel } from './NotificationPanel'
+import { SavedCopyNotice } from './SavedCopyNotice'
 import { useDebounced, useDismiss } from './ui'
 
 const TABS = [
@@ -65,7 +68,11 @@ export function Layout() {
           fullBleed ? 'pb-8' : 'max-w-[1600px] px-4 pt-4 pb-16 sm:px-6',
         )}
       >
-        <Outlet />
+        <Unpaired />
+        {/* Keyed by page, so leaving a broken one clears it. */}
+        <ErrorBoundary key={pageKey}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   )
@@ -87,13 +94,18 @@ function Header() {
     <header
       className={cx(
         'sticky top-0 z-40 transition-colors duration-200',
-        scrolled ? 'bg-base-950/85 backdrop-blur-md' : 'bg-transparent',
+        scrolled
+          ? 'bg-base-950/75 shadow-[0_1px_0_rgb(255_255_255/0.05)] backdrop-blur-xl backdrop-saturate-150'
+          : 'bg-transparent',
       )}
     >
-      <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-4 px-4 sm:px-6">
-        <BackButton />
+      <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-2 px-4 sm:gap-4 sm:px-6">
+        {/* Not on a phone: its browser has back, and search needs the room. */}
+        <span className="contents max-sm:hidden">
+          <BackButton />
+        </span>
         <Link to="/" className="group flex shrink-0 items-baseline gap-1">
-          <span className="text-xl font-bold tracking-tight text-white">kuro</span>
+          <span className="font-display text-2xl font-bold tracking-tight text-white">kuro</span>
           <span className="size-1.5 rounded-full bg-accent-500 transition-colors group-hover:bg-accent-400" />
         </Link>
 
@@ -108,7 +120,10 @@ function Header() {
         </nav>
 
         <SearchBox />
-        <TitleLanguage />
+        {/* In Settings too; on a phone it cost search its width. */}
+        <span className="contents max-sm:hidden">
+          <TitleLanguage />
+        </span>
         <NotificationPanel />
         <ProfileMenu />
       </div>
@@ -118,6 +133,7 @@ function Header() {
       <nav className="no-scrollbar mx-4 mb-2 flex items-center gap-0.5 overflow-x-auto rounded-full bg-base-800 p-1 ring-1 ring-white/5 sm:hidden">
         <Tabs />
       </nav>
+      <SavedCopyNotice />
     </header>
   )
 }
@@ -163,7 +179,8 @@ function Tabs() {
           end={tab.end}
           className={({ isActive }) =>
             cx(
-              'shrink-0 rounded-full px-3 py-1.5 text-sm transition-colors',
+              // A phone shares its row out evenly so all five fit, none cut off.
+              'shrink-0 rounded-full px-3 py-1.5 text-sm transition-colors max-sm:flex-1 max-sm:px-2 max-sm:text-center',
               isActive
                 ? 'bg-base-700 text-white shadow-card ring-1 ring-white/10'
                 : 'text-base-300 hover:bg-base-850 hover:text-white',
@@ -299,7 +316,9 @@ function SearchBox() {
         <ul
           id="kuro-search-results"
           role="listbox"
-          className="absolute top-full right-0 z-50 mt-1.5 w-80 max-w-[90vw] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1 shadow-panel"
+          // Anchored to the box it ran off the left edge of a phone; there it
+          // spans the screen instead.
+          className="absolute top-full right-0 z-50 mt-1.5 w-80 max-w-[90vw] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1 shadow-panel max-sm:fixed max-sm:inset-x-2 max-sm:top-14 max-sm:w-auto max-sm:max-w-none"
         >
           {hits.map((hit, i) => (
             <li key={hit.id} role="option" aria-selected={i === active}>
@@ -365,11 +384,8 @@ function TitleLanguage() {
     setPref.mutate(
       { key: 'display.titles', value: next },
       {
-        onSuccess: () => {
-          for (const key of ['discover', 'browse', 'library', 'continue', 'schedule', 'aired', 'anime', 'search']) {
-            void qc.invalidateQueries({ queryKey: [key] })
-          }
-        },
+        // Titles are picked server-side on nearly every list, so all of it.
+        onSuccess: () => void qc.invalidateQueries(),
       },
     )
   }

@@ -28,17 +28,24 @@ func TestSetProgressSendsScoreOnlyWhenRated(t *testing.T) {
 	})
 	c.SetToken(Token{Access: "acc", Expires: time.Now().Add(time.Hour)})
 
-	if err := c.SetProgress(t.Context(), 1, 3, "CURRENT", 0, 0); err != nil {
+	if err := c.SetProgress(t.Context(), 1, 3, "CURRENT", 0, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, present := form["score"]; present {
 		t.Fatal("an unrated entry sent a score, which would clear one on the site")
 	}
-	if err := c.SetProgress(t.Context(), 1, 3, "CURRENT", 0, 85); err != nil {
+	if err := c.SetProgress(t.Context(), 1, 3, "CURRENT", 0, 85, false); err != nil {
 		t.Fatal(err)
 	}
 	if form.Get("score") != "9" {
 		t.Fatalf("score = %q, want 9", form.Get("score"))
+	}
+	// Set back to unrated on purpose: that 0 has to reach the site.
+	if err := c.SetProgress(t.Context(), 1, 3, "CURRENT", 0, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if form.Get("score") != "0" {
+		t.Fatalf("score = %q, want an explicit 0", form.Get("score"))
 	}
 }
 

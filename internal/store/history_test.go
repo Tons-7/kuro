@@ -112,6 +112,22 @@ func TestHistoryListsEpisodesNewestFirst(t *testing.T) {
 	}
 }
 
+// A MAL-only show has a negative id; forgetting it used to clear everything.
+func TestForgetHistoryOfAMALOnlyShow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	play(t, s, 1, "1", 100, 1400)
+	play(t, s, -12345, "1", 100, 1400)
+
+	if n, err := s.ForgetHistory(ctx, -12345, ""); err != nil || n != 1 {
+		t.Fatalf("forget = %d, %v", n, err)
+	}
+	page, _ := s.History(ctx, Paging{Page: 1, PerPage: 50})
+	if len(page.Items) != 1 || page.Items[0].AnimeID != 1 {
+		t.Fatalf("remaining = %+v, want the other show kept", page.Items)
+	}
+}
+
 func TestForgetHistoryScopes(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

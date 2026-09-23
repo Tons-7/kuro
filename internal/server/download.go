@@ -299,6 +299,7 @@ func (s *Server) setDownloadRunning(w http.ResponseWriter, r *http.Request, run 
 		s.fail(w, "pause download", err)
 		return
 	}
+	s.downloader.SetUserPaused(hash, !run)
 	send(w, http.StatusOK, map[string]any{"paused": !run})
 }
 

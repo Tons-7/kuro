@@ -47,7 +47,7 @@ func (m *MALSync) Run(ctx context.Context) (MALReport, error) {
 			continue
 		}
 
-		if err := m.mal.SetProgress(ctx, e.RemoteID, e.Progress, e.Status, e.Repeat, e.Score); err != nil {
+		if err := m.mal.SetProgress(ctx, e.RemoteID, e.Progress, e.Status, e.Repeat, e.Score, clears(e)); err != nil {
 			rep.Failed++
 			m.log.Warn("mal push", "anime", e.AnimeID, "mal", e.RemoteID, "err", err)
 			if mal.Unauthorized(err) {
@@ -77,11 +77,14 @@ func (m *MALSync) PushOne(ctx context.Context, animeID int) error {
 	if err != nil || e.AnimeID == 0 {
 		return err
 	}
-	if err := m.mal.SetProgress(ctx, e.RemoteID, e.Progress, e.Status, e.Repeat, e.Score); err != nil {
+	if err := m.mal.SetProgress(ctx, e.RemoteID, e.Progress, e.Status, e.Repeat, e.Score, clears(e)); err != nil {
 		return err
 	}
 	return m.store.MarkPushed(ctx, malTracker, e.AnimeID, e.Progress, e.Status, e.Score)
 }
+
+// clears: MAL was told a score and the local one is now unrated.
+func clears(e store.TrackerEntry) bool { return e.Score == 0 && e.LastScore > 0 }
 
 type MALImport struct {
 	Entries   int `json:"entries"`
@@ -115,6 +118,7 @@ func (m *MALSync) Pull(ctx context.Context) (MALImport, error) {
 		return rep, err
 	}
 
+	var marks []store.TrackerEntry
 	for _, e := range entries {
 		animeID, ok := mapping[e.AnimeID]
 		if !ok {
@@ -130,6 +134,11 @@ func (m *MALSync) Pull(ctx context.Context) (MALImport, error) {
 		last, seen, err := m.store.Pushed(ctx, malTracker, animeID)
 		if err != nil {
 			return rep, err
+		}
+		// MAL keeps whole points: 85 here is 9 there. Unchanged in MAL's units
+		// keeps the finer score rather than rounding it everywhere.
+		if seen && mal.MALScore(last.Score) == e.Score {
+			remote.Score = last.Score
 		}
 
 		apply := false
@@ -158,9 +167,15 @@ func (m *MALSync) Pull(ctx context.Context) (MALImport, error) {
 			}
 			rep.Applied++
 		}
-		if err := m.store.MarkPushed(ctx, malTracker, animeID, remote.Progress, remote.Status, remote.Score); err != nil {
-			return rep, err
+		// Unchanged entries are most of a list; rewriting each one every cycle
+		// only competes with playback for the writer.
+		if seen && last.Progress == remote.Progress && last.Status == remote.Status && last.Score == remote.Score {
+			continue
 		}
+		marks = append(marks, remote)
+	}
+	if _, err := m.store.SeedPushed(ctx, malTracker, marks); err != nil {
+		return rep, err
 	}
 
 	if rep.Applied > 0 {

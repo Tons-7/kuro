@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -50,19 +51,25 @@ func (n *Nyaa) searchHTML(ctx context.Context, q Query) ([]Torrent, error) {
 		return nil, fmt.Errorf("nyaa: HTTP %d", res.StatusCode)
 	}
 
-	doc, err := html.Parse(res.Body)
+	doc, err := html.Parse(io.LimitReader(res.Body, 8<<20))
 	if err != nil {
 		return nil, fmt.Errorf("nyaa: parse listing: %w", err)
 	}
 
 	var out []Torrent
-	for _, row := range findRows(doc) {
+	rows := findRows(doc)
+	for _, row := range rows {
 		if t, ok := parseRow(row); ok {
 			out = append(out, t)
 			if q.Limit > 0 && len(out) >= q.Limit {
 				break
 			}
 		}
+	}
+	// Rows that all fail to parse mean the markup changed, not an empty search;
+	// an error is logged and not cached.
+	if len(rows) > 0 && len(out) == 0 {
+		return nil, fmt.Errorf("nyaa: listing layout not recognised (%d rows, 0 parsed)", len(rows))
 	}
 	return out, nil
 }
@@ -171,7 +178,15 @@ func infoHashFromMagnet(magnet string) string {
 		}
 		return hex.EncodeToString(raw)
 	}
-	return strings.ToLower(rest)
+	// A truncated hash would rank like any other and burn a play attempt.
+	rest = strings.ToLower(rest)
+	if len(rest) != 40 {
+		return ""
+	}
+	if _, err := hex.DecodeString(rest); err != nil {
+		return ""
+	}
+	return rest
 }
 
 func attr(n *html.Node, name string) string {

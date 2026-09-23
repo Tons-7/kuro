@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -241,6 +242,31 @@ func TestApplyRefusesAnUnverifiableArchive(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(exe); string(got) != "old" {
 		t.Error("the executable was replaced without verification")
+	}
+}
+
+// A new binary that can't be started (quarantined, say) must not be left in
+// place with nothing to fall back to.
+func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
+
+	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	u := newUpdater(t, st, gh, exe).WithRestart(func() { t.Error("restarted after a failed launch") })
+	u.launch = func(string) error { return errors.New("blocked by antivirus") }
+
+	u.Check(context.Background())
+	if err := u.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for u.Status().Stage != StageFailed && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+		t.Errorf("executable = %q, want the old one restored", got)
 	}
 }
 

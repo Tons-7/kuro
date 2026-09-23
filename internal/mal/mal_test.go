@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,6 +215,31 @@ func TestExpiringTokenIsRefreshedBeforeUse(t *testing.T) {
 	}
 }
 
+// Two requests inside the refresh window must spend the refresh token once.
+func TestConcurrentCallsRefreshOnce(t *testing.T) {
+	var refreshes atomic.Int32
+	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/token") {
+			refreshes.Add(1)
+			time.Sleep(50 * time.Millisecond)
+			io.WriteString(w, `{"token_type":"Bearer","expires_in":3600,
+			  "access_token":"fresh","refresh_token":"ref-2"}`)
+			return
+		}
+		io.WriteString(w, `{"id":1,"name":"tony"}`)
+	})
+	c.SetToken(Token{Access: "stale", Refresh: "ref-1", Expires: time.Now().Add(time.Minute)})
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { c.Viewer(t.Context()) })
+	}
+	wg.Wait()
+	if n := refreshes.Load(); n != 1 {
+		t.Fatalf("%d refreshes, want 1", n)
+	}
+}
+
 func TestHealthyTokenIsNotRefreshed(t *testing.T) {
 	var refreshes atomic.Int32
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +317,7 @@ func TestSetProgressUsesTheWriteSpelling(t *testing.T) {
 	})
 	c.SetToken(Token{Access: "acc", Expires: time.Now().Add(time.Hour)})
 
-	if err := c.SetProgress(t.Context(), 52991, 11, "CURRENT", 0, 0); err != nil {
+	if err := c.SetProgress(t.Context(), 52991, 11, "CURRENT", 0, 0, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,7 +347,7 @@ func TestSetProgressOmitsUnknownStatus(t *testing.T) {
 	})
 	c.SetToken(Token{Access: "acc", Expires: time.Now().Add(time.Hour)})
 
-	if err := c.SetProgress(t.Context(), 1, 3, "SOMETHING_ELSE", 0, 0); err != nil {
+	if err := c.SetProgress(t.Context(), 1, 3, "SOMETHING_ELSE", 0, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	if form.Has("status") {
@@ -333,7 +359,7 @@ func TestSetProgressRejectsBadID(t *testing.T) {
 	c, _ := newClient(t, nil)
 	c.SetToken(Token{Access: "acc", Expires: time.Now().Add(time.Hour)})
 
-	if err := c.SetProgress(t.Context(), 0, 1, "CURRENT", 0, 0); err == nil {
+	if err := c.SetProgress(t.Context(), 0, 1, "CURRENT", 0, 0, false); err == nil {
 		t.Fatal("expected an error for anime id 0")
 	}
 }
@@ -349,7 +375,7 @@ func TestSetProgressSendsRewatchFields(t *testing.T) {
 	})
 	c.SetToken(Token{Access: "acc", Expires: time.Now().Add(time.Hour)})
 
-	if err := c.SetProgress(t.Context(), 5, 4, "REPEATING", 2, 0); err != nil {
+	if err := c.SetProgress(t.Context(), 5, 4, "REPEATING", 2, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	if form.Get("status") != StatusWatching || form.Get("is_rewatching") != "true" {
@@ -359,7 +385,7 @@ func TestSetProgressSendsRewatchFields(t *testing.T) {
 		t.Errorf("num_times_rewatched = %q, want 2", form.Get("num_times_rewatched"))
 	}
 
-	if err := c.SetProgress(t.Context(), 5, 12, "COMPLETED", 3, 0); err != nil {
+	if err := c.SetProgress(t.Context(), 5, 12, "COMPLETED", 3, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	if form.Get("is_rewatching") != "false" || form.Get("num_times_rewatched") != "3" {

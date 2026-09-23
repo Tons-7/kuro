@@ -40,19 +40,21 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	// Season 0 lets the finder read it from the title; forcing 1 rejected every
 	// "3rd Season" release.
 	prefs := s.preferences(r.Context(), body.AnimeID)
+	chosen := false
 	switch body.Audio {
 	case "sub", "dub", "either":
-		prefs.Audio = body.Audio
+		prefs.Audio, chosen = body.Audio, true
 	}
 
 	session, err := s.playback.Start(r.Context(), library.PlayRequest{
-		AnimeID:  body.AnimeID,
-		Episode:  body.Episode,
-		Season:   body.Season,
-		InfoHash: body.InfoHash,
-		External: body.External,
-		AllowRaw: body.AllowRaw,
-		Prefs:    prefs,
+		AnimeID:     body.AnimeID,
+		Episode:     body.Episode,
+		Season:      body.Season,
+		InfoHash:    body.InfoHash,
+		External:    body.External,
+		AllowRaw:    body.AllowRaw,
+		AudioChosen: chosen,
+		Prefs:       prefs,
 	})
 	if err != nil {
 		s.log.Error("play", "anime", body.AnimeID, "episode", body.Episode, "err", err)

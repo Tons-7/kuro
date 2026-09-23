@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +58,26 @@ func (s *Subtitles) lockFor(path string) *sync.Mutex {
 	m := &sync.Mutex{}
 	s.busy[path] = m
 	return m
+}
+
+// Forget drops what is remembered about a closed session's folder, or both maps
+// grow by every track of every episode for the life of the process.
+func (s *Subtitles) Forget(dir string) {
+	prefix := filepath.Clean(dir) + string(filepath.Separator)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for path := range s.done {
+		if strings.HasPrefix(path, prefix) {
+			delete(s.done, path)
+		}
+	}
+	for path, m := range s.busy {
+		// One in use keeps its lock; the next Forget takes it.
+		if strings.HasPrefix(path, prefix) && m.TryLock() {
+			m.Unlock()
+			delete(s.busy, path)
+		}
+	}
 }
 
 type Track struct {
@@ -144,18 +166,18 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	// download reached. Partial output covers the part that can be watched.
 	cues := dialogueLines(staging)
 	have := dialogueLines(path)
-	switch {
-	case err != nil && cues == 0 && have == 0:
+	if err != nil && cues == 0 && have == 0 {
 		os.Remove(staging)
 		return "", fmt.Errorf("extract subtitle %d: %w: %s", track, err, strings.TrimSpace(string(out)))
+	}
 
-	// Holes move as pieces land, so a later read can recover less. Keep the
-	// better one, and date it so the next request does not read straight away.
-	case cues < have:
-		os.Remove(staging)
-		now := time.Now()
-		os.Chtimes(path, now, now)
-		return path, nil
+	// Holes move as pieces land, so a later read can recover less, or a
+	// different stretch. Unioned, nothing already read is lost.
+	if have > 0 {
+		if mergeErr := mergeInto(staging, path); mergeErr != nil {
+			os.Remove(staging)
+			return path, nil
+		}
 	}
 
 	if renameErr := os.Rename(staging, path); renameErr != nil {
@@ -173,6 +195,79 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 		s.mu.Unlock()
 	}
 	return path, nil
+}
+
+// How much of the episode a playhead read covers: a little before, for the
+// line already on screen, and a few minutes ahead.
+const (
+	aroundBefore = 30.0
+	aroundSpan   = 330.0
+	aroundLimit  = 20 * time.Second
+)
+
+// ExtractAround reads the track near the playhead and merges it in. A read
+// from the start stops being useful once the viewer is past the downloaded
+// opening: ffmpeg crawls the gigabytes of holes in between and times out with
+// only the first lines. Seeking goes straight to what is playing, which is
+// downloaded because it is playing.
+func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track int, codec string, at float64) (string, error) {
+	path := filepath.Join(dir, fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec)))
+
+	one := s.lockFor(path)
+	one.Lock()
+	defer one.Unlock()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, aroundLimit)
+	defer cancel()
+
+	from := max(0, at-aroundBefore)
+	args := []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-ss", strconv.FormatFloat(from, 'f', 3, 64), "-t", strconv.FormatFloat(aroundSpan, 'f', 0, 64),
+		// Times as in the file, not from the seek point, or the merge misplaces them.
+		"-copyts",
+		"-i", source,
+		"-map", fmt.Sprintf("0:%d", track),
+	}
+	if isASS(codec) {
+		args = append(args, "-c:s", "copy")
+	} else {
+		args = append(args, "-c:s", "ass")
+	}
+	staging := path + ".around"
+	args = append(args, "-f", subtitleExt(codec), "-y", staging)
+	out, err := exec.CommandContext(ctx, s.ffmpeg, args...).CombinedOutput()
+	defer os.Remove(staging)
+
+	if dialogueLines(staging) == 0 {
+		if err != nil {
+			return path, fmt.Errorf("extract subtitle %d around %.0fs: %w: %s", track, at, err, strings.TrimSpace(string(out)))
+		}
+		return path, nil
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := mergeInto(staging, path); err != nil {
+			return path, err
+		}
+	}
+	// Aside and moved, as for a full read: the track may be served this instant.
+	return path, os.Rename(staging, path)
+}
+
+// mergeInto rewrites read as the union of itself and the track at have.
+func mergeInto(read, have string) error {
+	a, err := os.ReadFile(have)
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(read)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(read, []byte(mergeASS(string(a), string(b))), 0o644)
 }
 
 // dialogueLines counts cues; everything is written as ASS, so one shape fits.
@@ -196,11 +291,14 @@ func dialogueLines(path string) int {
 
 // ExtractFonts writes the container's font attachments to disk. Without them
 // the renderer substitutes fonts and styled signs come out wrong.
-func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string) ([]FontFile, error) {
+func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attachments []Attachment) ([]FontFile, error) {
 	fontDir := filepath.Join(dir, "fonts")
 
 	if entries, err := os.ReadDir(fontDir); err == nil && len(entries) > 0 {
 		return listFonts(fontDir), nil
+	}
+	if len(attachments) == 0 {
+		return nil, nil
 	}
 	if err := os.MkdirAll(fontDir, 0o755); err != nil {
 		return nil, err
@@ -209,21 +307,36 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string) ([]Fon
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	// dump_attachment uses stored filenames, so cmd.Dir decides where they land.
+	// By index, to our own names: the stored ones are the release maker's.
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
+	used := map[string]bool{}
+	for i, a := range attachments {
+		name := safeFontName(a.Filename, i)
+		for used[strings.ToLower(name)] {
+			name = fmt.Sprintf("%d-%s", i, name)
+		}
+		used[strings.ToLower(name)] = true
+		args = append(args, fmt.Sprintf("-dump_attachment:%d", a.Index), filepath.Join(fontDir, name))
+	}
 	// -t 0 stops after the header; without it ffmpeg decodes the whole file.
-	cmd := exec.CommandContext(ctx, s.ffmpeg,
-		"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-dump_attachment:t", "",
-		"-i", source,
-		"-t", "0",
-		"-f", "null", "-",
-	)
-	cmd.Dir = fontDir
+	args = append(args, "-i", source, "-t", "0", "-f", "null", "-")
 
-	// Non-zero just means there were no attachments.
-	_ = cmd.Run()
+	// Non-zero is normal here: there is no output stream to write.
+	_ = exec.CommandContext(ctx, s.ffmpeg, args...).Run()
 
 	return listFonts(fontDir), nil
+}
+
+var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._ -]+`)
+
+// safeFontName keeps the stored name's base and nothing that leaves the folder.
+func safeFontName(stored string, i int) string {
+	base := filepath.Base(strings.ReplaceAll(stored, `\`, "/"))
+	base = strings.Trim(unsafeName.ReplaceAllString(base, "_"), ". ")
+	if base == "" || base == "_" {
+		return fmt.Sprintf("font%d.ttf", i)
+	}
+	return base
 }
 
 func listFonts(dir string) []FontFile {

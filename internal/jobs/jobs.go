@@ -4,6 +4,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -46,10 +47,18 @@ type entry struct {
 	failures int
 	lastErr  string
 	took     time.Duration
+	// consecutive failures, for backoff; a manual success resets it too.
+	consecutive int
 }
+
+// ErrRunning: the job is already running, so nothing new was started.
+var ErrRunning = errors.New("already running")
 
 type Scheduler struct {
 	log *slog.Logger
+	// ctx lives as long as the scheduler, so a manual run is not tied to the
+	// request that asked for it.
+	ctx context.Context
 
 	mu      sync.Mutex
 	entries map[string]*entry
@@ -76,6 +85,7 @@ func (s *Scheduler) Add(job Job) {
 
 func (s *Scheduler) Start(ctx context.Context) {
 	s.mu.Lock()
+	s.ctx = ctx
 	names := append([]string(nil), s.order...)
 	s.mu.Unlock()
 
@@ -96,14 +106,12 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 
 	// Consecutive failures back off so a persistently broken job stops
 	// hammering whatever it depends on.
-	var consecutive int
 	for {
-		wait := e.job.Every
-		if consecutive > 0 {
-			wait = backoff(e.job.Every, consecutive)
-		}
-
 		e.mu.Lock()
+		wait := e.job.Every
+		if e.consecutive > 0 {
+			wait = backoff(e.job.Every, e.consecutive)
+		}
 		e.nextRun = time.Now().Add(wait)
 		e.mu.Unlock()
 
@@ -113,11 +121,7 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 		case <-time.After(wait):
 		}
 
-		if err := s.execute(ctx, e); err != nil {
-			consecutive++
-		} else {
-			consecutive = 0
-		}
+		s.execute(ctx, e)
 	}
 }
 
@@ -131,24 +135,35 @@ func backoff(base time.Duration, failures int) time.Duration {
 }
 
 func (s *Scheduler) execute(ctx context.Context, e *entry) error {
+	if !e.claim() {
+		return ErrRunning
+	}
+	return s.finish(ctx, e, e.job.Run)
+}
+
+func (e *entry) claim() bool {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.running {
-		e.mu.Unlock()
-		return nil
+		return false
 	}
 	e.running, e.lastRun = true, time.Now()
-	e.mu.Unlock()
+	return true
+}
 
+func (s *Scheduler) finish(ctx context.Context, e *entry, run Func) error {
 	start := time.Now()
-	err := safely(s.log, e.job.Name, ctx, e.job.Run)
+	err := safely(s.log, e.job.Name, ctx, run)
 	took := time.Since(start)
 
 	e.mu.Lock()
 	e.running, e.runs, e.took = false, e.runs+1, took
 	if err != nil {
 		e.failures++
+		e.consecutive++
 		e.lastErr = err.Error()
 	} else {
+		e.consecutive = 0
 		e.lastErr, e.lastOK = "", time.Now()
 	}
 	e.mu.Unlock()
@@ -171,13 +186,33 @@ func safely(log *slog.Logger, name string, ctx context.Context, run Func) (err e
 	return run(ctx)
 }
 
-// Trigger runs a job immediately without disturbing its schedule.
-func (s *Scheduler) Trigger(ctx context.Context, name string) error {
+// Trigger starts a job now, in the background, without disturbing its
+// schedule. ErrRunning when it already is.
+func (s *Scheduler) Trigger(name string) error {
+	return s.RunAs(name, nil)
+}
+
+// RunAs starts run under a job's name and lock, so a manual variant (a forced
+// refresh, say) never overlaps the scheduled one. nil runs the job itself.
+func (s *Scheduler) RunAs(name string, run Func) error {
 	e := s.entry(name)
 	if e == nil {
 		return fmt.Errorf("no such job: %s", name)
 	}
-	return s.execute(ctx, e)
+	if run == nil {
+		run = e.job.Run
+	}
+	if !e.claim() {
+		return ErrRunning
+	}
+	s.mu.Lock()
+	ctx := s.ctx
+	s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go s.finish(ctx, e, run)
+	return nil
 }
 
 func (s *Scheduler) Status() []Status {

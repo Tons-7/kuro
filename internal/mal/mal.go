@@ -50,10 +50,13 @@ type Client struct {
 
 	// Credentials are guarded because they are entered in the app rather than
 	// read from a file, so they can change while requests are in flight.
-	mu       sync.Mutex
-	token    Token
-	clientID string
-	secret   string
+	mu sync.Mutex
+	// One refresh at a time: two spending the same refresh token leave the
+	// loser, or a revoked access token, stored.
+	refreshing sync.Mutex
+	token      Token
+	clientID   string
+	secret     string
 }
 
 type Option func(*Client)

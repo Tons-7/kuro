@@ -2,6 +2,7 @@ package anilist
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,49 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 		limiter:  rate.NewLimiter(rate.Inf, 1),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		endpoint: srv.URL,
+	}
+}
+
+// A hidden adult title is only found by asking again without the token. When
+// that fails the missing id is unknown, not gone, and callers must be told.
+func TestMediaByIDsReportsAnUncheckedFallback(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"errors":[{"message":"down","status":400}]}`)
+			return
+		}
+		io.WriteString(w, `{"data":{"Page":{"media":[{"id":1}]}}}`)
+	})
+	c.SetToken("t")
+
+	media, err := c.MediaByIDs(context.Background(), []int{1, 2})
+	if !errors.Is(err, ErrIncomplete) || len(media) != 1 {
+		t.Fatalf("media %d, err %v; want the partial result and ErrIncomplete", len(media), err)
+	}
+
+	// Logged out there is nothing to retry: the missing id is simply missing.
+	anon := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":{"Page":{"media":[{"id":1}]}}}`)
+	})
+	if _, err := anon.MediaByIDs(context.Background(), []int{1, 2}); err != nil {
+		t.Fatalf("anonymous lookup reported %v", err)
+	}
+}
+
+// A toggle whose answer was lost may have landed; sending it again undoes it.
+func TestToggleFavouriteIsNeverRetried(t *testing.T) {
+	calls := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadGateway)
+	})
+
+	if err := c.ToggleFavourite(context.Background(), 1); err == nil {
+		t.Fatal("a failed toggle reported success")
+	}
+	if calls != 1 {
+		t.Fatalf("sent %d times; a second toggle undoes the first", calls)
 	}
 }
 

@@ -3,6 +3,7 @@ package transcode
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -46,6 +47,26 @@ func TestBitmapFormatsAreNotRenderable(t *testing.T) {
 		if Renderable(codec) {
 			t.Errorf("%s is a bitmap format and cannot be rendered as text", codec)
 		}
+	}
+}
+
+// A closed session's entries go, and only that session's.
+func TestForgetDropsOnlyThatSession(t *testing.T) {
+	s := NewSubtitles("ffmpeg")
+	root := t.TempDir()
+	closed, open := filepath.Join(root, "1-3"), filepath.Join(root, "1-30")
+	for _, dir := range []string{closed, open} {
+		p := filepath.Join(dir, "sub-2.ass")
+		s.done[p] = struct{}{}
+		s.lockFor(p)
+	}
+
+	s.Forget(closed)
+	if len(s.done) != 1 || len(s.busy) != 1 {
+		t.Fatalf("done %d, busy %d; want only the open session's left", len(s.done), len(s.busy))
+	}
+	if _, ok := s.done[filepath.Join(open, "sub-2.ass")]; !ok {
+		t.Fatal("a sibling whose name starts the same was forgotten")
 	}
 }
 

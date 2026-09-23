@@ -85,6 +85,27 @@ func TestAssignAndForgetLocalFiles(t *testing.T) {
 	}
 }
 
+// A MAL-only show's id is negative; its per-show switch used to write the global.
+func TestPerShowPreferenceOnAMALOnlyShow(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	ctx := context.Background()
+
+	res, body := h.postJSON(t, "/api/prefs", map[string]any{
+		"animeId": -12345, "key": "autodownload.enabled", "value": "true",
+	})
+	if res.StatusCode != 200 {
+		t.Fatalf("HTTP %d %v", res.StatusCode, body)
+	}
+	global, _ := h.store.Prefs(ctx, 0)
+	if global.Bool("autodownload.enabled") {
+		t.Fatal("the global setting was changed")
+	}
+	show, _ := h.store.Prefs(ctx, -12345)
+	if !show.Bool("autodownload.enabled") {
+		t.Fatal("the show's own setting was not saved")
+	}
+}
+
 // The per-show group control writes an anime-scoped override, and the release
 // picker used to read the account-wide settings, so the control did nothing.
 func TestPerShowPreferencesReachTheReleasePicker(t *testing.T) {

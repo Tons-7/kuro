@@ -39,6 +39,8 @@ var Defaults = map[string]string{
 	"subtitle.on_dub": "full",
 
 	"display.titles": TitleEnglish,
+	// How the app window opens: fullscreen or maximized. Takes effect next launch.
+	"window.mode": "fullscreen",
 
 	"quality.ladder":         `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
 	"quality.max_auto_bytes": "3221225472",
@@ -263,6 +265,45 @@ func (s *Store) SetBookmark(ctx context.Context, animeID int, b Bookmark) error 
 		        WHEN excluded.favourite <> user_anime.favourite_synced THEN 1 ELSE 0 END`,
 		animeID, boolInt(b.Favourite), boolInt(b.Pinned), boolInt(b.Hidden),
 		nullable(b.Note), time.Now().Unix(), boolInt(b.Favourite))
+	return err
+}
+
+// BookmarkPatch changes only the fields set. Two controls saving at once
+// (a note on blur, then Favourite) each sent the whole row and undid the other.
+type BookmarkPatch struct {
+	Favourite *bool   `json:"favourite"`
+	Pinned    *bool   `json:"pinned"`
+	Hidden    *bool   `json:"hidden"`
+	Note      *string `json:"note"`
+}
+
+func (s *Store) PatchBookmark(ctx context.Context, animeID int, p BookmarkPatch) error {
+	if err := s.EnsureAnime(ctx, animeID); err != nil {
+		return err
+	}
+	flag := func(b *bool) any {
+		if b == nil {
+			return nil
+		}
+		return boolInt(*b)
+	}
+	var note any
+	if p.Note != nil {
+		note = nullable(*p.Note)
+	}
+	_, err := s.w.ExecContext(ctx, `
+		INSERT INTO user_anime (anime_id, favourite, pinned, hidden, note, updated_at,
+		                        favourite_synced, favourite_dirty)
+		VALUES (?1, coalesce(?2, 0), coalesce(?3, 0), coalesce(?4, 0), ?5, ?6, 0, coalesce(?2, 0))
+		ON CONFLICT(anime_id) DO UPDATE SET
+		    favourite = coalesce(?2, user_anime.favourite),
+		    pinned = coalesce(?3, user_anime.pinned),
+		    hidden = coalesce(?4, user_anime.hidden),
+		    note = CASE WHEN ?7 THEN ?5 ELSE user_anime.note END,
+		    updated_at = ?6,
+		    favourite_dirty = CASE
+		        WHEN coalesce(?2, user_anime.favourite) <> user_anime.favourite_synced THEN 1 ELSE 0 END`,
+		animeID, flag(p.Favourite), flag(p.Pinned), flag(p.Hidden), note, time.Now().Unix(), p.Note != nil)
 	return err
 }
 

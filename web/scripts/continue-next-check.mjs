@@ -62,7 +62,7 @@ check(await until(() => rail.first().isVisible()), 'the Continue watching row is
 const card = rail.locator(`a[href="/watch/${ANIME}/2"]`).first()
 check(await until(() => card.isVisible()), 'its card links straight to episode 2')
 check(
-  (await card.innerText().catch(() => '')).includes('Episode 2'),
+  /\b(ep|episode) 2\b/i.test(await card.innerText().catch(() => '')),
   'and says which episode',
   (await card.innerText().catch(() => '')).split('\n').join(' | '),
 )

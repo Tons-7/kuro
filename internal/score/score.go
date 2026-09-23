@@ -208,6 +208,8 @@ type Result struct {
 	AutoPick   bool        `json:"autoPick"`
 	Blocked    string      `json:"blocked,omitempty"`
 	Rejections []Rejection `json:"rejections,omitempty"`
+	// resRank is the resolution's place on the ladder, the first quality key.
+	resRank float64
 }
 
 const (
@@ -230,7 +232,8 @@ const (
 
 	// Larger than a tier step, so the quality ladder cannot overturn language:
 	// an unreadable 1080p is worth less than a readable 720p.
-	subLanguageBonus  = 130.0
+	// Small: a label only breaks ties; most English releases state none.
+	subLanguageBonus  = 15.0
 	wrongLanguage     = 170.0
 	hardSubbedPenalty = 60.0
 )
@@ -271,10 +274,17 @@ func better(a, b Result) bool {
 	if a.AutoPick && a.Release.Batch != b.Release.Batch {
 		return !a.Release.Batch
 	}
-	// Within one resolution, a release that plays as-is beats one this machine
-	// would software-transcode (which stalls on seeks). Across resolutions the
-	// quality score still decides, so 1080p HEVC still beats 720p H.264.
-	if a.AutoPick && a.Release.Resolution == b.Release.Resolution && a.Playable != b.Playable {
+	// A strict order of keys, so the pick never depends on arrival order:
+	// SeaDex's curated best (a higher resolution is often an upscale), then
+	// resolution, then within it a release that plays as-is over one this
+	// machine would software-transcode (which stalls on seeks), then score.
+	if a.AutoPick && a.SeaDexBest != b.SeaDexBest {
+		return a.SeaDexBest
+	}
+	if a.AutoPick && a.resRank != b.resRank {
+		return a.resRank > b.resRank
+	}
+	if a.AutoPick && a.Playable != b.Playable {
 		return a.Playable
 	}
 	return a.Score > b.Score
@@ -293,6 +303,7 @@ func Best(cands []Candidate, prefs Preferences) (Result, bool) {
 func evaluate(c Candidate, prefs Preferences) Result {
 	r := Result{Candidate: c, AutoPick: true}
 	rel := c.Release
+	r.resRank = resolutionRank(rel.Resolution, prefs)
 
 	r.Playable = prefs.HardwareTranscode || !needsSoftwareTranscode(rel)
 	if !r.Playable {

@@ -64,6 +64,26 @@ func TestOtherShowsNeverWinTheEpisode(t *testing.T) {
 	}
 }
 
+// Derived episode rows are permanent, so another show's numbers must not
+// become this one's episodes.
+func TestEpisodeNumbersIgnoreOtherShows(t *testing.T) {
+	st := monsterStore(t)
+	f := NewFinder(st, fixedIndexer{results: []indexer.Torrent{
+		release("2222222222222222222222222222222222222222",
+			"[Erai-raws] Re-Monster - 12 [1080p][Multiple Subtitle]", 800),
+		release("3333333333333333333333333333333333333333",
+			"[sam] Monster (2004) - 03 (DVD 572p HEVC x265 10-bit AC-3) [Dual-Audio]", 48),
+	}}, discard())
+
+	got, err := f.EpisodeNumbers(context.Background(), 19)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != 3 {
+		t.Fatalf("numbers = %v, want only the show's own 3", got)
+	}
+}
+
 // Rejected releases stay in the list so the manual picker can show what was
 // found, with the reason attached.
 func TestOtherShowsAreKeptButBlocked(t *testing.T) {

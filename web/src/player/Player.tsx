@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import {
   api,
   type AudioTrack,
@@ -25,23 +27,52 @@ import {
   type Sheet,
 } from './hooks'
 
-const ENGLISH = /^(en|eng|english)$/i
+// A source swap loads the element paused without a pause event; playback that
+// was running carries on once the new source can play.
+function resumeAfterRebuild(video: HTMLVideoElement | null, wasPlaying: boolean) {
+  if (!video || !wasPlaying) return
+  video.addEventListener('canplay', () => void video.play().catch(() => {}), { once: true })
+}
+
+// The settings' ISO 639-1 codes, and what a file's track tags say instead.
+const LANGUAGE_TAGS: Record<string, string[]> = {
+  en: ['en', 'eng', 'english'],
+  es: ['es', 'spa', 'spanish', 'es-419', 'es-es'],
+  pt: ['pt', 'por', 'portuguese', 'pt-br'],
+  fr: ['fr', 'fre', 'fra', 'french'],
+  de: ['de', 'ger', 'deu', 'german'],
+  it: ['it', 'ita', 'italian'],
+  ru: ['ru', 'rus', 'russian'],
+  ar: ['ar', 'ara', 'arabic'],
+  zh: ['zh', 'chi', 'zho', 'chinese'],
+  ko: ['ko', 'kor', 'korean'],
+  id: ['id', 'ind', 'indonesian'],
+  vi: ['vi', 'vie', 'vietnamese'],
+  th: ['th', 'tha', 'thai'],
+}
 // A signs-and-songs track translates only on-screen text; playing it by default
 // looks like broken subtitles rather than the wrong track.
 const SIGNS = /\b(signs?|songs?|s&s|forced)\b/i
 
 /**
- * Which track to show. The file's default flag is trusted last: multi-language
- * releases often flag one arbitrarily, not the one anyone here can read.
+ * Which track to show: the first preferred language that has one, dialogue
+ * over signs. The file's default flag is trusted last: multi-language releases
+ * often flag one arbitrarily, not the one anyone here can read.
  */
-export function chooseTrack(tracks: SubtitleTrack[]): SubtitleTrack {
+export function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en']): SubtitleTrack {
   const dialogue = (t: SubtitleTrack) => !SIGNS.test(t.title ?? '')
-  const english = (t: SubtitleTrack) => ENGLISH.test(t.language ?? '')
+  const speaks = (code: string) => (t: SubtitleTrack) =>
+    (LANGUAGE_TAGS[code] ?? [code]).includes((t.language ?? '').toLowerCase())
 
+  for (const code of languages) {
+    const is = speaks(code)
+    const found =
+      tracks.find((t) => is(t) && dialogue(t) && t.default) ??
+      tracks.find((t) => is(t) && dialogue(t)) ??
+      tracks.find((t) => is(t))
+    if (found) return found
+  }
   return (
-    tracks.find((t) => english(t) && dialogue(t) && t.default) ??
-    tracks.find((t) => english(t) && dialogue(t)) ??
-    tracks.find((t) => english(t)) ??
     tracks.find((t) => dialogue(t) && t.default) ??
     tracks.find((t) => dialogue(t)) ??
     tracks.find((t) => t.default) ??
@@ -80,6 +111,8 @@ export interface PlayerProps {
   skips: SkipRange[]
   autoSkip: { op: boolean; ed: boolean }
   autoPlay: boolean
+  /** Subtitle languages in preference order, from settings. */
+  subLanguages?: string[]
   upscale?: { enabled: boolean; mode: string }
   title: string
   subtitle?: string
@@ -87,6 +120,8 @@ export interface PlayerProps {
   onProgress: (position: number, duration: number, played: number) => void
   onEnded: () => void
   onNext?: () => void
+  /** Playing or seeking again, which after the end means the viewer went back. */
+  onResume?: () => void
   /** The server no longer knows the stream; reopen it under the same URLs. */
   onSessionLost?: () => Promise<unknown>
   /** Drawn inside the player, so it survives fullscreen and picture in picture. */
@@ -99,18 +134,28 @@ export function Player({
   skips,
   autoSkip,
   autoPlay,
+  subLanguages,
   upscale,
   title,
   subtitle,
   onProgress,
   onEnded,
   onNext,
+  onResume,
   onSessionLost,
   overlay,
 }: PlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null)
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
   const shell = useRef<HTMLDivElement>(null)
+  // The player renders into this through a portal, so picture in picture can
+  // move it to the floating window with its event handlers still attached.
+  const [host] = useState(() => document.createElement('div'))
+  const anchor = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    anchor.current?.append(host)
+    return () => host.remove()
+  }, [host])
 
   const [playing, setPlaying] = useState(false)
   const [waiting, setWaiting] = useState(true)
@@ -120,6 +165,15 @@ export function Player({
   const [muted, setMuted] = useState(false)
   const [rate, setRate] = useState(() => loadPersisted().rate ?? 1)
   const [controlsVisible, setControlsVisible] = useState(true)
+  const [volumeShown, setVolumeShown] = useState(false)
+  const volumeTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(volumeTimer.current), [])
+  // The keys change volume with nothing else on screen; say where it landed.
+  const showVolume = useCallback(() => {
+    setVolumeShown(true)
+    window.clearTimeout(volumeTimer.current)
+    volumeTimer.current = window.setTimeout(() => setVolumeShown(false), 900)
+  }, [])
   const [track, setTrack] = useState<number | null>(null)
 
   // Restore what the last episode was left at; a new source resets the
@@ -150,6 +204,8 @@ export function Player({
   const [audioTrack, setAudioTrack] = useState(0)
   const [epoch, setEpoch] = useState(0)
   const [resumeAt, setResumeAt] = useState(startAt)
+  // The session could not be reopened after the reaper took it.
+  const [lostError, setLostError] = useState<string | null>(null)
 
   // Reset during render, not in an effect: the player outlives an episode
   // change now, and the HLS effect below runs first — it would attach the new
@@ -166,16 +222,23 @@ export function Player({
     setDuration(0)
     // Or a new episode sits on a paused frame while it buffers.
     setWaiting(true)
+    setLostError(null)
   }
 
   const playlist = stream?.playlist
     ? `${stream.playlist}${epoch ? `?a=${epoch}` : ''}`
     : undefined
 
+  // Set once the viewer picks a track, even track 0: a rebuilt session picks
+  // from the sub/dub preference and would quietly undo the choice.
+  const audioChosen = useRef(false)
   const switchAudio = useCallback(
     (index: number) => {
       const id = stream?.id
       if (!id || index === audioTrack) return
+      audioChosen.current = true
+      // Loading the new source leaves the element paused without a pause event.
+      resumeAfterRebuild(video, !!video && !video.paused && !video.ended)
       setResumeAt(video?.currentTime ?? startAt)
       setAudioTrack(index)
       setEpoch((e) => e + 1)
@@ -183,6 +246,9 @@ export function Player({
     },
     [stream?.id, audioTrack, video, startAt],
   )
+  useEffect(() => {
+    audioChosen.current = false
+  }, [stream?.id])
 
   // Filled below once hls exists; keepalive and fatal 404 can notice together,
   // so one reopen at a time.
@@ -201,27 +267,24 @@ export function Player({
       .then(() => {
         // The rebuilt session picks the track from the sub/dub preference, so a
         // mid-episode switch has to be asked for again or the menu lies.
-        if (track !== 0 && stream?.id) {
+        if (audioChosen.current && stream?.id) {
           void api.post(`/api/stream/${stream.id}/audio?track=${track}`).catch(() => {})
         }
         setResumeAt(video?.currentTime ?? startAt)
         setEpoch((e) => e + 1)
         // The rebuild resets the element to paused; only autoplay restarts it.
-        if (wasPlaying && video) {
-          video.addEventListener('canplay', () => void video.play().catch(() => {}), {
-            once: true,
-          })
-        }
+        resumeAfterRebuild(video, wasPlaying)
       })
-      .catch(() => {})
+      // Rebuilding against a session that failed to reopen only loops.
+      .catch((err: unknown) => setLostError(err instanceof Error ? err.message : 'Playback stopped'))
       .finally(() => {
         recovering.current = false
       })
   }
   useSeekRecovery(video, hls)
   useStallWatchdog(video, hls)
-  const fonts = useEmbeddedFonts(stream?.fontsUrl)
-  const pip = useDocumentPiP(shell.current)
+  const fonts = useEmbeddedFonts(stream?.fontsUrl, epoch)
+  const pip = useDocumentPiP(host)
   // Picture in picture moves the player into a second document, which the
   // subtitle renderer has to be rebuilt for: its canvas belongs to whichever
   // document it was created in.
@@ -252,7 +315,7 @@ export function Player({
     .map((s) => `${s.index}:${s.language ?? ''}:${s.title ?? ''}`)
     .join('|')
   useEffect(() => {
-    setTrack(stream?.subtitles?.length ? chooseTrack(stream.subtitles).index : null)
+    setTrack(stream?.subtitles?.length ? chooseTrack(stream.subtitles, subLanguages).index : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackList])
 
@@ -277,34 +340,45 @@ export function Player({
 
   // Report on a timer, not every timeupdate. Each report carries how much
   // actually played: a step larger than a second or two is a seek, not play.
+  // Per stream, with that episode's reporter: leaving or pressing Next must
+  // send the last position for the episode that played, and the source is
+  // already torn down (time 0, no duration) by then, so the last known values
+  // are kept here.
   useEffect(() => {
-    if (!video) return
+    if (!video || !stream?.id) return
+    const reporter = reportRef.current
 
     let played = 0
     let last = video.currentTime
+    let position = video.currentTime
+    let duration = video.duration
     const onTime = () => {
       const now = video.currentTime
       const step = now - last
       if (step > 0 && step < 2) played += step
       last = now
+      if (video.duration > 0) {
+        position = now
+        duration = video.duration
+      }
     }
     const onSeeking = () => {
       last = video.currentTime
     }
 
-    const report = (position: number) => {
-      reportRef.current(position, video.duration, played)
+    const report = (at: number) => {
+      reporter(at, duration, played)
       played = 0
     }
     const id = window.setInterval(() => {
-      if (!video.paused && video.duration > 0) report(video.currentTime)
+      if (!video.paused && duration > 0) report(position)
     }, 10_000)
 
     const flush = () => {
-      if (video.duration > 0) report(video.currentTime)
+      if (duration > 0) report(position)
     }
     const ended = () => {
-      if (video.duration > 0) report(video.duration)
+      if (duration > 0) report(duration)
       endedRef.current()
     }
     video.addEventListener('timeupdate', onTime)
@@ -321,7 +395,7 @@ export function Player({
       window.removeEventListener('pagehide', flush)
       flush()
     }
-  }, [video])
+  }, [video, stream?.id])
 
   const togglePlay = useCallback(() => {
     if (!video) return
@@ -354,6 +428,10 @@ export function Player({
   const lastTap = useRef<{ at: number; x: number }>({ at: 0, x: 0 })
   const touchedAt = useRef(0)
   const [flash, setFlash] = useState<'back' | 'forward' | null>(null)
+  // A tap on a side third waits to see if a second follows; toggling at once
+  // left every double-tap seek paused.
+  const pendingTap = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(pendingTap.current), [])
   const onSurfaceTouch = useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
       if (e.pointerType !== 'touch') return
@@ -361,9 +439,11 @@ export function Player({
       touchedAt.current = now
       const rect = e.currentTarget.getBoundingClientRect()
       const x = (e.clientX - rect.left) / rect.width
+      const side = x < 0.35 || x > 0.65
       const prev = lastTap.current
       lastTap.current = { at: now, x }
-      if (now - prev.at < 300 && Math.abs(prev.x - x) < 0.2 && (x < 0.35 || x > 0.65)) {
+      if (now - prev.at < 300 && Math.abs(prev.x - x) < 0.2 && side) {
+        window.clearTimeout(pendingTap.current)
         const dir = x < 0.35 ? 'back' : 'forward'
         seekBy(dir === 'back' ? -10 : 10)
         setFlash(dir)
@@ -371,7 +451,12 @@ export function Player({
         lastTap.current = { at: 0, x }
         return
       }
-      togglePlay()
+      if (!side) {
+        togglePlay()
+        return
+      }
+      window.clearTimeout(pendingTap.current)
+      pendingTap.current = window.setTimeout(togglePlay, 300)
     },
     [togglePlay, seekBy],
   )
@@ -392,7 +477,7 @@ export function Player({
     }, 2600)
   }, [video])
 
-  useKeyboard({ video, togglePlay, seekBy, nudge, shell: shell.current })
+  useKeyboard({ video, togglePlay, seekBy, nudge, shell: shell.current, extra: pip.window, showVolume })
 
   // How long the picture has been stuck, so a slow swarm can say so rather
   // than looking like a hang.
@@ -431,9 +516,15 @@ export function Player({
   const downloadInstead = async () => {
     const [animeId, episode] = (stream?.id ?? '').split('-').map(Number)
     if (!animeId || !episode) return
-    await api.post('/api/download', { animeId, episode }).catch(() => {})
-    setQueued(true)
+    try {
+      await api.post('/api/download', { animeId, episode })
+      setQueued(true)
+      setQueueError(null)
+    } catch (err) {
+      setQueueError(err instanceof Error ? err.message : 'Could not queue it')
+    }
   }
+  const [queueError, setQueueError] = useState<string | null>(null)
   useEffect(() => {
     if (!waiting && stream) {
       setStalledFor(0)
@@ -450,7 +541,7 @@ export function Player({
   // never matches there.
   const corners = pip.active ? '' : 'sm:rounded-xl'
 
-  return (
+  const body = (
     <div
       ref={shell}
       onMouseMove={nudge}
@@ -492,6 +583,7 @@ export function Player({
         onPointerUp={onSurfaceTouch}
         onPlay={() => {
           setPlaying(true)
+          onResume?.()
           // Resuming by any route re-arms the hide timer; a keyboard resume
           // moves no pointer, so nothing else would.
           nudge()
@@ -500,11 +592,17 @@ export function Player({
           setPlaying(false)
           setControlsVisible(true)
         }}
+        // A new source resets to paused without a pause event; the button
+        // must not keep saying Pause over it.
+        onEmptied={(e) => setPlaying(!e.currentTarget.paused)}
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}
         onCanPlay={() => setWaiting(false)}
         // Paused seeks repaint only once the new position decodes.
-        onSeeking={() => markSeeking(true)}
+        onSeeking={() => {
+          markSeeking(true)
+          onResume?.()
+        }}
         onSeeked={() => markSeeking(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
@@ -515,7 +613,13 @@ export function Player({
         }}
       />
 
-      {(waiting || !stream) && !error && (
+      {volumeShown && (
+        <div className="pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 rounded-full bg-base-950/75 px-3 py-1 text-sm font-medium text-white tabular-nums backdrop-blur-sm">
+          {muted ? 'Muted' : `Volume ${Math.round(volume * 100)}%`}
+        </div>
+      )}
+
+      {(waiting || !stream) && !error && !lostError && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
           <div className="text-center">
             <Spinner className="mx-auto size-8" />
@@ -535,22 +639,47 @@ export function Player({
                     : 'Waiting for the download to catch up…'}
               </p>
             )}
-            {health?.slow && stalledFor > 20 && (
-              <button
-                onClick={() => void downloadInstead()}
-                disabled={queued}
-                className="pointer-events-auto mt-3 rounded-md bg-base-800 px-3 py-1.5 text-xs text-base-100 hover:bg-base-700 disabled:opacity-50"
-              >
-                {queued ? 'Queued — see Downloads' : 'Download it instead and watch later'}
-              </button>
-            )}
+            {health?.slow && stalledFor > 20 &&
+              (queued ? (
+                <Link
+                  to="/downloads"
+                  className="pointer-events-auto mt-3 inline-block rounded-md bg-base-800 px-3 py-1.5 text-xs text-accent-300 hover:bg-base-700"
+                >
+                  Queued — open Downloads
+                </Link>
+              ) : (
+                <button
+                  onClick={() => void downloadInstead()}
+                  className="pointer-events-auto mt-3 rounded-md bg-base-800 px-3 py-1.5 text-xs text-base-100 hover:bg-base-700"
+                >
+                  Download it instead and watch later
+                </button>
+              ))}
+            {queueError && <p className="mt-2 text-xs text-recap">{queueError}</p>}
           </div>
         </div>
       )}
 
-      {error && (
+      {(error || lostError) && (
         <div className={cx('absolute inset-0 grid place-items-center bg-base-950/80 p-6 text-center', corners)}>
-          <p className="text-sm text-base-200">{error}</p>
+          <div>
+            <p className="text-sm text-base-200">{error ?? lostError}</p>
+            <button
+              onClick={() => {
+                if (error) {
+                  // A fresh source from where it stopped; the hook clears the error.
+                  setResumeAt(video?.currentTime || startAt)
+                  setEpoch((e) => e + 1)
+                  return
+                }
+                setLostError(null)
+                recover()
+              }}
+              className="pointer-events-auto mt-3 rounded-md bg-base-800 px-3 py-1.5 text-xs text-base-100 hover:bg-base-700"
+            >
+              Try again
+            </button>
+          </div>
         </div>
       )}
 
@@ -589,6 +718,7 @@ export function Player({
           duration={duration}
           skips={skips}
           streamId={stream?.id}
+          video={video}
           onSeek={(t) => video && (video.currentTime = t)}
         />
 
@@ -597,12 +727,16 @@ export function Player({
             {playing ? <PauseIcon /> : <PlayIcon />}
           </IconButton>
 
+          {/* On a phone the bar had no room for all of it: double tap seeks,
+              the hardware buttons set volume, speed stays in reach on desktop. */}
+          <span className={cx('contents', !pip.active && 'max-sm:hidden')}>
           <IconButton label="Back 10 seconds" onClick={() => seekBy(-10)}>
             <SeekIcon back />
           </IconButton>
           <IconButton label="Forward 10 seconds" onClick={() => seekBy(10)}>
             <SeekIcon />
           </IconButton>
+          </span>
 
           {onNext && (
             <IconButton label="Next episode" onClick={onNext}>
@@ -610,25 +744,34 @@ export function Player({
             </IconButton>
           )}
 
-          <Volume
-            volume={volume}
-            muted={muted}
-            onChange={(v) => {
-              if (!video) return
-              video.volume = v
-              video.muted = v === 0
-            }}
-            onToggle={() => video && (video.muted = !video.muted)}
-          />
+          <span className="contents max-sm:hidden">
+            <Volume
+              volume={volume}
+              muted={muted}
+              onChange={(v) => {
+                if (!video) return
+                video.volume = v
+                video.muted = v === 0
+              }}
+              onToggle={() => video && (video.muted = !video.muted)}
+            />
+          </span>
 
-          <span className="ml-1 text-xs tabular-nums text-white/80">
-            {clockTime(time)} / {clockTime(duration)}
+          <span className="ml-1 text-xs whitespace-nowrap tabular-nums text-white/80">
+            {clockTime(time)}
+            <span className="max-sm:hidden"> / {clockTime(duration)}</span>
           </span>
 
           <div className="ml-auto flex items-center gap-1">
-            <SpeedPicker value={rate} onChange={changeRate} />
+            {!pip.active && (
+              <span className="contents max-sm:hidden">
+                <SpeedPicker value={rate} onChange={changeRate} />
+              </span>
+            )}
 
-            {(stream?.audio?.length ?? 0) > 1 && (
+            {/* The floating window keeps only what fits it: subtitles, and the
+                way back. Audio, speed and fullscreen wait in the tab. */}
+            {!pip.active && (stream?.audio?.length ?? 0) > 1 && (
               <AudioPicker
                 tracks={stream!.audio!}
                 value={audioTrack}
@@ -644,21 +787,32 @@ export function Player({
               />
             )}
 
-            {pip.supported && (
-              <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
+            {pip.active ? (
+              <button
+                onClick={() => void pip.toggle()}
+                className="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-medium text-white ring-1 ring-white/20 backdrop-blur-sm hover:bg-white/25"
+              >
                 <PiPIcon />
-              </IconButton>
+                Back to tab
+              </button>
+            ) : (
+              <>
+                {pip.supported && (
+                  <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
+                    <PiPIcon />
+                  </IconButton>
+                )}
+                <IconButton
+                  label="Fullscreen"
+                  onClick={() => {
+                    if (document.fullscreenElement) void document.exitFullscreen()
+                    else void shell.current?.requestFullscreen()
+                  }}
+                >
+                  <FullscreenIcon />
+                </IconButton>
+              </>
             )}
-
-            <IconButton
-              label="Fullscreen"
-              onClick={() => {
-                if (document.fullscreenElement) void document.exitFullscreen()
-                else void shell.current?.requestFullscreen()
-              }}
-            >
-              <FullscreenIcon />
-            </IconButton>
           </div>
         </div>
         </div>
@@ -666,15 +820,37 @@ export function Player({
 
       <div
         className={cx(
-          'pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent p-4 transition-opacity duration-200',
+          'pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-200',
+          pip.active ? 'p-2' : 'p-4',
           controlsVisible ? 'opacity-100' : 'opacity-0',
         )}
       >
-        <p className="text-sm font-medium text-white">{title}</p>
-        {subtitle && <p className="text-xs text-white/70">{subtitle}</p>}
+        {/* One line in the floating window, which is small and already titled. */}
+        {pip.active ? (
+          <p className="truncate text-xs font-medium text-white/90">{subtitle ?? title}</p>
+        ) : (
+          <>
+            <p className="text-sm font-medium text-white">{title}</p>
+            {subtitle && <p className="text-xs text-white/70">{subtitle}</p>}
+          </>
+        )}
+        {/* The toolbar says Anime4K is on; this says when it is not working. */}
+        {(upscaleState === 'unsupported' || upscaleState === 'failed') && (
+          <p className="mt-1.5 inline-block rounded bg-black/60 px-2 py-0.5 text-[11px] text-amber-300">
+            {upscaleState === 'unsupported'
+              ? "Anime4K needs WebGPU, which this browser doesn't have; playing without it."
+              : 'Anime4K stopped (the graphics device was lost); playing without it.'}
+          </p>
+        )}
       </div>
 
       {overlay}
+    </div>
+  )
+
+  return (
+    <div ref={anchor} className="w-full">
+      {createPortal(body, host)}
     </div>
   )
 }
@@ -693,15 +869,17 @@ function Scrubber({
   duration,
   skips,
   streamId,
+  video,
   onSeek,
 }: {
   time: number
   duration: number
   skips: SkipRange[]
   streamId?: string
+  video: HTMLVideoElement | null
   onSeek: (t: number) => void
 }) {
-  const sheet = useThumbnails(streamId)
+  const sheet = useThumbnails(streamId, video)
 
   // Where the pointer is, as a fraction. Null when it is not over the bar.
   const [at, setAt] = useState<number | null>(null)
@@ -1058,12 +1236,17 @@ function useKeyboard({
   seekBy,
   nudge,
   shell,
+  extra,
+  showVolume,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
   seekBy: (n: number) => void
   nudge: () => void
   shell: HTMLElement | null
+  /** The picture-in-picture window, whose keys never reach this one. */
+  extra: Window | null
+  showVolume: () => void
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1072,6 +1255,10 @@ function useKeyboard({
       // A dialog or menu owns the keyboard while it is open; swallowing Space
       // here would stop its buttons from activating.
       if (target?.closest('[role=dialog], [role=menu], [role=listbox], [data-portal-menu]')) return
+      // Ctrl+F, Ctrl+L and the like belong to the browser.
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      // The page must not scroll while the arrows seek or change volume.
+      if (e.key.startsWith('Arrow')) e.preventDefault()
 
       switch (e.key) {
         case ' ':
@@ -1093,12 +1280,15 @@ function useKeyboard({
           break
         case 'ArrowUp':
           if (video) video.volume = Math.min(1, video.volume + 0.1)
+          showVolume()
           break
         case 'ArrowDown':
           if (video) video.volume = Math.max(0, video.volume - 0.1)
+          showVolume()
           break
         case 'm':
           if (video) video.muted = !video.muted
+          showVolume()
           break
         case 'f':
           if (document.fullscreenElement) void document.exitFullscreen()
@@ -1111,8 +1301,12 @@ function useKeyboard({
       nudge()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [video, togglePlay, seekBy, nudge, shell])
+    extra?.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      extra?.removeEventListener('keydown', onKey)
+    }
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume])
 }
 
 function IconButton({

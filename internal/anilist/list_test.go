@@ -78,7 +78,7 @@ func TestSetProgressOmitsUnsetFields(t *testing.T) {
 		io.WriteString(w, `{"data":{"SaveMediaListEntry":{"id":1}}}`)
 	})
 
-	if _, err := c.SetProgress(context.Background(), 100, 7, "", nil, 0, 0); err != nil {
+	if _, err := c.SetProgress(context.Background(), 100, 7, "", nil, 0, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	// repeat and score included: a zero would wipe what was built up on the site.
@@ -93,7 +93,7 @@ func TestSetProgressOmitsUnsetFields(t *testing.T) {
 
 	// The rewatch count is always known, so it always travels — including the
 	// bump that finishing a rewatch makes.
-	if _, err := c.SetProgress(context.Background(), 100, 12, "COMPLETED", &FuzzyDate{ptr(2026), ptr(8), ptr(8)}, 2, 85); err != nil {
+	if _, err := c.SetProgress(context.Background(), 100, 12, "COMPLETED", &FuzzyDate{ptr(2026), ptr(8), ptr(8)}, 2, 85, false); err != nil {
 		t.Fatal(err)
 	}
 	if vars["status"] != "COMPLETED" {
@@ -111,6 +111,14 @@ func TestSetProgressOmitsUnsetFields(t *testing.T) {
 	}
 	if _, present := vars["score"]; present {
 		t.Fatal("a formatted score was sent alongside the raw one")
+	}
+
+	// Set back to unrated on purpose: that 0 has to reach the site.
+	if _, err := c.SetProgress(context.Background(), 100, 12, "", nil, 0, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if v, present := vars["scoreRaw"]; !present || v != float64(0) {
+		t.Fatalf("scoreRaw = %v (sent %v), want an explicit 0", v, present)
 	}
 }
 

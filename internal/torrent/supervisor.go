@@ -33,6 +33,9 @@ type Options struct {
 	// value keeps forwarding on, matching rqbit: without inbound peers a home
 	// connection only ever sees the few reachable outbound, and that is slow.
 	DisableUPnP bool
+
+	// SessionDir keeps rqbit's torrent list per install; its default is per user.
+	SessionDir string
 }
 
 // Supervisor runs rqbit as a child process tied to the application lifetime.
@@ -92,7 +95,11 @@ func (s *Supervisor) rqbitArgs(cacheDir string) []string {
 	}
 	// Lower levels flood: a progress line per torrent per second, or a line per
 	// 16KB chunk on a healthy swarm. error still surfaces real failures.
-	return append(args, "-v", "error", "server", "start", cacheDir)
+	args = append(args, "-v", "error", "server", "start")
+	if s.opts.SessionDir != "" {
+		args = append(args, "--persistence-location", s.opts.SessionDir)
+	}
+	return append(args, cacheDir)
 }
 
 func (s *Supervisor) BaseURL() string { return "http://" + s.opts.APIAddr }
@@ -249,6 +256,16 @@ func (s *Supervisor) start() error {
 	cacheDir, err := filepath.Abs(s.opts.CacheDir)
 	if err != nil {
 		return err
+	}
+	if s.opts.SessionDir != "" {
+		if s.opts.SessionDir, err = filepath.Abs(s.opts.SessionDir); err != nil {
+			return err
+		}
+		if n, err := SeedSession(s.opts.SessionDir, legacySessionDir(), cacheDir); err != nil {
+			s.log.Warn("carry over torrent session", "err", err)
+		} else if n > 0 {
+			s.log.Info("carried over torrent session", "torrents", n, "to", s.opts.SessionDir)
+		}
 	}
 
 	// Nothing rqbit-like answered, so a port in use is another program's.

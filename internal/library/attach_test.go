@@ -24,17 +24,20 @@ import (
 // fakeRqbit is enough of the engine to drive attach: add a torrent, report its
 // state, stream from it, delete it.
 type fakeRqbit struct {
-	mu      sync.Mutex
-	dead    map[string]bool          // by info hash
-	slow    map[string]time.Duration // delay before the first byte, by info hash
-	ids     map[int]string           // torrent id -> info hash
-	added   []string
-	deleted []string
-	next    int
+	mu       sync.Mutex
+	dead     map[string]bool          // by info hash
+	slow     map[string]time.Duration // delay before the first byte, by info hash
+	ids      map[int]string           // torrent id -> info hash
+	finished map[string]bool          // by info hash
+	folder   string                   // every torrent's output folder
+	added    []string
+	deleted  []string
+	next     int
 }
 
 func newFakeRqbit(dead ...string) *fakeRqbit {
-	f := &fakeRqbit{dead: map[string]bool{}, slow: map[string]time.Duration{}, ids: map[int]string{}}
+	f := &fakeRqbit{dead: map[string]bool{}, slow: map[string]time.Duration{},
+		ids: map[int]string{}, finished: map[string]bool{}}
 	for _, h := range dead {
 		f.dead[h] = true
 	}
@@ -82,8 +85,25 @@ func (f *fakeRqbit) handler() http.Handler {
 	})
 
 	mux.HandleFunc("GET /torrents/{id}/stats/v1", func(w http.ResponseWriter, r *http.Request) {
+		var id int
+		fmt.Sscanf(r.PathValue("id"), "%d", &id)
+		f.mu.Lock()
+		done := f.finished[f.ids[id]]
+		f.mu.Unlock()
 		json.NewEncoder(w).Encode(map[string]any{
-			"state": "live", "progress_bytes": 0, "total_bytes": 1 << 30, "finished": false,
+			"state": "live", "progress_bytes": 0, "total_bytes": 1 << 30, "finished": done,
+		})
+	})
+
+	mux.HandleFunc("GET /torrents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var id int
+		fmt.Sscanf(r.PathValue("id"), "%d", &id)
+		f.mu.Lock()
+		hash, folder := f.ids[id], f.folder
+		f.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{
+			"info_hash": hash, "name": hash, "output_folder": folder,
+			"files": []map[string]any{{"name": hash, "components": []string{hash}, "length": 1 << 30, "included": true}},
 		})
 	})
 

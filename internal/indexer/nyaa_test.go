@@ -293,6 +293,32 @@ func TestMultiToleratesFailingSource(t *testing.T) {
 	}
 }
 
+// One site empty and another down is still an answer: nothing yet.
+func TestMultiEmptyAndFailingIsNotAnError(t *testing.T) {
+	m := Multi{Sources: []Source{
+		fakeSource{name: "empty"},
+		fakeSource{name: "broken", err: io.ErrUnexpectedEOF},
+	}}
+	if got, err := m.Search(context.Background(), Query{}); err != nil || len(got) != 0 {
+		t.Fatalf("got %d results, err %v; want an empty answer", len(got), err)
+	}
+}
+
+// Either site's trust or remake flag stands, whichever record is kept.
+func TestMultiMergesFlags(t *testing.T) {
+	m := Multi{Sources: []Source{
+		fakeSource{name: "a", results: []Torrent{{InfoHash: "aaa"}}},
+		fakeSource{name: "b", results: []Torrent{{InfoHash: "AAA", Trusted: true, Remake: true, Category: "1_2"}}},
+	}}
+	got, err := m.Search(context.Background(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Trusted || !got[0].Remake || got[0].Category != "1_2" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestMultiReportsErrorWhenAllFail(t *testing.T) {
 	m := Multi{Sources: []Source{
 		fakeSource{name: "a", err: io.ErrUnexpectedEOF},

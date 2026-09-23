@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -231,6 +232,13 @@ func (e *Enricher) flags(ctx context.Context, animeID, malID int) {
 	}
 
 	found, err := e.meta.Flags(ctx, malID)
+	// Not listed yet is an answer for now, not for good.
+	if errors.Is(err, metadata.ErrNotListed) {
+		if err := e.store.MarkFlagsFetched(ctx, malID, false); err != nil {
+			e.log.Warn("mark flags fetched", "err", err)
+		}
+		return
+	}
 	if err != nil {
 		e.log.Warn("episode flags", "anime", animeID, "err", err)
 		return
@@ -241,7 +249,7 @@ func (e *Enricher) flags(ctx context.Context, animeID, malID int) {
 		e.log.Warn("save episode flags", "anime", animeID, "err", err)
 		return
 	}
-	if err := e.store.MarkFlagsFetched(ctx, malID); err != nil {
+	if err := e.store.MarkFlagsFetched(ctx, malID, e.store.Finished(ctx, animeID)); err != nil {
 		e.log.Warn("mark flags fetched", "err", err)
 	}
 	if recaps > 0 {

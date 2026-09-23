@@ -38,12 +38,16 @@ export function ShowExtra({ animeId }: { animeId: number }) {
   const openings = data?.openings ?? []
   const endings = data?.endings ?? []
   const staff = data?.staff ?? []
-  if (openings.length === 0 && endings.length === 0 && staff.length === 0) return null
+  // A trailer alone still earns the section; without it the button vanished
+  // for every show missing themes and staff.
+  if (openings.length === 0 && endings.length === 0 && staff.length === 0 && !data?.trailer) return null
 
   return (
     <section className="space-y-3">
       <div className="flex items-baseline justify-between">
-        <h2 className="section-title">Music &amp; staff</h2>
+        <h2 className="section-title">
+          {openings.length + endings.length + staff.length > 0 ? 'Music & staff' : 'Trailer'}
+        </h2>
         {data?.trailer &&
           (youtubeID(data.trailer) ? (
             <button
@@ -83,7 +87,7 @@ export function ShowExtra({ animeId }: { animeId: number }) {
                 <li key={`${c.role}-${c.name}`} className="flex items-baseline gap-3 text-sm">
                   {/* Fixed column so the names line up rather than stepping in
                       and out with the length of each role. */}
-                  <span className="w-36 shrink-0 truncate text-xs text-base-500" title={c.role}>
+                  <span className="w-24 shrink-0 truncate text-xs text-base-500 sm:w-36" title={c.role}>
                     {c.role}
                   </span>
                   <span className="min-w-0 truncate text-base-200">{c.name}</span>
@@ -112,7 +116,7 @@ function ThemeList({ label, themes }: { label: string; themes: Theme[] }) {
       <ul className="space-y-1.5">
         {shown.map((t, i) => (
           <li key={`${t.title}-${i}`} className="flex items-baseline gap-3 text-sm">
-            <span className="w-36 shrink-0 text-xs text-base-500">
+            <span className="w-20 shrink-0 text-xs text-base-500 sm:w-36">
               {label}
               {themes.length > 1 ? ` ${(all ? 0 : hidden) + i + 1}` : ''}
             </span>

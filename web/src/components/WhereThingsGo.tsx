@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, ApiError } from '../lib/api'
 import { bytes } from '../lib/format'
+import { buttonClass } from './ui'
 import type { SetupState } from '../lib/queries'
 
 /** Every folder kuro uses and its config.toml key. */
@@ -25,7 +26,7 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
             </button>
           }
         >
-          {picking && <DataDirPicker current={setup.dataDir} />}
+          {picking && <DataDirPicker fallback={setup.defaultDataDir ?? setup.dataDir} />}
         </Folder>
         <Folder
           label="Episode cache"
@@ -84,25 +85,35 @@ function Folder({
 
 // Where history and settings live. Written to config.toml and the database
 // copied over, so it takes effect on the next start with nothing lost.
-function DataDirPicker({ current }: { current: string }) {
+function DataDirPicker({ fallback }: { fallback: string }) {
   const [path, setPath] = useState('')
   const move = useMutation({
-    mutationFn: (p: string) =>
-      api.post<{ dataDir: string; copied: boolean }>('/api/setup/data-dir', { path: p }),
+    meta: { inline: true },
+    mutationFn: (v: { path: string; useExisting?: boolean }) =>
+      api.post<{ dataDir: string; copied: boolean; restart: boolean }>('/api/setup/data-dir', v),
   })
+  // The folder already holds a kuro database: switching opens that history
+  // instead of carrying this one, so it is asked, with its age.
+  const existing =
+    move.error instanceof ApiError && move.error.status === 409
+      ? ((move.error.body as { modified?: number }) ?? {})
+      : null
 
   if (move.isSuccess) {
     return (
       <p className="mt-2 text-xs text-accent-400">
-        Saved: {move.data.dataDir}. Restart kuro to use it
-        {move.data.copied ? ' — your history has been copied there.' : '.'}
+        {move.data.restart === false
+          ? 'Already using that folder.'
+          : `Saved: ${move.data.dataDir}. Restart kuro to use it${
+              move.data.copied ? ' — your history has been copied there.' : '.'
+            }`}
       </p>
     )
   }
   return (
     <div className="mt-2 space-y-2 text-xs">
       <p className="text-base-400">
-        Empty means the default ({current}). A relative path is beside kuro.exe:{' '}
+        Empty means the default ({fallback}). A relative path is beside kuro.exe:{' '}
         <button onClick={() => setPath('data')} className="text-accent-400 hover:underline">
           data
         </button>{' '}
@@ -116,14 +127,40 @@ function DataDirPicker({ current }: { current: string }) {
           className="min-w-0 flex-1 rounded-md border border-base-800 bg-base-950 px-2 py-1.5 text-sm text-base-100 outline-none focus:border-accent-500"
         />
         <button
-          onClick={() => move.mutate(path.trim())}
+          onClick={() => move.mutate({ path: path.trim() })}
           disabled={move.isPending}
-          className="rounded-md bg-accent-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-600 disabled:opacity-50"
+          className={buttonClass('primary')}
         >
           Save
         </button>
       </div>
-      {move.isError && <p className="text-recap">{(move.error as Error).message}</p>}
+      {existing ? (
+        <div className="space-y-2 rounded-md border border-recap/40 bg-recap/10 p-2.5 text-base-200">
+          <p>
+            That folder already has a kuro history
+            {existing.modified
+              ? `, last changed ${new Date(existing.modified * 1000).toLocaleDateString()}`
+              : ''}
+            . Switching opens that one; what you have now stays where it is.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => move.mutate({ path: path.trim(), useExisting: true })}
+              className="rounded-md bg-recap/80 px-3 py-1.5 font-medium text-white hover:bg-recap"
+            >
+              Use that history
+            </button>
+            <button
+              onClick={() => move.reset()}
+              className="rounded-md bg-base-800 px-3 py-1.5 text-base-100 hover:bg-base-700"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        move.isError && <p className="text-recap">{(move.error as Error).message}</p>
+      )}
     </div>
   )
 }

@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { cx, relativeTime } from '../lib/format'
 import { useNotifications, type Notification } from '../lib/queries'
-import { useDismiss } from './ui'
+import { useDismiss, useModalFocus } from './ui'
 
 /**
  * New episodes read as a glance, not a destination. The panel does the whole
@@ -13,6 +13,10 @@ import { useDismiss } from './ui'
  */
 export function NotificationPanel() {
   const [open, setOpen] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+  // In a portal at the end of the page; keyboard focus goes in and comes back.
+  const panelRef = useRef<HTMLDivElement>(null)
+  useModalFocus(panelRef, open)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close)
   const trigger = useRef<HTMLButtonElement>(null)
@@ -55,6 +59,9 @@ export function NotificationPanel() {
       {open && box &&
         createPortal(
           <div
+            ref={panelRef}
+            role="dialog"
+            aria-label="Notifications"
             data-portal-menu
             style={{
               top: box.bottom + 8,
@@ -80,14 +87,27 @@ export function NotificationPanel() {
                     Mark all read
                   </button>
                 )}
-                {items.length > 0 && (
-                  <button
-                    onClick={() => remove.mutate(undefined)}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-recap"
-                  >
-                    Clear
-                  </button>
-                )}
+                {/* Every notification at once: asked, not done on one click. */}
+                {items.length > 0 &&
+                  (confirmClear ? (
+                    <button
+                      onClick={() => {
+                        remove.mutate(undefined)
+                        setConfirmClear(false)
+                      }}
+                      onBlur={() => setConfirmClear(false)}
+                      className="rounded bg-recap/20 px-1.5 py-0.5 text-[11px] font-medium text-red-300 transition-colors hover:bg-recap/30"
+                    >
+                      Clear all {items.length}?
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmClear(true)}
+                      className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-recap"
+                    >
+                      Clear
+                    </button>
+                  ))}
               </div>
             </div>
 
@@ -158,7 +178,7 @@ function Row({
       <button
         onClick={onRemove}
         aria-label="Remove notification"
-        className="absolute top-2 right-2 rounded p-1 text-base-600 opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-recap focus-visible:opacity-100"
+        className="absolute top-2 right-2 rounded p-1 text-base-600 opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-recap focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
           <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />

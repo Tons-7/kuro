@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cx } from '../lib/format'
-import { useDismiss } from './ui'
+import { useDismiss, useModalFocus } from './ui'
 
 /**
  * A multi-value filter; a native select holds only one and ignores the design.
@@ -27,6 +27,9 @@ export function FilterMenu({
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close)
   const trigger = useRef<HTMLButtonElement>(null)
+  // A portal sits at the end of the tab order: focus moves in and back out.
+  const menuRef = useRef<HTMLDivElement>(null)
+  useModalFocus(menuRef, open)
 
   const pretty = (option: string) => labels?.[option] ?? option.replace(/_/g, ' ').toLowerCase()
   const box = trigger.current?.getBoundingClientRect()
@@ -58,17 +61,20 @@ export function FilterMenu({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cx(
-          'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors',
+          'flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ring-1 transition-colors',
+          open && 'ring-accent-400/60',
           values.length > 0
-            ? 'border-accent-500/50 bg-accent-500/10 text-accent-300'
-            : 'border-base-800 bg-base-900 text-base-300 hover:border-base-700 hover:text-base-100',
+            ? 'bg-accent-500/15 text-accent-200 ring-accent-500/40'
+            : 'bg-base-850 text-base-200 ring-white/[0.07] hover:bg-base-800 hover:text-white',
         )}
       >
+        {/* A single choice (year, sort) reads as its value; a list keeps its name
+            and says how many, the values themselves are in the chips below. */}
         <span className="capitalize">
-          {values.length === 1 ? pretty(values[0]) : label}
+          {!multiple && values.length === 1 ? pretty(values[0]) : label}
         </span>
-        {values.length > 1 && (
-          <span className="rounded bg-accent-500/25 px-1 text-[11px] tabular-nums">
+        {multiple && values.length > 0 && (
+          <span className="grid min-w-4 place-items-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-white tabular-nums">
             {values.length}
           </span>
         )}
@@ -80,6 +86,7 @@ export function FilterMenu({
       {open && box &&
         createPortal(
           <div
+            ref={menuRef}
             role="listbox"
             data-portal-menu
             style={{
@@ -90,7 +97,8 @@ export function FilterMenu({
               ),
             }}
             className={cx(
-              'fixed z-50 animate-rise rounded-xl border border-base-750 bg-base-850 p-1.5 shadow-panel',
+              // Never wider than the screen: a phone is narrower than two columns.
+              'fixed z-50 max-w-[calc(100vw-16px)] animate-rise rounded-xl border border-base-750 bg-base-850 p-1.5 shadow-panel',
               wide ? 'w-[27rem]' : 'w-60',
             )}
           >

@@ -7,6 +7,7 @@ import { useNotifications, type Notification } from '../lib/queries'
 import {
   Badge,
   Button,
+  buttonClass,
   Empty,
   ErrorState,
   FilterToggle,
@@ -339,9 +340,14 @@ export function Downloads() {
   })
 
   const remove = useMutation({
+    meta: { inline: true },
     mutationFn: (hash: string) => api.del(`/api/downloads/${hash}`),
     onSuccess: done,
+    onSettled: () => setConfirmRemove(null),
   })
+  // Deleting takes the files; rows also shift as downloads finish, so the ✕
+  // asks before it acts.
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
   const pause = useMutation({
     mutationFn: (hash: string) => api.post(`/api/downloads/${hash}/pause`),
@@ -353,12 +359,14 @@ export function Downloads() {
     onSuccess: done,
   })
   const clear = useMutation({
+    meta: { inline: true },
     mutationFn: (scope: string) => api.post(`/api/downloads/clear?scope=${scope}`),
     onSuccess: done,
   })
   // Optimistic: a click on a list fetched a moment ago used to send the wrong
   // action and look like nothing happened.
   const keep = useMutation({
+    meta: { inline: true },
     mutationFn: (d: Download) =>
       api.post<{ infoHash: string; kept: boolean }>(
         `/api/downloads/${d.infoHash}/${d.kept ? 'unkeep' : 'keep'}`,
@@ -380,7 +388,8 @@ export function Downloads() {
 
   const items = data?.items ?? []
   const queued = queue.data?.items ?? []
-  const removable = items.filter((d) => !d.pinned).length
+  // Clear never takes a kept download or one playing now.
+  const removable = items.filter((d) => !d.pinned && !d.kept).length
 
   // A queue entry and its torrent are one download; the torrent wins.
   const started = new Set(items.flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
@@ -390,13 +399,18 @@ export function Downloads() {
   const waitingQueue = queued.filter(
     (q) => q.state === 'pending' && !started.has(`${q.animeId}-${q.epKey}`),
   )
+  // Claimed but its release not found yet: no torrent to show, still underway.
+  const searching = queued.filter(
+    (q) => q.state === 'active' && !started.has(`${q.animeId}-${q.epKey}`),
+  )
   const failed = queued.filter((q) => q.state === 'failed')
   const waiting = held.length + waitingQueue.length
   const keptBytes = finished.reduce((n, d) => n + (d.kept ? d.bytesOnDisk : 0), 0)
   const cachedBytes = finished.reduce((n, d) => n + (d.kept ? 0 : d.bytesOnDisk), 0)
 
   const rows: Row[] = [
-    ...(active.length > 0 ? [{ group: 'Downloading', meta: 'one at a time' }] : []),
+    ...(active.length + searching.length > 0 ? [{ group: 'Downloading', meta: 'one at a time' }] : []),
+    ...searching.map((q) => ({ q })),
     ...active.map((d) => ({ d })),
     ...(waiting > 0 ? [{ group: 'Waiting', meta: String(waiting) }] : []),
     ...held.map((d, i) => ({ d, position: i + 1 })),
@@ -418,7 +432,7 @@ export function Downloads() {
             ? [
                 active.length > 0 && `${active.length} downloading`,
                 waiting > 0 && `${waiting} waiting`,
-                `${finished.length} on disk`,
+                finished.length > 0 && `${finished.length} on disk`,
               ]
                 .filter(Boolean)
                 .join(' · ')
@@ -428,9 +442,12 @@ export function Downloads() {
           removable > 0 &&
           (confirmClear ? (
             <>
-              <Button onClick={() => clear.mutate('completed')}>Finished only</Button>
+              <span className="self-center text-xs text-base-400">
+                Cached episodes only; downloaded ones stay.
+              </span>
+              <Button onClick={() => clear.mutate('completed')}>Finished</Button>
               <Button variant="danger" onClick={() => clear.mutate('all')}>
-                Everything
+                All, unfinished too
               </Button>
               <Button variant="ghost" onClick={() => setConfirmClear(false)}>
                 Cancel
@@ -574,9 +591,25 @@ export function Downloads() {
                     {d.kept ? '✓ Kept' : 'Keep'}
                   </button>
 
-                  {!d.pinned && (
+                  {!d.pinned && confirmRemove === d.infoHash ? (
+                    <span className="flex items-center gap-1 text-xs">
+                      <button
+                        onClick={() => remove.mutate(d.infoHash)}
+                        disabled={remove.isPending}
+                        className="rounded-md bg-recap/80 px-2 py-1 font-medium text-white hover:bg-recap"
+                      >
+                        Delete {bytes(d.bytesOnDisk)}
+                      </button>
+                      <button
+                        onClick={() => setConfirmRemove(null)}
+                        className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : !d.pinned && (
                     <button
-                      onClick={() => remove.mutate(d.infoHash)}
+                      onClick={() => setConfirmRemove(d.infoHash)}
                       disabled={remove.isPending}
                       aria-label={`Delete ${d.title ?? d.name}`}
                       title="Remove and delete the file"
@@ -641,10 +674,11 @@ function QueueRow({
           <span className="ml-1.5 font-normal text-base-400">episode {q.episode}</span>
         </p>
         {q.error && <p className="truncate text-xs text-recap">{q.error}</p>}
+        {q.state === 'active' && <p className="text-xs text-base-400">Finding a release…</p>}
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {q.state === 'failed' ? (
+        {q.state === 'active' ? null : q.state === 'failed' ? (
           <button
             onClick={onRetry}
             className="rounded-md px-2 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
@@ -715,11 +749,13 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
   const results = useQuery({
     enabled: q.trim().length >= 3 && !picked,
     queryKey: ['search', q],
-    queryFn: () => api.get<{ results: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}&limit=8`),
+    queryFn: ({ signal }) =>
+      api.get<{ results: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}&limit=8`, signal),
     staleTime: 60_000,
   })
 
   const assign = useMutation({
+    meta: { inline: true },
     mutationFn: () =>
       api.post('/api/local/assign', { id: file.id, animeId: picked!.id, episode: Number(episode) }),
     onSuccess: () => {
@@ -799,7 +835,7 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
         <button
           onClick={() => assign.mutate()}
           disabled={!picked || Number(episode) < 1 || assign.isPending}
-          className="rounded-md bg-accent-500 px-3 py-1 text-xs font-medium text-white hover:bg-accent-600 disabled:opacity-50"
+          className={buttonClass('primary', 'sm')}
         >
           {assign.isPending ? 'Saving…' : 'Save'}
         </button>
@@ -810,12 +846,20 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
 }
 
 export function LocalFiles() {
-  const [unmatchedOnly, setUnmatched] = useState(false)
+  const [unmatchedOnly, setUnmatchedOnly] = useState(false)
+  const [page, setPage] = useState(1)
+  const setUnmatched = (v: boolean) => {
+    setUnmatchedOnly(v)
+    setPage(1)
+  }
   const qc = useQueryClient()
   const { data, isPending, isError, error, refetch } = useQuery({
-    queryKey: ['localFiles', unmatchedOnly],
+    queryKey: ['localFiles', unmatchedOnly, page],
     queryFn: () =>
-      api.get<Page<LocalFile>>(`/api/local/files?perPage=100${unmatchedOnly ? '&unmatched=true' : ''}`),
+      api.get<Page<LocalFile>>(
+        `/api/local/files?perPage=100&page=${page}${unmatchedOnly ? '&unmatched=true' : ''}`,
+      ),
+    placeholderData: (prev) => prev,
   })
   const stats = useQuery({
     queryKey: ['local'],
@@ -913,6 +957,17 @@ export function LocalFiles() {
               </li>
             ))}
           </ul>
+          {(page > 1 || data.hasMore) && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                Previous
+              </Button>
+              <span className="text-sm text-base-400">Page {page}</span>
+              <Button disabled={!data.hasMore} onClick={() => setPage(page + 1)}>
+                Next
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>

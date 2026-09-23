@@ -117,6 +117,9 @@ func (s *Server) malLogout(w http.ResponseWriter, r *http.Request) {
 		"mal.state":          "",
 		"mal.verifier.token": "",
 	})
+	if err == nil {
+		err = s.store.ForgetPushed(r.Context(), "mal")
+	}
 	if err != nil {
 		s.fail(w, "myanimelist logout", err)
 		return

@@ -225,7 +225,28 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	if info.Video == nil {
 		return nil, fmt.Errorf("no video stream in %s", url)
 	}
+	info.Audio = dropMirror(info.Audio)
+	info.Subtitles = dropMirror(info.Subtitles)
 	return info, nil
+}
+
+// dropMirror removes a second copy of a track list. Read through the engine
+// mid-download, ffprobe has reported every track twice (the copies at indices
+// the file does not have), and picking one of those fails the encode.
+func dropMirror(tracks []Stream) []Stream {
+	n := len(tracks)
+	if n < 2 || n%2 != 0 {
+		return tracks
+	}
+	half := n / 2
+	for i := range half {
+		a, b := tracks[i], tracks[half+i]
+		if b.Index <= a.Index || a.Kind != b.Kind || a.Codec != b.Codec || a.Language != b.Language ||
+			a.Title != b.Title || a.Channels != b.Channels || a.Default != b.Default || a.Forced != b.Forced {
+			return tracks
+		}
+	}
+	return tracks[:half]
 }
 
 func bitDepth(pixFmt, bitsPerRaw string) int {

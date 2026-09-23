@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 
 	"kuro/internal/anilist"
 	"kuro/internal/store"
@@ -19,6 +20,9 @@ type Sync struct {
 	mal      *MALSync
 	importer *Importer
 	log      *slog.Logger
+
+	// One push at a time, or the job's older value can land last.
+	pushing sync.Mutex
 }
 
 func NewSync(s *store.Store, al *anilist.Client, log *slog.Logger) *Sync {
@@ -47,7 +51,23 @@ type SyncReport struct {
 	Favourites int `json:"favourites"`
 }
 
+// AuthErrorSetting is set when AniList refuses the stored token, and cleared by
+// a successful sync or a new login.
+const AuthErrorSetting = "anilist.auth_error"
+
+var ErrReconnect = errors.New("anilist rejected the token; reconnect AniList in Settings")
+
 func (s *Sync) Run(ctx context.Context) (SyncReport, error) {
+	rep, err := s.run(ctx)
+	if err == nil && s.al.Authenticated() {
+		if v, _ := s.store.Setting(ctx, AuthErrorSetting); v != "" {
+			s.store.SetSetting(ctx, AuthErrorSetting, "")
+		}
+	}
+	return rep, err
+}
+
+func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 	var rep SyncReport
 	if !s.al.Authenticated() {
 		return rep, nil
@@ -59,14 +79,16 @@ func (s *Sync) Run(ctx context.Context) (SyncReport, error) {
 	}
 
 	for _, d := range dirty {
-		if err := s.push(ctx, d); err != nil {
+		if err := s.pushLatest(ctx, d.AnimeID, false); err != nil {
 			rep.Failed++
 			s.log.Warn("push progress", "anime", d.AnimeID, "err", err)
 
 			// Re-authentication is the user's job; retrying every entry would
-			// just burn the rate limit.
+			// just burn the rate limit. Recorded so the job fails visibly and
+			// the tracker reads "reconnect", not Connected.
 			if errs, ok := err.(anilist.Errors); ok && errs.Unauthorized() {
-				return rep, nil
+				s.store.SetSetting(ctx, AuthErrorSetting, "true")
+				return rep, ErrReconnect
 			}
 			continue
 		}
@@ -81,6 +103,10 @@ func (s *Sync) Run(ctx context.Context) (SyncReport, error) {
 	userID, _ := s.store.SettingInt(ctx, "anilist.user_id")
 	if s.importer != nil && userID > 0 {
 		res, err := s.importer.Run(ctx, userID, store.ImportMerge)
+		if errs, ok := errors.AsType[anilist.Errors](err); ok && errs.Unauthorized() {
+			s.store.SetSetting(ctx, AuthErrorSetting, "true")
+			return rep, ErrReconnect
+		}
 		if err != nil {
 			return rep, err
 		}
@@ -163,16 +189,23 @@ func (s *Sync) PushOne(ctx context.Context, animeID int) error {
 		}
 	}
 	if s.al.Authenticated() && animeID > 0 {
-		entry, err := s.store.ListEntry(ctx, animeID)
-		if err != nil {
+		// Forced: a run's clear in the same second can mark this change clean.
+		if err := s.pushLatest(ctx, animeID, true); err != nil {
 			errs = append(errs, err)
-		} else if entry.AnimeID != 0 {
-			if err := s.push(ctx, entry); err != nil {
-				errs = append(errs, err)
-			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// pushLatest sends the entry as it is now, unless clean and not forced.
+func (s *Sync) pushLatest(ctx context.Context, animeID int, force bool) error {
+	s.pushing.Lock()
+	defer s.pushing.Unlock()
+	entry, err := s.store.ListEntry(ctx, animeID)
+	if err != nil || entry.AnimeID == 0 || (!entry.Dirty && !force) {
+		return err
+	}
+	return s.push(ctx, entry)
 }
 
 func (s *Sync) push(ctx context.Context, d store.DirtyEntry) error {
@@ -181,11 +214,12 @@ func (s *Sync) push(ctx context.Context, d store.DirtyEntry) error {
 		completed = fuzzyDate(d.CompletedAt)
 	}
 
-	saved, err := s.al.SetProgress(ctx, d.AnimeID, d.Progress, d.Status, completed, d.Repeat, d.Score)
+	saved, err := s.al.SetProgress(ctx, d.AnimeID, d.Progress, d.Status, completed, d.Repeat, d.Score,
+		d.ScoreCleared && d.Score == 0)
 	if err != nil {
 		return err
 	}
-	return s.store.ClearDirty(ctx, d.AnimeID, saved.ID, saved.UpdatedAt)
+	return s.store.ClearDirtyAt(ctx, d.AnimeID, saved.ID, saved.UpdatedAt, d.Changed)
 }
 
 // AniList wants year, month and day as separate integers.

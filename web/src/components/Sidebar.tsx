@@ -169,7 +169,8 @@ function DayList({ day }: { day?: ScheduleDay }) {
             to={`/anime/${item.animeId}`}
             className={cx(
               'flex items-center gap-2.5 rounded-md p-1.5 transition-colors hover:bg-base-850',
-              aired && 'opacity-45',
+              // Set back, still readable: 45% dropped the text to about 2:1.
+              aired && 'opacity-70',
               isNext && 'bg-accent-500/10 ring-1 ring-accent-500/40',
             )}
           >

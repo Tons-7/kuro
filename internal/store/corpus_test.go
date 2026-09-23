@@ -242,3 +242,26 @@ func TestBuildIndexEmptyCorpus(t *testing.T) {
 		t.Fatalf("indexed %d entries from an empty corpus", ix.Len())
 	}
 }
+
+// Built through the store, not hand-made Media: the index never carried a
+// season, so a season-two file matched season one.
+func TestIndexKnowsEachEntrysSeason(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.SaveCorpus(ctx, []CorpusEntry{
+		{AniListID: 1, Kind: "TV", Episodes: 28, Year: 2023,
+			Titles: []CorpusTitle{{Text: "Sousou no Frieren", Kind: "primary"}}},
+		{AniListID: 2, Kind: "TV", Episodes: 10, Year: 2026,
+			Titles: []CorpusTitle{{Text: "Sousou no Frieren 2nd Season", Kind: "primary"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := s.BuildIndex(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, ok := ix.Match(match.Query{Title: "Sousou no Frieren", Season: 2, Episode: 5})
+	if !ok || res.MediaID != 2 {
+		t.Fatalf("matched %+v (%v), want the second season", res, ok)
+	}
+}

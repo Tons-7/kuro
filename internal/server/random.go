@@ -1,9 +1,13 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
+	"kuro/internal/anilist"
+	"kuro/internal/library"
 	"kuro/internal/metadata"
 	"kuro/internal/store"
 )
@@ -26,7 +30,7 @@ func (s *Server) random(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, id := range ids {
-			if body, ok := s.animeCard(r, id); ok {
+			if body, ok, _ := s.animeCard(r, id); ok {
 				send(w, http.StatusOK, body)
 				return
 			}
@@ -38,7 +42,7 @@ func (s *Server) random(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "random", err)
 		return
 	}
-	if body, ok := s.animeCard(r, m.ID); ok {
+	if body, ok, _ := s.animeCard(r, m.ID); ok {
 		send(w, http.StatusOK, body)
 		return
 	}
@@ -102,7 +106,11 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, ok := s.animeCard(r, id)
+	body, ok, down := s.animeCard(r, id)
+	if down {
+		send(w, http.StatusBadGateway, map[string]any{"error": "couldn't reach the catalogue; try again"})
+		return
+	}
 	if !ok {
 		send(w, http.StatusNotFound, map[string]any{"error": "anime not found"})
 		return
@@ -134,7 +142,9 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 }
 
 // animeCard resolves one corpus id against whichever catalogue it came from.
-func (s *Server) animeCard(r *http.Request, id int) (map[string]any, bool) {
+// down is set when the lookup failed rather than found nothing, which is worth
+// retrying, unlike a missing show.
+func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, down bool) {
 	titles := s.store.TitleMode(r.Context(), 0)
 
 	onList, err := s.store.ListProgress(r.Context())
@@ -159,7 +169,7 @@ func (s *Server) animeCard(r *http.Request, id int) (map[string]any, bool) {
 				"onList":   listed,
 				"progress": progress,
 				"sync":     syncable(false, true),
-			}, true
+			}, true, false
 		}
 
 		// Jikan is unreliable for exactly the MAL-only titles; dropping them would
@@ -168,7 +178,7 @@ func (s *Server) animeCard(r *http.Request, id int) (map[string]any, bool) {
 
 		rec, recErr := s.store.CorpusRecord(r.Context(), id)
 		if recErr != nil || rec.AnimeID == 0 {
-			return nil, false
+			return nil, false, true
 		}
 		return map[string]any{
 			"id":       id,
@@ -180,13 +190,20 @@ func (s *Server) animeCard(r *http.Request, id int) (map[string]any, bool) {
 			"onList":   listed,
 			"progress": progress,
 			"sync":     syncable(false, true),
-		}, true
+		}, true, false
 	}
 
 	media, err := s.anilist.MediaByIDs(r.Context(), []int{id})
-	if err != nil || len(media) == 0 {
+	failed := err != nil && !errors.Is(err, anilist.ErrIncomplete)
+	if failed {
+		if m, ok := s.savedAnime(r.Context(), id); ok {
+			s.log.Warn("anilist unreachable, showing the saved record", "anime", id, "err", err)
+			media, failed = []anilist.Media{m}, false
+		}
+	}
+	if failed || len(media) == 0 {
 		s.log.Warn("anime lookup failed", "anime", id, "returned", len(media), "err", err)
-		return nil, false
+		return nil, false, failed
 	}
 	m := media[0]
 
@@ -202,7 +219,7 @@ func (s *Server) animeCard(r *http.Request, id int) (map[string]any, bool) {
 	if m.Title.Romaji != nil {
 		romaji = *m.Title.Romaji
 	}
-	body := map[string]any{
+	body = map[string]any{
 		"id":       id,
 		"source":   "anilist",
 		"anime":    m,
@@ -214,7 +231,18 @@ func (s *Server) animeCard(r *http.Request, id int) (map[string]any, bool) {
 	if m.IDMal != nil {
 		body["malId"] = *m.IDMal
 	}
-	return body, true
+	return body, true, false
+}
+
+// savedAnime is the row kuro keeps of a show, for when AniList cannot be reached
+// and has no saved answer for this exact lookup either.
+func (s *Server) savedAnime(ctx context.Context, id int) (anilist.Media, bool) {
+	a, at, ok, err := s.store.AnimeRecord(ctx, id)
+	if err != nil || !ok {
+		return anilist.Media{}, false
+	}
+	anilist.NoteSaved(ctx, at)
+	return library.FromRecord(a), true
 }
 
 // syncable reports which trackers can hold a list entry for this show. A MAL-only
