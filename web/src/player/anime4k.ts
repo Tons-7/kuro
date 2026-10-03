@@ -8,6 +8,35 @@ export function webgpuAvailable(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
 
+/** This device's say over the shared setting: phone GPUs twitch and lag on it, so it is theirs to opt into. */
+export type DeviceUpscale = 'auto' | 'on' | 'off'
+const DEVICE_KEY = 'kuro.anime4k'
+
+export function deviceUpscale(): DeviceUpscale {
+  try {
+    const v = localStorage.getItem(DEVICE_KEY)
+    return v === 'on' || v === 'off' ? v : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+export function setDeviceUpscale(choice: DeviceUpscale) {
+  try {
+    if (choice === 'auto') localStorage.removeItem(DEVICE_KEY)
+    else localStorage.setItem(DEVICE_KEY, choice)
+  } catch {
+    // Private mode: the choice lasts for the page.
+  }
+}
+
+const touchDevice = () => typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches
+
+/** Auto follows the shared setting on a computer and stays off on phones and tablets. */
+export function upscaleHere(choice: DeviceUpscale, shared: boolean): boolean {
+  return choice === 'auto' ? shared && !touchDevice() : choice === 'on'
+}
+
 type Preset = 'A' | 'B' | 'C' | 'A+A' | 'B+B' | 'C+A'
 
 async function presetFor(mode: string) {

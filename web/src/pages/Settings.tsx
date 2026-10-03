@@ -223,7 +223,7 @@ function PlaybackTab() {
           </Select>
         </Row>
         <VLCNote />
-        <Row label="Anime4K upscaling" hint="Needs mpv, or a browser with WebGPU">
+        <Row label="Anime4K upscaling" hint="Needs mpv, or a browser with WebGPU. Phones and tablets leave it off unless turned on there, under the player.">
           <Switch on={f.get('playback.anime4k')} onChange={(v) => f.set('playback.anime4k', String(v))} />
         </Row>
         <Row

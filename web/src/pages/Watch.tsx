@@ -21,6 +21,7 @@ import { Badge, Button, buttonClass, ErrorState, LinkButton, Segmented, Skeleton
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
+import { deviceUpscale, setDeviceUpscale, upscaleHere } from '../player/anime4k'
 
 export function Watch() {
   const { animeId, episode } = useParams()
@@ -243,8 +244,10 @@ export function Watch() {
   const [tuning, setTuning] = useState(false)
   useEffect(() => setUpscale(null), [id, ep])
 
+  // The saved default is shared with mpv on the host; each browser decides whether it applies here.
+  const [deviceChoice, setDeviceChoice] = useState(deviceUpscale)
   const upscaling = upscale ?? {
-    enabled: flag('playback.anime4k'),
+    enabled: upscaleHere(deviceChoice, flag('playback.anime4k')),
     mode: effective['playback.anime4k_mode'] ?? 'A',
   }
 
@@ -490,6 +493,13 @@ export function Watch() {
         mode={upscaling.mode}
         onClose={() => setTuning(false)}
         onChange={setUpscale}
+        device={deviceChoice}
+        onDevice={(choice) => {
+          setDeviceUpscale(choice)
+          setDeviceChoice(choice)
+          // The device's default just changed; this episode follows it.
+          setUpscale(null)
+        }}
       />
 
       {picking && (

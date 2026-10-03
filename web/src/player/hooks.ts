@@ -3,7 +3,7 @@ import type Hls from 'hls.js'
 import type JASSUB from 'jassub'
 // ?worker&url, not ?url: the plain form copies worker.js verbatim, leaving its
 // relative imports pointing at paths that do not exist in a flat bundle.
-import jassubWorkerUrl from 'jassub/dist/worker/worker.js?worker&url'
+import jassubWorkerUrl from './subtitle-worker?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'

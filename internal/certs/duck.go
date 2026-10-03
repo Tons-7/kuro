@@ -191,8 +191,7 @@ func (s *Source) runDuck(ctx context.Context, d *duck) {
 	for {
 		err := s.pointDuck(ctx, d)
 		if err == nil {
-			// Async never prompts on the terminal. A certificate on disk is cached before this returns;
-			// otherwise the library obtains one in the background, retrying, and reports through OnEvent.
+			// Async: never prompts on the terminal; a new certificate arrives through OnEvent.
 			err = d.config.ManageAsync(ctx, []string{d.domain})
 		}
 		if ctx.Err() != nil {

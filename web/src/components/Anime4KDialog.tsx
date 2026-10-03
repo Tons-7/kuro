@@ -1,6 +1,13 @@
 import { useCallback } from 'react'
 import { cx } from '../lib/format'
-import { useDismiss, useModalFocus } from './ui'
+import type { DeviceUpscale } from '../player/anime4k'
+import { Segmented, useDismiss, useModalFocus } from './ui'
+
+const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceUpscale; label: string }> = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'on', label: 'On' },
+  { value: 'off', label: 'Off' },
+]
 
 export const ANIME4K_MODES = [
   { id: 'A', title: 'A · Restore', hint: 'Sharpens soft, blurry lines. Safe default for most 1080p web releases.' },
@@ -26,12 +33,16 @@ export function Anime4KDialog({
   mode,
   onClose,
   onChange,
+  device,
+  onDevice,
 }: {
   open: boolean
   enabled: boolean
   mode: string
   onClose: () => void
   onChange: (next: { enabled: boolean; mode: string }) => void
+  device: DeviceUpscale
+  onDevice: (choice: DeviceUpscale) => void
 }) {
   const close = useCallback(() => onClose(), [onClose])
   const panel = useDismiss<HTMLDivElement>(close)
@@ -124,6 +135,16 @@ export function Anime4KDialog({
               <span className="mt-0.5 block text-xs leading-snug text-base-500">{option.hint}</span>
             </button>
           ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-base-850 px-3 py-2.5">
+          <div className="min-w-0 flex-1 basis-40">
+            <p className="text-sm text-base-200">On this device</p>
+            <p className="text-xs text-base-500">
+              Auto follows Settings on a computer and stays off on phones and tablets.
+            </p>
+          </div>
+          <Segmented size="sm" value={device} onChange={onDevice} options={DEVICE_CHOICES} />
         </div>
 
         <p className="mt-3 text-xs text-base-600">
