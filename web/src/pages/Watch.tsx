@@ -11,7 +11,7 @@ import {
   type StreamInfo,
 } from '../lib/api'
 import { cx } from '../lib/format'
-import { useEpisodes, usePrefs, useSetPref } from '../lib/queries'
+import { refreshDownloads, useDownloads, useEpisodes, usePrefs, useSetPref } from '../lib/queries'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList, isUnaired } from '../components/EpisodeList'
@@ -139,6 +139,7 @@ export function Watch() {
   const download = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post('/api/download', { animeId: id, episode: ep }),
+    onSuccess: () => refreshDownloads(qc),
   })
   // The page no longer remounts, so "Queued" would follow you to the next one.
   const resetDownload = download.reset
@@ -146,16 +147,7 @@ export function Watch() {
 
   // Offering to download an episode that is already on disk queues a job whose
   // only outcome is to notice that and stop.
-  const downloads = useQuery({
-    queryKey: ['downloads'],
-    queryFn: () =>
-      api.get<{ items: Array<{ animeId?: number; episodes: string[]; percent: number }> }>(
-        '/api/downloads',
-      ),
-    staleTime: 5_000,
-    refetchInterval: (q) =>
-      (q.state.data?.items ?? []).some((d) => d.animeId === id && d.percent < 100) ? 5_000 : false,
-  })
+  const downloads = useDownloads()
   // A season pack lists every episode it serves.
   const held = (downloads.data?.items ?? []).some(
     (d) => d.animeId === id && d.episodes.includes(String(ep)) && d.percent >= 100,

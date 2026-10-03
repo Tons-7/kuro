@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { api, hasFiller, type Episode } from '../lib/api'
 import { clockTime, cx, relativeTime } from '../lib/format'
+import { refreshDownloads } from '../lib/queries'
 import { Badge, useDismiss } from './ui'
 
 const PAGE_SIZE = 50
@@ -73,7 +74,7 @@ export function EpisodeList({
     mutationFn: (numbers: number[]) =>
       api.post<{ queued: number }>('/api/download/episodes', { animeId, episodes: numbers }),
     onSuccess: (res, numbers) => {
-      void qc.invalidateQueries({ queryKey: ['download-queue'] })
+      refreshDownloads(qc)
       setNote(
         res.queued === 0
           ? 'Already queued or downloaded'

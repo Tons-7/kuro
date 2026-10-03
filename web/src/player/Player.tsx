@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   api,
@@ -10,6 +11,7 @@ import {
   type SubtitleTrack,
 } from '../lib/api'
 import { clockTime, cx, languageName } from '../lib/format'
+import { refreshDownloads } from '../lib/queries'
 import { PlayIcon } from '../components/PosterCard'
 import { buttonClass, Spinner, useDismiss } from '../components/ui'
 import { useAnime4K } from './anime4k'
@@ -156,6 +158,7 @@ export function Player({
 }: PlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null)
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
+  const qc = useQueryClient()
   const shell = useRef<HTMLDivElement>(null)
   // The player renders into this through a portal, so picture in picture can
   // move it to the floating window with its event handlers still attached.
@@ -552,6 +555,7 @@ export function Player({
     if (!animeId || !episode) return
     try {
       await api.post('/api/download', { animeId, episode })
+      refreshDownloads(qc)
       setQueued(true)
       setQueueError(null)
     } catch (err) {

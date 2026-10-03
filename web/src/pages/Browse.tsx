@@ -18,6 +18,8 @@ interface Vocabulary {
   current: { season: string; year: number }
 }
 
+const PER_PAGE = 42
+
 const SORT_LABELS: Record<string, string> = {
   popular: 'Most popular',
   trending: 'Trending',
@@ -59,16 +61,47 @@ export function Browse() {
 
   const active = useMemo(() => Object.fromEntries(params.entries()), [params])
   const page = Number(active.page ?? 1)
+  const unpaged = useMemo(() => Object.fromEntries([...params.entries()].filter(([k]) => k !== 'page')), [params])
 
   const results = useQuery({
     queryKey: ['browse', active],
     // A superseded filter's request is dropped, not left spending the AniList budget.
     queryFn: ({ signal }) =>
-      api.get<{ items: DiscoverItem[]; total: number; hasMore: boolean }>(
-        `/api/browse${query({ ...active, perPage: 42 })}`,
+      api.get<{ items: DiscoverItem[]; total?: number; hasMore: boolean }>(
+        `/api/browse${query({ ...active, perPage: PER_PAGE })}`,
         signal,
       ),
   })
+
+  // AniList gives no real total for a paged search, so the server measures it once per filter set.
+  // It waits for the filters to settle; a busy budget (503) is retried for a minute, the length of a
+  // background job's burst (airing refresh).
+  const unpagedKey = JSON.stringify(unpaged)
+  const settled = useDebounced(unpagedKey, 800) === unpagedKey
+  const counted = useQuery({
+    queryKey: ['browse-count', unpaged],
+    queryFn: ({ signal }) =>
+      api.get<{ count: number; capped: boolean }>(
+        `/api/browse/count${query({ ...active, perPage: PER_PAGE })}`,
+        signal,
+      ),
+    enabled: settled && !!results.data?.hasMore && !active.studio,
+    staleTime: 30 * 60_000,
+    retry: 12,
+    retryDelay: 5000,
+  })
+  // A studio's total is AniList's own and exact, unless its list is filtered here (then 0, unknown).
+  const resultCount = active.studio
+    ? results.data?.total || undefined
+    : results.data && !results.data.hasMore
+      ? (page - 1) * PER_PAGE + results.data.items.length
+      : counted.data?.count
+  const lastPage =
+    results.data && !results.data.hasMore
+      ? page
+      : resultCount === undefined
+        ? undefined
+        : Math.max(page, Math.ceil(resultCount / PER_PAGE))
 
   // Surprise me, within the genre/format/year filters chosen.
   const navigate = useNavigate()
@@ -249,10 +282,9 @@ export function Browse() {
         )}
         {results.data && results.data.items.length > 0 && (
           <span className="ml-auto text-xs text-base-500 tabular-nums">
-            {/* AniList's total is a placeholder until the last page. */}
-            {results.data.hasMore
-              ? `${(page * 42).toLocaleString()}+ results`
-              : results.data.total > 0 && `${results.data.total.toLocaleString()} results`}
+            {resultCount !== undefined
+              ? `${resultCount.toLocaleString()}${counted.data?.capped ? '+' : ''} ${resultCount === 1 ? 'result' : 'results'}`
+              : results.data.hasMore && `${(page * PER_PAGE).toLocaleString()}+ results`}
           </span>
         )}
       </div>
@@ -291,8 +323,7 @@ export function Browse() {
             <PageButton disabled={page <= 1} onClick={() => goToPage(page - 1)} label="Previous" />
             <span className="text-sm text-base-400 tabular-nums">
               Page <span className="font-semibold text-white">{page}</span>
-              {/* Only the last page knows how many there are. */}
-              {!results.data.hasMore && ` of ${page.toLocaleString()}`}
+              {lastPage !== undefined && ` of ${lastPage.toLocaleString()}`}
             </span>
             <PageButton
               disabled={!results.data.hasMore}

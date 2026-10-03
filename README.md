@@ -1,7 +1,7 @@
 # kuro — self-hosted anime streaming
 
 [![Latest release](https://img.shields.io/github/v/release/Tons-7/kuro?label=release)](https://github.com/Tons-7/kuro/releases/latest)
-[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE.md)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 
 Search any anime, press play, and it streams from a torrent while it downloads,
@@ -145,7 +145,7 @@ make sure it is legal where you live. BitTorrent uploads while it downloads.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE): use, study and change kuro freely for
+[PolyForm Noncommercial 1.0.0](LICENSE.md): use, study and change kuro freely for
 personal, hobby, research or non-profit purposes. Commercial use of any kind,
 including selling it or a modified version, is not permitted.
 

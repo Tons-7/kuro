@@ -1,7 +1,9 @@
 package server
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,18 +27,9 @@ func csv(v string) []string {
 	return out
 }
 
-// browse is search with the full filter set: genres, tags, year, season,
-// format, status, score and episode count.
-func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+func browseFilter(q url.Values) anilist.Browse {
 	num := func(key string) int { n, _ := strconv.Atoi(q.Get(key)); return n }
-
-	if studio := num("studio"); studio > 0 {
-		s.browseStudio(w, r, studio)
-		return
-	}
-
-	result, err := s.anilist.BrowseMedia(r.Context(), anilist.Browse{
+	return anilist.Browse{
 		Search:        q.Get("q"),
 		Genres:        csv(q.Get("genres")),
 		ExcludeGenres: csv(q.Get("excludeGenres")),
@@ -53,19 +46,110 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 		Sort:          q.Get("sort"),
 		Page:          num("page"),
 		PerPage:       num("perPage"),
-	})
+	}
+}
+
+// browse is search with the full filter set: genres, tags, year, season,
+// format, status, score and episode count.
+func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if studio, _ := strconv.Atoi(q.Get("studio")); studio > 0 {
+		s.browseStudio(w, r, studio)
+		return
+	}
+
+	filter := browseFilter(q)
+	result, err := s.anilist.BrowseMedia(r.Context(), filter)
 	if err != nil {
 		s.fail(w, "browse", err)
 		return
 	}
 
-	page := max(num("page"), 1)
 	send(w, http.StatusOK, map[string]any{
 		"items":   s.decorate(r, result.Media),
-		"page":    page,
+		"page":    max(filter.Page, 1),
 		"hasMore": result.HasNextPage,
-		"total":   result.Total,
 	})
+}
+
+// browseCount measures how many results a browse matches; AniList's own total is a placeholder.
+func (s *Server) browseCount(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	filter := browseFilter(q)
+	key := countKey(q)
+
+	n, err := s.counts.get(key, func() (int, error) {
+		// The page asking is known to have a next one, so its last result plus one exists.
+		known := max(filter.Page, 1)*max(filter.PerPage, 1) + 1
+		return s.anilist.BrowseCount(r.Context(), filter, known)
+	})
+	if errors.Is(err, anilist.ErrBusy) {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error(), "busy": true})
+		return
+	}
+	if err != nil {
+		s.fail(w, "browse count", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"count": n, "capped": n >= anilist.BrowseCap})
+}
+
+// countKey is the filter set without paging, which does not change the count.
+func countKey(q url.Values) string {
+	k := url.Values{}
+	for name, v := range q {
+		if name != "page" && name != "perPage" {
+			k[name] = v
+		}
+	}
+	return k.Encode()
+}
+
+// browseCounts caches counts per filter set; callers asking at once share one measurement.
+type browseCounts struct {
+	mu      sync.Mutex
+	done    map[string]countEntry
+	running map[string]chan struct{}
+}
+
+type countEntry struct {
+	n  int
+	at time.Time
+}
+
+const countTTL = 30 * time.Minute
+
+func (c *browseCounts) get(key string, measure func() (int, error)) (int, error) {
+	for {
+		c.mu.Lock()
+		if e, ok := c.done[key]; ok && time.Since(e.at) < countTTL {
+			c.mu.Unlock()
+			return e.n, nil
+		}
+		wait, busy := c.running[key]
+		if !busy {
+			if c.running == nil {
+				c.running, c.done = map[string]chan struct{}{}, map[string]countEntry{}
+			}
+			wait = make(chan struct{})
+			c.running[key] = wait
+		}
+		c.mu.Unlock()
+		if busy {
+			<-wait
+			continue
+		}
+
+		n, err := measure()
+		c.mu.Lock()
+		delete(c.running, key)
+		if err == nil {
+			c.done[key] = countEntry{n: n, at: time.Now()}
+		}
+		c.mu.Unlock()
+		close(wait)
+		return n, err
+	}
 }
 
 // browseStudio lists a studio's works. AniList cannot filter the media query

@@ -2,12 +2,20 @@ package anilist
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/time/rate"
 )
 
-func browseVars(t *testing.T, b Browse) map[string]any {
+func sentVars(t *testing.T, b Browse) map[string]any {
 	t.Helper()
 	var vars map[string]any
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -27,10 +35,10 @@ func browseVars(t *testing.T, b Browse) map[string]any {
 // Every hentai title is adult, so the old isAdult:false alongside the genre
 // returned an empty page for the one filter that asks for it.
 func TestBrowseHentaiGenreIncludesAdultTitles(t *testing.T) {
-	if got := browseVars(t, Browse{Genres: []string{"Action"}})["isAdult"]; got != false {
+	if got := sentVars(t, Browse{Genres: []string{"Action"}})["isAdult"]; got != false {
 		t.Fatalf("isAdult = %v for a normal genre, want false", got)
 	}
-	if got := browseVars(t, Browse{Genres: []string{"Romance", "hentai"}})["isAdult"]; got != true {
+	if got := sentVars(t, Browse{Genres: []string{"Romance", "hentai"}})["isAdult"]; got != true {
 		t.Fatalf("isAdult = %v with Hentai chosen, want true", got)
 	}
 }
@@ -60,10 +68,60 @@ func TestBrowseKeepsTheSortTheUserChose(t *testing.T) {
 		{"an unknown sort is not honoured", Browse{Search: "conan", Sort: "nonsense"}, "SEARCH_MATCH"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sortVar(t, browseVars(t, tc.b)); got != tc.want {
+			if got := sortVar(t, sentVars(t, tc.b)); got != tc.want {
 				t.Errorf("sort = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// AniList reports a fixed total of 5000 for any paged answer; the count comes
+// from one-result probes, found exactly in a couple of requests.
+func TestBrowseCountFindsTheRealTotal(t *testing.T) {
+	alias := regexp.MustCompile(`p(\d+): Page\(page: (\d+), perPage: 1\)`)
+	for _, real := range []int{1, 43, 84, 85, 300, 4999, 5000, 7000} {
+		requests := 0
+		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			var req struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			decode(t, r, &req)
+			if _, ok := req.Variables["page"]; ok {
+				t.Error("probe sent a page variable its query does not declare")
+			}
+			parts := []string{}
+			for _, m := range alias.FindAllStringSubmatch(req.Query, -1) {
+				k, _ := strconv.Atoi(m[2])
+				exists, more := k <= min(real, BrowseCap), k < min(real, BrowseCap)
+				media := "[]"
+				if exists {
+					media = `[{"id":1}]`
+				}
+				parts = append(parts, fmt.Sprintf(`"p%s":{"pageInfo":{"hasNextPage":%t},"media":%s}`, m[1], more, media))
+			}
+			io.WriteString(w, `{"data":{`+strings.Join(parts, ",")+`}}`)
+		})
+		got, err := c.BrowseCount(context.Background(), Browse{Genres: []string{"Romance"}}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := min(real, BrowseCap); got != want {
+			t.Errorf("%d results: counted %d", real, got)
+		}
+		if requests > 4 {
+			t.Errorf("%d results took %d requests", real, requests)
+		}
+	}
+}
+
+func TestBrowseCountWaitsWhileTheBudgetIsBusy(t *testing.T) {
+	c := testClient(t, func(http.ResponseWriter, *http.Request) { t.Error("counted with no budget to spare") })
+	c.limiter = rate.NewLimiter(rate.Every(2*time.Second), 5)
+	c.limiter.AllowN(time.Now(), 3)
+	if _, err := c.BrowseCount(context.Background(), Browse{}, 1); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy", err)
 	}
 }
 

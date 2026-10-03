@@ -3,7 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type DownloadFile, type Page } from '../lib/api'
 import { bytes, cx, relativeTime } from '../lib/format'
-import { useNotifications, type Notification } from '../lib/queries'
+import {
+  refreshDownloads,
+  useDownloadQueue,
+  useDownloads,
+  useNotifications,
+  type Download,
+  type Notification,
+  type Queued,
+} from '../lib/queries'
 import {
   Badge,
   Button,
@@ -128,30 +136,6 @@ export function Notifications() {
   )
 }
 
-interface Download {
-  infoHash: string
-  /** The release filename. `title` is the show it belongs to. */
-  name: string
-  title?: string
-  cover?: string
-  animeId?: number
-  /** Episodes joined for display; a pack has several. */
-  episode?: string
-  episodes: string[]
-  totalBytes: number
-  bytesOnDisk: number
-  percent: number
-  pinned: boolean
-  /** Asked for, so outside the cache budget and never evicted. */
-  kept: boolean
-  state: string
-  paused?: boolean
-  /** The engine hashing data already on disk. */
-  checking?: boolean
-  mbps?: number
-  peers?: number
-}
-
 function BellIcon() {
   return (
     <svg viewBox="0 0 24 24" className="size-6" aria-hidden>
@@ -211,16 +195,6 @@ function PlayGlyph() {
   )
 }
 
-interface Queued {
-  animeId: number
-  epKey: string
-  episode: number
-  state: string
-  error?: string
-  title?: string
-  cover?: string
-}
-
 // A pack's episodes, each with its own keep: the row's toggle moves all of
 // them, which is rarely what "keep episode 5" meant.
 function PackEpisodes({ hash }: { hash: string }) {
@@ -236,8 +210,7 @@ function PackEpisodes({ hash }: { hash: string }) {
       api.post(`/api/downloads/${hash}/files/${f.fileIndex}/${f.kept ? 'unkeep' : 'keep'}`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['download-files', hash] })
-      void qc.invalidateQueries({ queryKey: ['downloads'] })
-      void qc.invalidateQueries({ queryKey: ['cache'] })
+      refreshDownloads(qc)
     },
   })
 
@@ -291,26 +264,12 @@ export function Downloads() {
   const qc = useQueryClient()
   const [confirmClear, setConfirmClear] = useState(false)
 
-  const { data, isPending, isError, error, refetch } = useQuery({
-    queryKey: ['downloads'],
-    queryFn: () => api.get<{ items: Download[]; count: number }>('/api/downloads'),
-    // Percentages only move while something is downloading; the rest of the
-    // time a poll is a torrent-engine round trip for nothing.
-    refetchInterval: (q) =>
-      (q.state.data?.items ?? []).some((d) => !d.paused && d.percent < 100) ? 5000 : 30_000,
-  })
-
-  const queue = useQuery({
-    queryKey: ['download-queue'],
-    queryFn: () => api.get<{ items: Queued[] }>('/api/download/queue'),
-    refetchInterval: (q) => ((q.state.data?.items ?? []).length ? 5000 : 30_000),
-  })
+  const { data, isPending, isError, error, refetch } = useDownloads()
+  const queue = useDownloadQueue()
 
   const done = () => {
     setConfirmClear(false)
-    void qc.invalidateQueries({ queryKey: ['downloads'] })
-    void qc.invalidateQueries({ queryKey: ['download-queue'] })
-    void qc.invalidateQueries({ queryKey: ['cache'] })
+    refreshDownloads(qc)
   }
 
   // Which episodes the queue is holding, so a download paused by the queue can

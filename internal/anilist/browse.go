@@ -2,7 +2,12 @@ package anilist
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"math"
 	"strings"
+
+	"golang.org/x/time/rate"
 )
 
 // Browse is the filter set AniList's media query accepts. Zero values are
@@ -58,17 +63,13 @@ var (
 		"COMIC", "MULTIMEDIA_PROJECT", "PICTURE_BOOK", "OTHER"}
 )
 
-const browseQuery = `query Browse(
-  $search: String, $genres: [String], $excludeGenres: [String], $tags: [String],
+// Shared by the page query and the count probes, so both see the same filters.
+const browseVarDecls = `$search: String, $genres: [String], $excludeGenres: [String], $tags: [String],
   $year: Int, $season: MediaSeason, $formats: [MediaFormat], $statuses: [MediaStatus],
   $minScore: Int, $minEpisodes: Int, $maxEpisodes: Int, $country: CountryCode,
-  $source: MediaSource, $isAdult: Boolean, $sort: [MediaSort],
-  $page: Int!, $perPage: Int!
-) {
-  Page(page: $page, perPage: $perPage) {
-    pageInfo { total currentPage lastPage hasNextPage }
-    media(
-      type: ANIME
+  $source: MediaSource, $isAdult: Boolean, $sort: [MediaSort]`
+
+const browseMediaArgs = `type: ANIME
       search: $search
       genre_in: $genres
       genre_not_in: $excludeGenres
@@ -83,17 +84,141 @@ const browseQuery = `query Browse(
       countryOfOrigin: $country
       source: $source
       isAdult: $isAdult
-      sort: $sort
-    ) {` + mediaFields + `}
+      sort: $sort`
+
+const browseQuery = `query Browse(` + browseVarDecls + `, $page: Int!, $perPage: Int!) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { total currentPage lastPage hasNextPage }
+    media(` + browseMediaArgs + `) {` + mediaFields + `}
   }
 }`
 
 func (c *Client) BrowseMedia(ctx context.Context, b Browse) (DiscoverPage, error) {
-	vars := map[string]any{
-		"page":    max(b.Page, 1),
-		"perPage": clamp(b.PerPage, 30, 50),
-		"isAdult": nil,
+	vars := browseVars(b)
+	vars["page"] = max(b.Page, 1)
+	vars["perPage"] = clamp(b.PerPage, 30, 50)
+
+	var out struct {
+		Page struct {
+			PageInfo struct {
+				Total       int  `json:"total"`
+				HasNextPage bool `json:"hasNextPage"`
+			} `json:"pageInfo"`
+			Media []Media `json:"media"`
+		} `json:"Page"`
 	}
+	if err := c.Query(ctx, browseQuery, vars, &out); err != nil {
+		return DiscoverPage{}, err
+	}
+	return DiscoverPage{
+		Media:       out.Page.Media,
+		HasNextPage: out.Page.PageInfo.HasNextPage,
+		Total:       out.Page.PageInfo.Total,
+	}, nil
+}
+
+// BrowseCap is as deep as AniList pages a query; past it pages come back empty.
+const BrowseCap = 5000
+
+// probesPerRound keeps one request well inside AniList's complexity limit.
+const probesPerRound = 24
+
+// ErrBusy: counting is a nicety, so it waits while the shared budget is needed elsewhere.
+var ErrBusy = errors.New("anilist: request budget busy")
+
+// countReserve is how much of the burst a count leaves for searches and playback.
+const countReserve = 3
+
+// BrowseCount is how many results b matches, up to BrowseCap. Paged answers report a fixed
+// total of 5000, so it probes one-result pages; known is a position known to exist.
+func (c *Client) BrowseCount(ctx context.Context, b Browse, known int) (int, error) {
+	// Checked once: a count started is finished, or the requests already spent are wasted.
+	if c.limiter.Limit() != rate.Inf && c.limiter.Tokens() < countReserve {
+		return 0, ErrBusy
+	}
+	lo, hi := max(known, 1), BrowseCap+1 // lo exists, hi does not
+	for range 6 {
+		if hi-lo <= 1 {
+			break
+		}
+		probes := spread(lo+1, hi-1, probesPerRound)
+		found, err := c.probe(ctx, b, probes)
+		if err != nil {
+			return 0, err
+		}
+		for _, k := range probes {
+			p := found[k]
+			if !p.exists {
+				hi = k
+				break
+			}
+			if !p.more {
+				return k, nil
+			}
+			lo = k
+		}
+	}
+	return lo, nil
+}
+
+type probeResult struct{ exists, more bool }
+
+func (c *Client) probe(ctx context.Context, b Browse, positions []int) (map[int]probeResult, error) {
+	var q strings.Builder
+	q.WriteString("query Count(" + browseVarDecls + ") {\n")
+	for _, k := range positions {
+		fmt.Fprintf(&q, "  p%d: Page(page: %d, perPage: 1) { pageInfo { hasNextPage } media(%s) { id } }\n", k, k, browseMediaArgs)
+	}
+	q.WriteString("}")
+
+	var out map[string]struct {
+		PageInfo struct {
+			HasNextPage bool `json:"hasNextPage"`
+		} `json:"pageInfo"`
+		Media []struct{ ID int } `json:"media"`
+	}
+	if err := c.Query(ctx, q.String(), browseVars(b), &out); err != nil {
+		return nil, err
+	}
+	found := make(map[int]probeResult, len(positions))
+	for _, k := range positions {
+		p := out[fmt.Sprintf("p%d", k)]
+		found[k] = probeResult{exists: len(p.Media) > 0, more: p.PageInfo.HasNextPage}
+	}
+	return found, nil
+}
+
+// spread picks up to n positions in [from, to], geometric over a wide range so small sets bracket early.
+func spread(from, to, n int) []int {
+	if to < from {
+		return nil
+	}
+	if to-from+1 <= n {
+		out := make([]int, 0, to-from+1)
+		for k := from; k <= to; k++ {
+			out = append(out, k)
+		}
+		return out
+	}
+	out := make([]int, 0, n)
+	geometric := to > from*4
+	for i := 1; i <= n; i++ {
+		var k int
+		if geometric {
+			k = int(float64(from) * math.Pow(float64(to)/float64(from), float64(i)/float64(n)))
+		} else {
+			k = from + (to-from)*i/n
+		}
+		if k >= from && k <= to && (len(out) == 0 || k > out[len(out)-1]) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// browseVars are the filter variables; page and perPage are the caller's.
+func browseVars(b Browse) map[string]any {
+	vars := map[string]any{"isAdult": nil}
 
 	// A null variable removes the filter; an empty list matches nothing.
 	setString(vars, "search", b.Search)
@@ -137,24 +262,7 @@ func (c *Client) BrowseMedia(ctx context.Context, b Browse) (DiscoverPage, error
 		}
 	}
 	vars["sort"] = []string{sort}
-
-	var out struct {
-		Page struct {
-			PageInfo struct {
-				Total       int  `json:"total"`
-				HasNextPage bool `json:"hasNextPage"`
-			} `json:"pageInfo"`
-			Media []Media `json:"media"`
-		} `json:"Page"`
-	}
-	if err := c.Query(ctx, browseQuery, vars, &out); err != nil {
-		return DiscoverPage{}, err
-	}
-	return DiscoverPage{
-		Media:       out.Page.Media,
-		HasNextPage: out.Page.PageInfo.HasNextPage,
-		Total:       out.Page.PageInfo.Total,
-	}, nil
+	return vars
 }
 
 const genreQuery = `query { GenreCollection MediaTagCollection { name category isAdult } }`

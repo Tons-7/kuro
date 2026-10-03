@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
 } from '@tanstack/react-query'
 import {
@@ -146,6 +147,85 @@ export function useFavourites(page = 1, enabled = true) {
     queryKey: ['bookmarks', page],
     queryFn: () => api.get<Page<LibraryItem>>(`/api/bookmarks${query({ page })}`),
   })
+}
+
+export interface Download {
+  infoHash: string
+  /** The release filename. `title` is the show it belongs to. */
+  name: string
+  title?: string
+  cover?: string
+  animeId?: number
+  /** Episodes joined for display; a pack has several. */
+  episode?: string
+  episodes: string[]
+  totalBytes: number
+  bytesOnDisk: number
+  percent: number
+  pinned: boolean
+  /** Asked for, so outside the cache budget and never evicted. */
+  kept: boolean
+  state: string
+  paused?: boolean
+  /** The engine hashing data already on disk. */
+  checking?: boolean
+  mbps?: number
+  peers?: number
+}
+
+export interface Queued {
+  animeId: number
+  epKey: string
+  episode: number
+  state: string
+  error?: string
+  title?: string
+  cover?: string
+}
+
+// Both are local, cheap reads: always fresh on arrival, polled fast while anything is moving.
+export function useDownloadQueue() {
+  return useQuery({
+    queryKey: ['download-queue'],
+    queryFn: () => api.get<{ items: Queued[]; waiting: Record<string, number> }>('/api/download/queue'),
+    staleTime: 0,
+    refetchInterval: (q) => ((q.state.data?.items ?? []).length ? 5000 : 15_000),
+  })
+}
+
+export function useDownloads() {
+  const qc = useQueryClient()
+  const result = useQuery({
+    queryKey: ['downloads'],
+    queryFn: () => api.get<{ items: Download[]; count: number }>('/api/downloads'),
+    staleTime: 0,
+    // A queued episode becomes a download between polls, so a busy queue counts as activity.
+    refetchInterval: (q) => {
+      const moving = (q.state.data?.items ?? []).some((d) => !d.paused && d.percent < 100)
+      const queued = (qc.getQueryData<{ items: Queued[] }>(['download-queue'])?.items ?? []).length > 0
+      return moving || queued ? 5000 : 15_000
+    },
+  })
+
+  // A finished download changes the episode lists' on-disk marks and the cache figures.
+  const finished = (result.data?.items ?? []).filter((d) => d.percent >= 100).map((d) => d.infoHash).sort().join()
+  const seen = useRef<string | null>(null)
+  useEffect(() => {
+    if (!result.data) return
+    if (seen.current !== null && seen.current !== finished) {
+      void qc.invalidateQueries({ queryKey: ['episodes'] })
+      void qc.invalidateQueries({ queryKey: ['cache'] })
+    }
+    seen.current = finished
+  }, [finished, result.data, qc])
+  return result
+}
+
+/** Everything that shows download state, refreshed together after a download action. */
+export function refreshDownloads(qc: QueryClient) {
+  for (const key of ['downloads', 'download-queue', 'cache', 'episodes']) {
+    void qc.invalidateQueries({ queryKey: [key] })
+  }
 }
 
 export function useEpisodes(animeId: number | undefined) {

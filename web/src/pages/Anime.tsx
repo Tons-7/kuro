@@ -5,6 +5,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, statusLabel, type Bookmark, type DiscoverItem } from '../lib/api'
 import { clockTime, cx, readableTint, relativeTime, tint } from '../lib/format'
 import {
+  refreshDownloads,
+  useDownloadQueue,
+  useDownloads,
   useEpisodes,
   useFranchise,
   useNow,
@@ -257,16 +260,12 @@ export function Anime() {
 
   // Episodes join a queue worked one at a time, so the button reports how many
   // of this show are still waiting rather than just "queued".
-  const queue = useQuery({
-    queryKey: ['download-queue'],
-    queryFn: () => api.get<{ waiting: Record<string, number> }>('/api/download/queue'),
-    // Only worth watching closely while something is actually queued.
-    refetchInterval: (q) =>
-      Object.keys(q.state.data?.waiting ?? {}).length ? 5000 : 30_000,
-  })
+  const queue = useDownloadQueue()
   const waiting = queue.data?.waiting?.[String(id)] ?? 0
+  // Polled while anything downloads, so episodes finishing here get their on-disk mark.
+  useDownloads()
 
-  const refreshQueue = () => qc.invalidateQueries({ queryKey: ['download-queue'] })
+  const refreshQueue = () => refreshDownloads(qc)
 
   // Exactly the aired episodes not already on disk: the server alone could only
   // count to a total, which an airing show often does not have.

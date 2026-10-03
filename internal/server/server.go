@@ -64,6 +64,8 @@ type Server struct {
 	latestMu   sync.Mutex
 	latestJobs map[string]time.Time
 
+	counts browseCounts
+
 	// What a system ffmpeg is and can do, per binary; Setup polls every second.
 	systemMu sync.Mutex
 	systemFF map[string]systemTool
@@ -173,6 +175,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/anime/{id}/characters", s.characters)
 	mux.HandleFunc("GET /api/anime/{id}/extra", s.extra)
 	mux.HandleFunc("GET /api/browse", s.browse)
+	mux.HandleFunc("GET /api/browse/count", s.browseCount)
 	mux.HandleFunc("GET /api/studios", s.studios)
 	mux.HandleFunc("GET /api/filters", s.filters)
 	mux.HandleFunc("GET /api/recommend", s.recommend)
