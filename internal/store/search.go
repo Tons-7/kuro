@@ -15,7 +15,7 @@ FROM anime_fts f
 JOIN anime a ON a.id = f.rowid
 LEFT JOIN list_entry e ON e.anime_id = a.id
 WHERE anime_fts MATCH ?
-ORDER BY bm25(anime_fts, 10.0, 8.0, 4.0, 2.0)
+ORDER BY e.anime_id IS NULL, bm25(anime_fts, 10.0, 8.0, 4.0, 2.0), a.popularity DESC
 LIMIT ?`
 
 const searchLike = `

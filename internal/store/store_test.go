@@ -318,6 +318,26 @@ func TestSearchLocalRejectsNothingAndNonsense(t *testing.T) {
 	}
 }
 
+func TestSearchLocalPutsListShowsFirst(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	status := "CURRENT"
+	// The shorter title scores better on text alone.
+	if _, err := s.ImportList(ctx,
+		[]Anime{anime(1, "Chainsaw Days"), anime(2, "Chainsaw Man the Long Title")},
+		[]Entry{{ID: 1, AnimeID: 2, Status: &status, UpdatedAt: 1000}}, ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SearchLocal(ctx, "Chainsaw", 0)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%d results, err %v", len(got), err)
+	}
+	if got[0].ID != 2 {
+		t.Fatalf("first = %d, want the show on the list (2)", got[0].ID)
+	}
+}
+
 func TestFullTextIndexFollowsUpdates(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
