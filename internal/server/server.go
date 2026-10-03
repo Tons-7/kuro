@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kuro/internal/anilist"
+	"kuro/internal/certs"
 	"kuro/internal/config"
 	"kuro/internal/deps"
 	"kuro/internal/indexer"
@@ -79,7 +80,10 @@ type Server struct {
 	token   string
 	// Set by main, which owns the listener. Nil in tests and in any build that
 	// does not serve, where switching networks is meaningless.
-	rebind     func(addr string) error
+	rebind func(addr string) error
+	// HTTPS certificates; nil in tests and builds that do not serve.
+	certs      *certs.Source
+	approvals  approvals
 	vocab      vocabulary
 	index      indexHolder
 	rising     risingCache
@@ -271,6 +275,13 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/access", s.access)
 	mux.HandleFunc("GET /api/access/qr.svg", s.accessQR)
+	mux.HandleFunc("GET /api/access/me", s.accessMe)
+	mux.HandleFunc("GET /api/access/devices", hostOnly(s.accessDevices))
+	mux.HandleFunc("POST /api/access/devices/{id}", hostOnly(s.decideDevice))
+	mux.HandleFunc("DELETE /api/access/devices/{id}", hostOnly(s.removeDevice))
+	mux.HandleFunc("POST /api/access/approval", hostOnly(s.setApproval))
+	mux.HandleFunc("GET /api/access/https", hostOnly(s.accessHTTPS))
+	mux.HandleFunc("POST /api/access/https", hostOnly(s.setAccessHTTPS))
 	mux.HandleFunc("POST /api/access/rotate", hostOnly(s.rotateAccess))
 	mux.HandleFunc("POST /api/access/network", hostOnly(s.setAccessNetwork))
 	mux.HandleFunc("GET /api/access/firewall", hostOnly(s.accessFirewall))

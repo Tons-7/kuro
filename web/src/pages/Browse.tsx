@@ -74,8 +74,7 @@ export function Browse() {
   })
 
   // AniList gives no real total for a paged search, so the server measures it once per filter set.
-  // It waits for the filters to settle; a busy budget (503) is retried for a minute, the length of a
-  // background job's burst (airing refresh).
+  // Waits for the filters to settle; a busy budget (503) is retried for a minute, a background job's burst.
   const unpagedKey = JSON.stringify(unpaged)
   const settled = useDebounced(unpagedKey, 800) === unpagedKey
   const counted = useQuery({

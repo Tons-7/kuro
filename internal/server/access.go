@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,12 @@ func NewAccessToken() string {
 	b := make([]byte, 24)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// installAssets are what a phone reads to install kuro as an app.
+var installAssets = map[string]bool{
+	"/manifest.webmanifest": true, "/icon.svg": true, "/favicon.svg": true,
+	"/icon-192.png": true, "/icon-512.png": true, "/icon-maskable-512.png": true,
 }
 
 func isLoopback(remoteAddr string) bool {
@@ -109,6 +116,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			send(w, http.StatusForbidden, map[string]any{"error": "network access is off"})
 			return
 		}
+		// Fetched by the browser's installer without the cookie, and no secret.
+		if r.Method == http.MethodGet && installAssets[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
 		token := s.accessToken()
 		if token == "" {
 			send(w, http.StatusServiceUnavailable, map[string]any{
@@ -126,8 +138,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		if r.URL.Query().Get("token") != "" {
 			http.SetCookie(w, &http.Cookie{
 				Name: accessCookie, Value: token, Path: "/",
-				MaxAge: 365 * 24 * 3600, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				MaxAge: 365 * 24 * 3600, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
 			})
+		}
+		if !s.admit(w, r) {
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -188,7 +203,26 @@ func lanAddrs() []string {
 			out = append(out, ip.String())
 		}
 	}
+	// First is what the QR code encodes: the network in use, not a virtual adapter (WSL, VPN) no phone can reach.
+	if main := OutboundIP(); main != "" {
+		if i := slices.Index(out, main); i > 0 {
+			out = slices.Insert(slices.Delete(out, i, i+1), 0, main)
+		}
+	}
 	return out
+}
+
+// OutboundIP is the address the default route leaves from. UDP "dial" sends nothing.
+func OutboundIP() string {
+	conn, err := net.Dial("udp4", "192.0.2.1:9")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return addr.IP.String()
+	}
+	return ""
 }
 
 func (s *Server) port() string {
@@ -221,6 +255,10 @@ func (s *Server) accessToken() string {
 func (s *Server) accessURLs() []string {
 	var urls []string
 	token := s.accessToken()
+	// First, so the QR code is the address a phone can install from.
+	for _, name := range s.httpsNames() {
+		urls = append(urls, fmt.Sprintf("https://%s:%s/?token=%s", name, s.port(), token))
+	}
 	for _, host := range lanAddrs() {
 		urls = append(urls, fmt.Sprintf("http://%s:%s/?token=%s", host, s.port(), token))
 	}

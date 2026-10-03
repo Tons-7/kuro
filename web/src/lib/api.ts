@@ -64,6 +64,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body = await res.json()
       const err = (body as { error?: string })?.error
       if (err) message = err
+      // The host's acceptance lapsed or was removed: a reload lands on the waiting page.
+      if (res.status === 403 && (body as { approval?: string })?.approval) window.location.reload()
     } catch {
       // A non-JSON error body is still an error; the status carries it.
     }

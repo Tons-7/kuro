@@ -14,6 +14,7 @@ import { cx } from '../lib/format'
 import { usePrefs, useSetPref, useSetup } from '../lib/queries'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Unpaired } from './Unpaired'
+import { AccessRequests } from './AccessRequests'
 import { NotificationPanel } from './NotificationPanel'
 import { SavedCopyNotice } from './SavedCopyNotice'
 import { useDebounced, useDismiss } from './ui'
@@ -68,6 +69,7 @@ export function Layout() {
         )}
       >
         <Unpaired />
+        <AccessRequests />
         {/* Keyed by page, so leaving a broken one clears it. */}
         <ErrorBoundary key={pageKey}>
           <Outlet />

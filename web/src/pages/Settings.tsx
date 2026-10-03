@@ -3,7 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken } from '../lib/api'
 import { bytes, cx, relativeTime } from '../lib/format'
-import { usePrefs, useSetPref, useSetup } from '../lib/queries'
+import {
+  useAccessDevices,
+  useDecideDevice,
+  usePrefs,
+  useSetPref,
+  useSetup,
+  type AccessDevice,
+  type ApprovalMode,
+} from '../lib/queries'
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../components/Anime4KDialog'
 import { ComponentState } from '../components/ComponentState'
 import { WhereThingsGo } from '../components/WhereThingsGo'
@@ -1269,9 +1277,187 @@ function AccessTab() {
         </div>
       )}
       {access.data?.reachable && access.data.host && <FirewallPanel />}
+      {access.data?.reachable && access.data.host && <DeviceApproval />}
+      {access.data?.reachable && access.data.host && <InstallAsApp />}
       {access.data?.reachable && access.data.host && <RevokeDevices />}
     </Section>
   )
+}
+
+const HTTPS_INPUT =
+  'min-w-0 flex-1 basis-48 rounded-md border border-base-800 bg-base-900 px-2.5 py-1.5 text-sm text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none'
+
+interface HTTPSStatus {
+  domain: string
+  state: 'off' | 'working' | 'ready' | 'error'
+  problem?: string
+  expires?: number
+}
+
+// A phone only installs kuro as an app over HTTPS: a free DuckDNS name and a certificate kuro fetches for it.
+function InstallAsApp() {
+  const qc = useQueryClient()
+  const https = useQuery({
+    queryKey: ['access-https'],
+    queryFn: () => api.get<HTTPSStatus>('/api/access/https'),
+    staleTime: 0,
+    // An error is retried in the background, so it can still turn into ready.
+    refetchInterval: (q) => (q.state.data?.state === 'working' ? 3000 : q.state.data?.state === 'error' ? 10_000 : false),
+  })
+  const [editing, setEditing] = useState(false)
+  const [domain, setDomain] = useState('')
+  const [token, setToken] = useState('')
+  const save = useMutation({
+    meta: { inline: true },
+    mutationFn: (body: { domain: string; token: string }) => api.post<HTTPSStatus>('/api/access/https', body),
+    onSuccess: (status) => {
+      qc.setQueryData(['access-https'], status)
+      setEditing(false)
+      setToken('')
+    },
+    // The pairing links switch to https once the certificate is in.
+    onSettled: () => qc.invalidateQueries({ queryKey: ['access'] }),
+  })
+  const state = https.data?.state ?? 'off'
+  useEffect(() => {
+    if (state === 'ready') void qc.invalidateQueries({ queryKey: ['access'] })
+  }, [state, qc])
+
+  const hint = save.isError
+    ? (save.error as Error).message
+    : state === 'ready'
+      ? `Ready at https://${https.data?.domain}. Open it on the phone and choose Install app.${
+          https.data?.expires ? ` Renews itself; current certificate ends ${relativeTime(https.data.expires)}.` : ''
+        }`
+      : state === 'working'
+        ? `Getting a certificate for ${https.data?.domain}. This takes a minute or two.`
+        : state === 'error'
+          ? `Could not get a certificate yet: ${https.data?.problem}. kuro keeps trying.`
+          : 'Phones install kuro as an app only over HTTPS. Make a free name at duckdns.org and paste it and its token here.'
+
+  return (
+    <>
+      <Row label="Install as an app on a phone" hint={hint}>
+        {state === 'off' || editing ? null : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setDomain(https.data?.domain ?? '')
+                setEditing(true)
+              }}
+              className={buttonClass()}
+            >
+              Change
+            </button>
+            <button onClick={() => save.mutate({ domain: '', token: '' })} className={buttonClass()}>
+              Turn off
+            </button>
+          </div>
+        )}
+      </Row>
+      {(state === 'off' || editing) && (
+        <form
+          className="flex flex-wrap items-center gap-2 py-2.5"
+          onSubmit={(e) => {
+            e.preventDefault()
+            save.mutate({ domain, token })
+          }}
+        >
+          <input
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder="mykuro.duckdns.org"
+            aria-label="DuckDNS name"
+            autoComplete="off"
+            className={HTTPS_INPUT}
+          />
+          <input
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={editing ? 'Token (blank keeps the saved one)' : 'Token from duckdns.org'}
+            aria-label="DuckDNS token"
+            type="password"
+            autoComplete="off"
+            className={HTTPS_INPUT}
+          />
+          <button type="submit" disabled={save.isPending || !domain.trim()} className={buttonClass('primary')}>
+            Save
+          </button>
+          {editing && (
+            <button type="button" onClick={() => setEditing(false)} className={buttonClass()}>
+              Cancel
+            </button>
+          )}
+        </form>
+      )}
+    </>
+  )
+}
+
+const APPROVAL_MODES: ReadonlyArray<{ value: ApprovalMode; label: string }> = [
+  { value: 'off', label: 'Off' },
+  { value: 'once', label: 'Once' },
+  { value: 'always', label: 'Every time' },
+]
+
+// The link alone, or the link plus the host's say per device.
+function DeviceApproval() {
+  const qc = useQueryClient()
+  const devices = useAccessDevices(true)
+  const decide = useDecideDevice()
+  const setMode = useMutation({
+    meta: { inline: true },
+    mutationFn: (mode: ApprovalMode) => api.post('/api/access/approval', { mode }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['access-devices'] }),
+  })
+  const mode = devices.data?.mode ?? 'off'
+  const hint =
+    mode === 'off'
+      ? 'Any device with the link gets in.'
+      : mode === 'once'
+        ? 'A new device waits until you accept it here, then is remembered.'
+        : `A device waits until you accept it, and asks again after ${devices.data?.idleMinutes ?? 30} minutes away or a restart.`
+
+  return (
+    <>
+      <Row label="Ask before letting a device in" hint={setMode.isError ? (setMode.error as Error).message : hint}>
+        <Segmented options={APPROVAL_MODES} value={mode} onChange={(m) => setMode.mutate(m)} size="sm" />
+      </Row>
+      {(devices.data?.devices ?? []).map((d) => (
+        <Row
+          key={d.id}
+          label={d.name}
+          hint={`${d.addr} · ${DEVICE_STATUS[d.status]} · asked ${relativeTime(d.requestedAt)}`}
+        >
+          <div className="flex flex-wrap justify-end gap-2">
+            {d.status !== 'approved' && d.status !== 'lapsed' && (
+              <button
+                onClick={() => decide.mutate({ id: d.id, status: 'approved' })}
+                className={buttonClass(d.status === 'pending' ? 'primary' : undefined)}
+              >
+                Accept
+              </button>
+            )}
+            {d.status === 'pending' && (
+              <button onClick={() => decide.mutate({ id: d.id, status: 'denied' })} className={buttonClass()}>
+                Decline
+              </button>
+            )}
+            <button onClick={() => decide.mutate({ id: d.id, status: 'removed' })} className={buttonClass()}>
+              Remove
+            </button>
+          </div>
+        </Row>
+      ))}
+    </>
+  )
+}
+
+const DEVICE_STATUS: Record<AccessDevice['status'], string> = {
+  pending: 'waiting for you',
+  approved: 'accepted',
+  denied: 'declined',
+  lapsed: 'accepted, will ask again',
 }
 
 function CopyButton({ text }: { text: string }) {

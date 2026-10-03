@@ -242,8 +242,37 @@ func (c *Client) MutateOnce(ctx context.Context, query string, vars map[string]a
 	return c.run(ctx, body, out, false)
 }
 
+type backgroundKey struct{}
+
+// Background marks ctx as a job nobody is waiting on, whose requests let a person's go first.
+func Background(ctx context.Context) context.Context {
+	return context.WithValue(ctx, backgroundKey{}, true)
+}
+
+// yieldMax bounds how long a background request stands aside, so a busy evening cannot starve it.
+const yieldMax = 30 * time.Second
+
+// yield holds a background request back while the budget is short, keeping the reserve for clicks.
+func (c *Client) yield(ctx context.Context) error {
+	if ctx.Value(backgroundKey{}) == nil || c.limiter.Limit() == rate.Inf {
+		return nil
+	}
+	deadline := time.Now().Add(yieldMax)
+	for c.limiter.Tokens() < countReserve && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
 func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool) error {
 	for attempt := 0; ; attempt++ {
+		if err := c.yield(ctx); err != nil {
+			return err
+		}
 		if err := c.limiter.Wait(ctx); err != nil {
 			return err
 		}

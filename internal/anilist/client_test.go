@@ -288,3 +288,26 @@ func TestAwaitPauseRespectsContext(t *testing.T) {
 		t.Fatal("a cancelled context should abort the wait")
 	}
 }
+
+func TestBackgroundRequestsLetAPersonGoFirst(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{"data":{}}`) })
+	c.limiter = rate.NewLimiter(rate.Every(100*time.Millisecond), 5)
+	c.limiter.AllowN(time.Now(), 4) // one left: under the reserve
+
+	start := time.Now()
+	if err := c.Query(context.Background(), "{x}", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 300*time.Millisecond {
+		t.Errorf("a person's request waited %v", took)
+	}
+
+	c.limiter.AllowN(time.Now(), int(c.limiter.Tokens()))
+	start = time.Now()
+	if err := c.Query(Background(context.Background()), "{x}", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < 250*time.Millisecond {
+		t.Errorf("a background request went after %v, before the reserve refilled", took)
+	}
+}

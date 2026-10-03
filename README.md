@@ -137,6 +137,39 @@ Turn on **Settings → Access → Allow other devices**; no restart needed.
 Anything off this machine then needs a token, so the same page shows a QR code
 to scan. Loopback stays open, so watching on the machine itself needs nothing.
 
+**Ask before letting a device in.** On the same page, a device with the link can
+also be made to wait until you accept it on this machine: *Once* remembers it,
+*Every time* asks again after 30 minutes away or a restart. Requests pop up on
+whatever kuro page is open here, and the list of devices is in Settings.
+
+### Installing as an app on a phone
+
+Android only installs a site as an app (its own window, no address bar) over
+HTTPS, so kuro needs a name and a certificate the phone trusts. kuro gets both
+itself from a free [DuckDNS](https://www.duckdns.org) name; nothing is installed
+on the phone:
+
+1. Sign in at duckdns.org, add a name (say `mykuro`) and copy the token.
+2. In **Settings → Access → Install as an app on a phone**, paste the name and
+   the token.
+
+A minute or two later the QR code leads to `https://mykuro.duckdns.org:4321`.
+Open it on the phone and choose **Install app** (Brave, Chrome) or **Add to Home
+Screen** (Safari). kuro points the name at this machine's home address, fetches
+a Let's Encrypt certificate and renews it. `http://localhost:4321` keeps working
+on this machine, on the same port.
+
+The name points at a private address, so this works on the home network only,
+and a few routers refuse such names ("DNS rebinding protection").
+
+To use a certificate of your own instead (your domain, or `tailscale cert`),
+point `config.toml` at the files; kuro rereads them when they are renewed:
+
+```toml
+tls_cert = 'kuro.example.com.crt'
+tls_key = 'kuro.example.com.key'
+```
+
 ## Legal
 
 kuro is a media player and BitTorrent client. It hosts no content and ships

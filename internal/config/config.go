@@ -26,6 +26,9 @@ type Config struct {
 	Data string `toml:"data_dir"`
 	// VLC is the player's binary or install folder; empty means the usual places.
 	VLC string `toml:"vlc_path"`
+	// TLSCert and TLSKey turn on HTTPS beside plain HTTP; both or neither.
+	TLSCert string `toml:"tls_cert"`
+	TLSKey  string `toml:"tls_key"`
 
 	dataDir   string
 	root      string
@@ -161,6 +164,14 @@ func (c Config) VLCPath() string {
 		return ""
 	}
 	return c.resolve(c.VLC, "")
+}
+
+// TLSFiles are the certificate and key paths, empty unless both are set.
+func (c Config) TLSFiles() (cert, key string) {
+	if c.TLSCert == "" || c.TLSKey == "" {
+		return "", ""
+	}
+	return c.resolve(c.TLSCert, ""), c.resolve(c.TLSKey, "")
 }
 
 func (c Config) DataDir() string      { return c.dataDir }
@@ -315,6 +326,11 @@ addr = "127.0.0.1:4321"
 
 # VLC, when it is not on PATH or in Program Files: its folder or its binary.
 # vlc_path = 'E:\VideoLAN\VLC'
+
+# HTTPS, which a phone needs to install kuro as an app: a certificate and its key
+# (for example from "tailscale cert"). http://localhost keeps working beside it.
+# tls_cert = 'my-pc.tailnet.ts.net.crt'
+# tls_key = 'my-pc.tailnet.ts.net.key'
 
 [anilist]
 client_id = ""

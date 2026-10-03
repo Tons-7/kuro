@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"kuro/internal/anilist"
+	"kuro/internal/certs"
 	"kuro/internal/config"
 	"kuro/internal/corpus"
 	"kuro/internal/db"
@@ -554,7 +556,10 @@ func run(log *slog.Logger) error {
 	// Keeps airing shows current even when nobody opens them.
 	scheduler.Add(jobs.Job{
 		Name: "airing-refresh", Every: 15 * time.Minute, OnStart: true,
-		Run: func(ctx context.Context) error { _, err := importer.Refresh(ctx, 150); return err },
+		Run: func(ctx context.Context) error {
+			_, err := importer.Refresh(anilist.Background(ctx), 150)
+			return err
+		},
 	})
 	scheduler.Start(ctx)
 
@@ -565,7 +570,7 @@ func run(log *slog.Logger) error {
 			log.Warn("match index unavailable", "err", err)
 		}
 	}()
-	go api.WarmRankings(ctx)
+	go api.WarmRankings(anilist.Background(ctx))
 
 	srv := &http.Server{
 		Handler:           api.Handler(),
@@ -573,6 +578,17 @@ func run(log *slog.Logger) error {
 		IdleTimeout:       2 * time.Minute,
 	}
 	binder := &binder{srv: srv, log: log, claimed: claim}
+	// HTTPS shares the port; without a certificate a TLS hello is simply refused.
+	secure := certs.New(filepath.Join(cfg.DataDir(), "certs"), server.OutboundIP, log)
+	// A bad certificate costs HTTPS, not the app.
+	if cert, key := cfg.TLSFiles(); cert != "" {
+		if err := secure.UseFiles(cert, key); err != nil {
+			log.Error("tls_cert / tls_key not usable", "cert", cert, "err", err)
+		}
+	}
+	binder.tls = secure.TLSConfig()
+	api.SetCerts(secure)
+	api.StartDuckDNS(ctx)
 	api.OnRebind(binder.bind)
 
 	drained := make(chan struct{})
@@ -631,6 +647,8 @@ func run(log *slog.Logger) error {
 type binder struct {
 	srv *http.Server
 	log *slog.Logger
+	// tls, when set, is answered on the same port as plain HTTP.
+	tls *tls.Config
 
 	mu sync.Mutex
 	ln net.Listener
@@ -645,6 +663,9 @@ func (b *binder) bind(addr string) error {
 		if ln, err = net.Listen("tcp", addr); err != nil {
 			return err
 		}
+	}
+	if b.tls != nil {
+		ln = server.DualListener(ln, b.tls)
 	}
 
 	b.mu.Lock()

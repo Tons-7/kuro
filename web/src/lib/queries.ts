@@ -399,3 +399,39 @@ export function useSetup(options?: {
     ...options,
   })
 }
+
+export interface AccessDevice {
+  id: string
+  name: string
+  addr: string
+  /** lapsed: accepted, then away too long under "every time". */
+  status: 'pending' | 'approved' | 'denied' | 'lapsed'
+  requestedAt: number
+  decidedAt: number
+}
+
+export type ApprovalMode = 'off' | 'once' | 'always'
+
+/** Devices asking the host for access. Host-only; polled while approval is on so a request shows up unasked. */
+export function useAccessDevices(host: boolean) {
+  return useQuery({
+    queryKey: ['access-devices'],
+    queryFn: () =>
+      api.get<{ mode: ApprovalMode; devices: AccessDevice[]; idleMinutes: number }>('/api/access/devices'),
+    enabled: host,
+    staleTime: 0,
+    refetchInterval: (q) => (q.state.data && q.state.data.mode !== 'off' ? 4000 : false),
+  })
+}
+
+export function useDecideDevice() {
+  const qc = useQueryClient()
+  return useMutation({
+    meta: { inline: true },
+    mutationFn: ({ id, status }: { id: string; status: 'approved' | 'denied' | 'removed' }) =>
+      status === 'removed'
+        ? api.del(`/api/access/devices/${id}`)
+        : api.post(`/api/access/devices/${id}`, { status }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['access-devices'] }),
+  })
+}
