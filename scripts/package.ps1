@@ -14,7 +14,7 @@ the app downloads it itself on first run; cache/ is downloaded episodes; and
 config.toml holds the AniList client secret, which must never be shipped.
 
 Updating means replacing kuro.exe, not the folder — the folder is where the
-sidecars, the episode cache and the credentials live. The database is in
+downloaded programs, the episode cache and the credentials live. The database is in
 %LOCALAPPDATA%\kuro and is migrated on startup, so watch history survives
 whatever happens to the folder.
 
@@ -66,9 +66,9 @@ Extract this zip to a folder of its own first. Run kuro.exe from there, never
 from inside the zip: Windows would put it in a temporary folder and throw your
 settings away every time it closes.
 
-kuro.exe opens its own window and, on first run, asks to download the programs
-it needs — a torrent engine and ffmpeg, about 430 MB. Nothing is installed
-anywhere else: everything lives beside kuro.exe.
+kuro.exe opens its own window and, on first run, asks to download ffmpeg, about
+420 MB (the torrent engine is built in; an ffmpeg already on PATH is used as is).
+Nothing is installed anywhere else: everything lives beside kuro.exe.
 
 kuro ships with no torrent sites. The setup screen shows the block to add to
 config.toml (written beside kuro.exe on first run); add your sites and restart.
