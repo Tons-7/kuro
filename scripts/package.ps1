@@ -95,6 +95,8 @@ try {
     New-Item -ItemType Directory -Force -Path $full | Out-Null
     Copy-Item $exe (Join-Path $full 'kuro.exe')
     Set-Content -Path (Join-Path $full 'README.txt') -Value $readme -Encoding utf8
+    # The license's Required Notice must travel with every copy.
+    Copy-Item (Join-Path $root 'LICENSE') (Join-Path $full 'LICENSE.txt')
 
     $fullZip = Join-Path $OutDir "kuro-$Version.zip"
     Remove-Item $fullZip -ErrorAction SilentlyContinue

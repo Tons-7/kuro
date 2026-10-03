@@ -1,27 +1,50 @@
-# kuro
+# kuro — self-hosted anime streaming
 
-Self-hosted anime streaming. Search a show, press play, and it streams from a
-torrent while it downloads — no waiting for a complete file. Progress syncs to
-AniList and MyAnimeList as you watch.
+[![Latest release](https://img.shields.io/github/v/release/Tons-7/kuro?label=release)](https://github.com/Tons-7/kuro/releases/latest)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 
-Everything runs on your own machine. One binary, one config file.
+Search any anime, press play, and it streams from a torrent while it downloads,
+with no waiting for a complete file. Progress syncs to AniList and MyAnimeList
+as you watch.
+
+Everything runs on your own machine: one binary with a built-in torrent engine,
+a browser player and one config file.
+
+![kuro home page](docs/screenshots/home.jpg)
 
 ## What it does
 
-- **Streams while downloading.** Seeking into a part downloaded region works;
+- **Streams while downloading.** Seeking into a part not yet downloaded works;
   the rest is fetched in the background so the next episode is already there.
+- **Built-in torrent engine.** Picks the best release (resolution, codec, group,
+  seeders, SeaDex), handles season packs, and needs nothing else installed.
 - **Plays anywhere.** In the browser by default, so a phone or TV on the same
-  network works the same as the laptop. mpv is available as an external player.
-- **Knows 34,141 anime**, including the ~11,700 that exist on MyAnimeList but
+  network works the same as the laptop. mpv and VLC are available as external
+  players, with Anime4K upscaling.
+- **Sub or dub**, chosen per show, with subtitle delay and size controls.
+- **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
 - **Marks filler and recap episodes**, so a rewatch can skip them.
 - **Skips openings and endings**, if you ask it to. Nothing is automatic by
   default.
+- **Follows airing shows:** notifies you of new episodes and can download them.
 - **Plays files you already have.** Point it at a folder and matched episodes
   play instantly with no torrent involved.
 - **Tracks progress** on AniList and MyAnimeList, in both directions.
 
-## Running it
+| Series page | Player |
+| --- | --- |
+| ![series page](docs/screenshots/series.jpg) | ![player](docs/screenshots/player.jpg) |
+
+## Download
+
+Get `kuro-<version>.zip` from the [latest release](https://github.com/Tons-7/kuro/releases/latest),
+extract it to a folder of its own and run `kuro.exe`. The first-run screen
+downloads ffmpeg (or uses one already on your `PATH`) and shows how to add the
+torrent sites to search. Updates are offered in the app.
+
+## Building from source
 
 Three things are needed before the first run: the external tools, the torrent
 sites to search, and an AniList application so it can talk to your list.
@@ -110,16 +133,21 @@ vlc_path = 'E:\VideoLAN\VLC'
 
 ### Watching on a phone or TV
 
-Set `addr = "0.0.0.0:4321"` in `config.toml` and restart. Anything off this
-machine then needs a token: **Settings → Access** shows a QR code to scan.
-Loopback stays open so nothing has to be configured to watch on the machine
-itself.
+Turn on **Settings → Access → Allow other devices**; no restart needed.
+Anything off this machine then needs a token, so the same page shows a QR code
+to scan. Loopback stays open, so watching on the machine itself needs nothing.
 
 ## Legal
 
 kuro is a media player and BitTorrent client. It hosts no content and ships
 with none. What you search for, download and share is your responsibility;
 make sure it is legal where you live. BitTorrent uploads while it downloads.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE): use, study and change kuro freely for
+personal, hobby, research or non-profit purposes. Commercial use of any kind,
+including selling it or a modified version, is not permitted.
 
 ## Layout
 
