@@ -14,7 +14,7 @@ import { clockTime, cx, languageName } from '../lib/format'
 import { refreshDownloads } from '../lib/queries'
 import { PlayIcon } from '../components/PosterCard'
 import { buttonClass, Spinner, useDismiss } from '../components/ui'
-import { useAnime4K } from './anime4k'
+import { useAnime4K, type UpscaleTier } from './anime4k'
 import {
   useAutoSkip,
   useDocumentPiP,
@@ -124,7 +124,8 @@ export interface PlayerProps {
   autoPlay: boolean
   /** Subtitle languages in preference order, from settings. */
   subLanguages?: string[]
-  upscale?: { enabled: boolean; mode: string }
+  /** onSlow is set only under Auto: a tier picked by hand is left alone. */
+  upscale?: { enabled: boolean; mode: string; tier?: UpscaleTier; onSlow?: () => void }
   title: string
   subtitle?: string
   /** played is media time that actually played since the last report. */
@@ -330,6 +331,8 @@ export function Player({
     // leaves it rendering into nothing.
     enabled: !!upscale?.enabled && !pip.active,
     mode: upscale?.mode ?? 'A',
+    tier: upscale?.tier ?? 'full',
+    onSlow: upscale?.onSlow,
     // The playlist, not the session id: the id is the episode and does not
     // change when a different release is picked for it.
     source: playlist,

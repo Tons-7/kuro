@@ -5,9 +5,19 @@ import { Segmented, useDismiss, useModalFocus } from './ui'
 
 const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceUpscale; label: string }> = [
   { value: 'auto', label: 'Auto' },
-  { value: 'on', label: 'On' },
   { value: 'off', label: 'Off' },
+  { value: 'light', label: 'Light' },
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'full', label: 'Full' },
 ]
+
+const DEVICE_HINTS: Record<DeviceUpscale, string> = {
+  auto: 'Follows Settings on a computer and steps down if it falls behind; off on phones and tablets.',
+  off: 'Never on this device.',
+  light: 'A sharpen filter only. Cheapest; for phones and weak graphics.',
+  balanced: 'The medium networks: about a quarter of the work of Full.',
+  full: 'The very large networks. For a dedicated graphics card.',
+}
 
 export const ANIME4K_MODES = [
   { id: 'A', title: 'A · Restore', hint: 'Sharpens soft, blurry lines. Safe default for most 1080p web releases.' },
@@ -140,16 +150,14 @@ export function Anime4KDialog({
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-base-850 px-3 py-2.5">
           <div className="min-w-0 flex-1 basis-40">
             <p className="text-sm text-base-200">On this device</p>
-            <p className="text-xs text-base-500">
-              Auto follows Settings on a computer and stays off on phones and tablets.
-            </p>
+            <p className="text-xs text-base-500">{DEVICE_HINTS[device]}</p>
           </div>
           <Segmented size="sm" value={device} onChange={onDevice} options={DEVICE_CHOICES} />
         </div>
 
         <p className="mt-3 text-xs text-base-600">
-          Network size is an mpv-only setting and lives in Settings → Playback; the browser build
-          ships fixed networks.
+          Network size in Settings → Playback is for mpv; in the browser, Light, Balanced and Full
+          above take its place.
         </p>
       </div>
     </div>

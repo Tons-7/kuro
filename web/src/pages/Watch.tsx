@@ -21,7 +21,15 @@ import { Badge, Button, buttonClass, ErrorState, LinkButton, Segmented, Skeleton
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
-import { deviceUpscale, setDeviceUpscale, upscaleHere } from '../player/anime4k'
+import {
+  autoTier,
+  deviceUpscale,
+  lowerTier,
+  setAutoTier,
+  setDeviceUpscale,
+  upscaleHere,
+  type AutoTier,
+} from '../player/anime4k'
 
 export function Watch() {
   const { animeId, episode } = useParams()
@@ -246,9 +254,22 @@ export function Watch() {
 
   // The saved default is shared with mpv on the host; each browser decides whether it applies here.
   const [deviceChoice, setDeviceChoice] = useState(deviceUpscale)
-  const upscaling = upscale ?? {
-    enabled: upscaleHere(deviceChoice, flag('playback.anime4k')),
-    mode: effective['playback.anime4k_mode'] ?? 'A',
+  const [settled, setSettled] = useState(autoTier)
+  const [steppedTo, setSteppedTo] = useState<AutoTier | null>(null)
+  const here = upscaleHere(deviceChoice, flag('playback.anime4k'), settled)
+  // Under Auto a GPU that falls behind drops a tier, and the device remembers where it settled.
+  const stepDown = () => {
+    const next = lowerTier(here.tier)
+    setAutoTier(next)
+    setSettled(next)
+    setSteppedTo(next)
+  }
+  const upscaling = {
+    enabled: upscale?.enabled ?? here.enabled,
+    mode: upscale?.mode ?? effective['playback.anime4k_mode'] ?? 'A',
+    tier: here.tier,
+    // Not for a tier picked by hand, nor an episode switched on by hand.
+    onSlow: here.auto && !upscale ? stepDown : undefined,
   }
 
   if (!id || !ep) return <ErrorState error={new Error('Unknown episode')} />
@@ -454,6 +475,14 @@ export function Watch() {
                 </div>
               )}
 
+              {steppedTo && (
+                <p className="text-xs text-base-400">
+                  {steppedTo === 'off'
+                    ? 'Anime4K turned itself off: this device was falling behind.'
+                    : `Anime4K dropped to ${steppedTo}: this device was falling behind.`}
+                </p>
+              )}
+
               {download.isError && (
                 <p className="text-xs text-recap">{(download.error as Error).message}</p>
               )}
@@ -497,6 +526,12 @@ export function Watch() {
         onDevice={(choice) => {
           setDeviceUpscale(choice)
           setDeviceChoice(choice)
+          // Choosing Auto again starts it from the top.
+          if (choice === 'auto') {
+            setAutoTier(null)
+            setSettled(null)
+          }
+          setSteppedTo(null)
           // The device's default just changed; this episode follows it.
           setUpscale(null)
         }}

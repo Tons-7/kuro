@@ -268,6 +268,15 @@ export function SectionHeading({
   )
 }
 
+// Sideways within the strip only: scrollIntoView also scrolled the page or dialog to it on every render.
+function keepInStrip(el: HTMLElement | null) {
+  const strip = el?.parentElement
+  if (!el || !strip) return
+  const left = el.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft
+  if (left < strip.scrollLeft) strip.scrollLeft = left
+  else if (left + el.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + el.offsetWidth - strip.clientWidth
+}
+
 /**
  * One choice among a few, as a filled track. Underlined links read as
  * navigation and leave the selected one hard to spot.
@@ -296,7 +305,7 @@ export function Segmented<T extends string>({
             role="tab"
             aria-selected={active}
             // The strip scrolls with no bar; the selected tab must stay in view.
-            ref={active ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
+            ref={active ? keepInStrip : undefined}
             onClick={() => onChange(option.value)}
             className={cx(
               'shrink-0 rounded-md font-medium whitespace-nowrap transition-colors',
