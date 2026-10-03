@@ -69,8 +69,7 @@ func TestPublishedSumReadsEitherFormat(t *testing.T) {
 		srv.Close()
 	}
 
-	// Anything that is not a hash leaves the download unverified rather than
-	// failing on a moved side file.
+	// Anything that is not a hash leaves the download unverified rather than failing on a moved side file.
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gone", http.StatusNotFound)
 	}))

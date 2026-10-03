@@ -18,3 +18,16 @@ func TestAudioLanguagesForMpv(t *testing.T) {
 		}
 	}
 }
+
+// Files tag tracks "eng" or "english" as often as "en"; the order is kept.
+func TestSubtitleLanguagesForMpv(t *testing.T) {
+	if got := SubtitleLanguages([]string{"en", "pt"}); got != "en,eng,english,pt,por,portuguese,pt-br" {
+		t.Errorf("slang = %q", got)
+	}
+	if got := SubtitleLanguages([]string{"xx"}); got != "xx" {
+		t.Errorf("an unknown code should pass through, got %q", got)
+	}
+	if got := SubtitleLanguages(nil); got != "" {
+		t.Errorf("no languages should impose none, got %q", got)
+	}
+}

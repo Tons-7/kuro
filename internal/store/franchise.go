@@ -214,8 +214,7 @@ func (s *Store) SaveRelations(ctx context.Context, rels []Relation) error {
 // numbers each member in broadcast order. Side stories and spin-offs are
 // deliberately excluded: they are related, but they are not seasons.
 func (s *Store) RebuildFranchises(ctx context.Context) (int, error) {
-	// Edges read inside the write, or two rebuilds can commit an older graph
-	// over a newer one.
+	// Edges read inside the write, or two rebuilds can commit an older graph over a newer one.
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -312,8 +311,7 @@ func dateOf(dates map[int]int, id int) int {
 	return 99999999
 }
 
-// A missing date sorts last rather than first, so an unaired sequel does not
-// become season one.
+// A missing date sorts last rather than first, so an unaired sequel does not become season one.
 func startDates(ctx context.Context, tx *sql.Tx) (map[int]int, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT anime_id,

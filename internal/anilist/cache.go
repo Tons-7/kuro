@@ -36,8 +36,7 @@ func newResponseCache() *responseCache {
 	}
 }
 
-// Every document here is a compile-time constant, so reading the operation off
-// the front is reliable.
+// Every document here is a compile-time constant, so reading the operation off the front is reliable.
 func isMutation(query string) bool {
 	return strings.HasPrefix(strings.TrimSpace(query), "mutation")
 }

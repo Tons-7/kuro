@@ -61,8 +61,7 @@ func TestSaveCorpusIsIdempotent(t *testing.T) {
 	}
 }
 
-// A later source may know a field the seed did not; it must not blank one it
-// does not know about.
+// A later source may know a field the seed did not; it must not blank one it does not know about.
 func TestSaveCorpusMergesFields(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -208,8 +207,7 @@ func TestBuildIndexResolvesEveryTitleVariant(t *testing.T) {
 	}
 }
 
-// Unknown year and episode count are stored as NULL, and one such row must not
-// fail the whole index build.
+// Unknown year and episode count are stored as NULL, and one such row must not fail the index build.
 func TestBuildIndexToleratesNullMetadata(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

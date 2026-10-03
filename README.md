@@ -27,7 +27,7 @@ Three things are needed before the first run: the external tools, the torrent
 sites to search, and an AniList application so it can talk to your list.
 
 ```powershell
-# Fetch rqbit, ffmpeg, mpv and the Anime4K shaders into bin/
+# Fetch ffmpeg, mpv and the Anime4K shaders into bin/
 ./scripts/fetch-deps.ps1
 
 # Build the frontend and the binary that embeds it
@@ -39,11 +39,15 @@ sites to search, and an AniList application so it can talk to your list.
 Then open <http://localhost:4321>.
 
 On **macOS and Linux** build with `scripts/build.sh` and run `./kuro`. The
-first-run screen downloads what it can (rqbit, and ffmpeg on Linux) into `bin/`;
+first-run screen downloads what it can (ffmpeg on Linux) into `bin/`;
 what has no clean prebuilt binary — ffmpeg on macOS, and mpv everywhere but
 Windows — is a package-manager install kuro then finds on `PATH`
 (`brew install ffmpeg mpv`, `apt install ffmpeg mpv`). mpv is only the optional
-desktop player; the browser player needs just ffmpeg and rqbit.
+desktop player; the browser player needs just ffmpeg.
+
+The torrent engine is built in. It takes peers on port 4240 (TCP and UDP;
+`[torrent] listen_port` changes it) and asks the router to forward it over
+UPnP. Downloads from an older kuro that used rqbit carry over on first run.
 
 `config.toml` is written beside the binary on first run. kuro ships with no
 torrent sites; add one block per site and restart. `type` is the feed format
@@ -94,7 +98,7 @@ beside the binary, and a restart applies them:
 ```toml
 data_dir = "data"        # database and window profile
 cache_dir = "cache"      # downloaded episodes, transcodes, thumbnails, updates
-bin_dir = "bin"          # rqbit, ffmpeg, mpv, shaders
+bin_dir = "bin"          # ffmpeg, mpv, shaders
 ```
 
 VLC is found on PATH or in Program Files. An install anywhere else — another
@@ -129,7 +133,8 @@ internal/
   parse           release name parsing
   score           release ranking
   indexer         torrent search
-  torrent         rqbit supervisor and HTTP streaming
+  engine          the torrent engine (anacrolix/torrent) behind a loopback API
+  torrent         client for that API: add, select, stream
   transcode       ffmpeg, HLS, subtitle and font extraction
   player          mpv over JSON IPC, Anime4K shader chains
   library         the domain: playback, sync, scanning, notifications

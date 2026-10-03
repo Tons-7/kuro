@@ -8,9 +8,7 @@ import (
 	"time"
 )
 
-// AniList's last answer to each read a page made (anilist.Archive), kept in
-// the http_cache table the first schema set aside for it. Only served when
-// AniList cannot be reached.
+// AniList's last answers (anilist.Archive), in the http_cache table.
 const (
 	answersMaxAge = 30 * 24 * time.Hour
 	answersKept   = 2000
@@ -37,7 +35,7 @@ func (s *Store) LoadAnswer(ctx context.Context, key string) ([]byte, time.Time, 
 	return body, time.Unix(at, 0), true
 }
 
-// SaveAnswer compresses: a page of full records is 150 KB of JSON, a tenth of that packed.
+// Gzipped: a page of records is ~150 KB of JSON, a tenth packed.
 func (s *Store) SaveAnswer(ctx context.Context, key string, body []byte) error {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)

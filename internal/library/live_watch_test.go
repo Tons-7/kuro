@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"kuro/internal/anilist"
-	"kuro/internal/store"
 )
 
 // TestLiveWatcherAnnouncesTheEpisodeThatAired follows Bleach TYBW: The Calamity
@@ -30,7 +29,7 @@ func TestLiveWatcherAnnouncesTheEpisodeThatAired(t *testing.T) {
 	if _, err := st.MarkWatched(ctx, show, watched); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetFollow(ctx, store.Follow{AnimeID: show}, true); err != nil {
+	if err := st.SetFollow(ctx, show, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetSetting(ctx, "notify.enabled", "true"); err != nil {

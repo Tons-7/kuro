@@ -5,19 +5,23 @@
 //   node scripts/run-player-check.mjs
 //
 // Env:
-//   PORT=4399        which port the throwaway server listens on
+//   PORT=4399        which port the throwaway server listens on; another port
+//                    gets its own scratch dir and peer port, so runs can overlap
+//                    (build once first, then SKIP_BUILD=1 for each)
 //   KURO_ANIME=…     catalogue id the test file is assigned to (needs network
 //                    the first time, to fetch that show's metadata)
 //   SKIP_BUILD=1     reuse the current web/dist and a prebuilt kuro.exe
 //   KEEP=1           leave the scratch dir and its logs in place afterwards
+//   BIN_ONLY=a,b     a bin holding only these programs (none: empty)
 //
 // Requires a network connection: the series page fetches real metadata for the
 // catalogue id from AniList/MAL, exactly as it would in normal use.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync, symlinkSync, existsSync, openSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { linkBin } from './harness-lib.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const webDir = resolve(scriptDir, '..')
@@ -33,17 +37,18 @@ const URL = `http://127.0.0.1:${PORT}`
 
 const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
 const ffmpeg = join(repo, 'bin', exe('ffmpeg'))
-const scratch = join(tmpdir(), 'kuro-e2e')
+const DEFAULT_PORT = PORT === '4399'
+const scratch = join(tmpdir(), DEFAULT_PORT ? 'kuro-e2e' : `kuro-e2e-${PORT}`)
+// Off the real app's 4240 and the other scripts' 4341–4347.
+const PEER_PORT = DEFAULT_PORT ? 4341 : Number(PORT) - 60
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
-// rqbit finds its session through Windows known folders, not LOCALAPPDATA:
-// unset, the scratch engine loads the real app's torrents and can delete them.
 const isolated = {
   KURO_ROOT: root,
+  // APPDATA too: the engine imports rqbit's per-user session when it has none.
   LOCALAPPDATA: appdata,
+  APPDATA: appdata,
   KURO_NO_WINDOW: '1',
-  RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'),
-  RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
 }
 const lib = join(scratch, 'lib')
 const shots = join(scratch, 'shots')
@@ -59,6 +64,16 @@ const stage = (msg) => console.log(`\n▶ ${msg}`)
 const run = (cmd, args, opts = {}) => {
   const r = spawnSync(cmd, args, { stdio: 'inherit', ...opts })
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited ${r.status ?? r.signal}`)
+}
+
+// kuro also finds a program on PATH, so BIN_ONLY hides any copy installed there.
+function binOnlyPath() {
+  if (!process.env.BIN_ONLY) return {}
+  const keep = process.env.BIN_ONLY.split(',')
+  const hidden = ['ffmpeg', 'ffprobe', 'mpv', 'vlc'].filter((n) => !keep.includes(n))
+  const key = Object.keys(process.env).find((k) => k.toLowerCase() === 'path') ?? 'PATH'
+  const dirs = (process.env[key] ?? '').split(delimiter)
+  return { [key]: dirs.filter((d) => !hidden.some((n) => existsSync(join(d, exe(n))))).join(delimiter) }
 }
 
 function killTree(child) {
@@ -195,17 +210,15 @@ try {
   stage(`scratch instance at ${scratch}`)
   rmSync(scratch, { recursive: true, force: true })
   for (const d of [scratch, root, appdata, lib, shots]) mkdirSync(d, { recursive: true })
-  // The engine binaries (ffmpeg, ffprobe, rqbit, mpv, shaders) come from the
-  // repo's bin via a junction, so the scratch root is otherwise isolated: its
-  // own config, cache and database.
-  symlinkSync(join(repo, 'bin'), join(root, 'bin'), process.platform === 'win32' ? 'junction' : 'dir')
+  // BIN_ONLY=a,b links only those, the install of someone who skipped the rest;
+  // BIN_ONLY=none links nothing.
+  linkBin(join(repo, 'bin'), join(root, 'bin'), process.env.BIN_ONLY ? process.env.BIN_ONLY.split(',') : null)
   // One site that refuses connections: searches fail fast instead of being
-  // refused for want of a site, and the first-run nudge stays off.
+  // refused for want of a site, and the first-run nudge stays off. The peer
+  // port is off the default so the real app's engine can still bind it.
   writeFileSync(
     join(root, 'config.toml'),
-    // listen_port off rqbit's default: its DHT binds UDP there, and sharing it
-    // stops the real app's engine starting.
-    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\napi_addr = "127.0.0.1:3031"\nlisten_port = 4341\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
+    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
   )
 
   if (!SKIP_BUILD) {
@@ -228,7 +241,7 @@ try {
     cwd: root,
     // No app window: Playwright is the browser, and the window's Chromium
     // profile outlives taskkill and blocks the scratch cleanup.
-    env: { ...process.env, ...isolated },
+    env: { ...process.env, ...isolated, ...binOnlyPath() },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })

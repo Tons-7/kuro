@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { DiscoverItem, ScheduleDay } from '../lib/api'
-import { airTime, cx } from '../lib/format'
+import { airTime, cx, episodeCount } from '../lib/format'
 import { useDiscover, useNow, useSchedule } from '../lib/queries'
 import { Badge, Skeleton } from './ui'
 
@@ -54,6 +54,12 @@ export function Popularity() {
 }
 
 function RankRow({ rank, anime }: { rank: number; anime: DiscoverItem }) {
+  const airing = anime.status === 'RELEASING'
+  const count = episodeCount({
+    status: anime.status,
+    episodes: anime.episodes,
+    aired: anime.nextEpisode ? anime.nextEpisode - 1 : null,
+  })
   return (
     <li>
       <Link
@@ -80,9 +86,9 @@ function RankRow({ rank, anime }: { rank: number; anime: DiscoverItem }) {
         )}
         <div className="min-w-0">
           <p className="line-clamp-2 text-xs leading-snug text-base-200">{anime.title}</p>
-          <p className="mt-0.5 text-[11px] text-base-500">
-            {anime.format?.replace('_', ' ')}
-            {anime.episodes ? ` · ${anime.episodes} ep` : ''}
+          <p className="mt-0.5 flex items-center gap-1 text-[11px] whitespace-nowrap text-base-500">
+            {airing && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" title="Airing" />}
+            {[anime.format?.replace('_', ' '), count].filter(Boolean).join(' · ')}
           </p>
         </div>
       </Link>
@@ -133,8 +139,7 @@ function DayList({ day }: { day?: ScheduleDay }) {
   const list = useRef<HTMLUListElement>(null)
   const upcoming = useRef<HTMLLIElement>(null)
 
-  // Before the early returns: a hook that only sometimes runs crashes the
-  // render the moment the day changes.
+  // Before the early returns: a hook that only sometimes runs crashes the render the moment the day changes.
   const now = useNow() / 1000
 
   // The next episode to air is the one worth looking at, so the column opens

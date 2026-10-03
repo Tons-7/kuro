@@ -28,8 +28,7 @@ func mergeASS(have, read string) string {
 	return header + strings.Join(all, "\n") + "\n"
 }
 
-// splitASS returns everything up to and including the [Events] Format line,
-// and the event lines after it.
+// splitASS returns everything up to and including the [Events] Format line, and the event lines after it.
 func splitASS(s string) (string, []string) {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	lines := strings.Split(s, "\n")

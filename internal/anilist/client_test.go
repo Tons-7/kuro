@@ -224,8 +224,7 @@ func TestRemainingMissingHeader(t *testing.T) {
 	}
 }
 
-// An exhausted quota must not stall the response that observed it; the caller
-// already has its data.
+// An exhausted quota must not stall the response that observed it; the caller already has its data.
 func TestExhaustedQuotaReturnsImmediately(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Remaining", "0")

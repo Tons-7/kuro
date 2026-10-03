@@ -139,12 +139,10 @@ func (c *Client) List(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
-// SetProgress updates one entry. Status is optional; an empty string leaves
-// whatever MAL already has. MAL has no rewatching status: a rewatch is
-// "watching" with is_rewatching set, and finished rewatches are a count — sent
-// only once kuro has counted one, so a locally created row's zero cannot wipe
-// a count built up on the site. The score, on kuro's 0-100 scale, is treated
-// the same way; clearScore sends a 0 that was meant.
+// SetProgress updates one entry; an empty status leaves MAL's. A rewatch is
+// "watching" plus is_rewatching. The rewatch count and score (0-100) are sent
+// only when non-zero, so a fresh local row can't wipe the site's;
+// clearScore sends a deliberate 0.
 func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status string, rewatched, score int, clearScore bool) error {
 	if animeID <= 0 {
 		return fmt.Errorf("mal: invalid anime id %d", animeID)

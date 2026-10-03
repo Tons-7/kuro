@@ -3,17 +3,17 @@
 Downloads the external binaries kuro shells out to, into bin/.
 
 .DESCRIPTION
-kuro needs three programs it does not bundle: rqbit for torrents, ffmpeg and
-ffprobe for transcoding, and mpv for external playback. This resolves the
-current version of each from upstream, downloads it, and extracts only the
-executables.
+kuro needs programs it does not bundle: ffmpeg and ffprobe for transcoding,
+and mpv (with the Anime4K shaders) for external playback. This resolves the
+current version of each from upstream, downloads it, and extracts only what
+kuro uses.
 
 Re-running is cheap: a component whose recorded version already matches is
 skipped unless -Force is given. What was installed is recorded in
 bin/versions.json so a build can be reproduced.
 
 .PARAMETER Component
-Fetch only one of rqbit, ffmpeg, mpv. Default is all three.
+Fetch only some of ffmpeg, mpv, anime4k. Default is all.
 
 .PARAMETER Force
 Re-download even when the recorded version already matches.
@@ -24,8 +24,8 @@ Re-download even when the recorded version already matches.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('rqbit', 'ffmpeg', 'mpv', 'anime4k')]
-    [string[]]$Component = @('rqbit', 'ffmpeg', 'mpv', 'anime4k'),
+    [ValidateSet('ffmpeg', 'mpv', 'anime4k')]
+    [string[]]$Component = @('ffmpeg', 'mpv', 'anime4k'),
 
     [string]$BinDir,
     [switch]$Force
@@ -98,23 +98,6 @@ function Find-One($root, $pattern) {
     return $hit.FullName
 }
 
-# rqbit tags its betas as full releases, so the prerelease flag cannot be
-# trusted; a plain semver tag is the only reliable marker of a stable build.
-function Resolve-Rqbit {
-    $releases = Invoke-RestMethod 'https://api.github.com/repos/ikatson/rqbit/releases?per_page=40' -Headers $github -TimeoutSec 60
-    $stable = $releases | Where-Object { $_.tag_name -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
-    if (-not $stable) { throw 'no stable rqbit release found' }
-
-    $asset = $stable.assets | Where-Object { $_.name -eq 'rqbit.exe' } | Select-Object -First 1
-    if (-not $asset) { throw "rqbit $($stable.tag_name) has no Windows build" }
-
-    return [pscustomobject]@{
-        Version = $stable.tag_name.TrimStart('v')
-        Url     = $asset.browser_download_url
-        Archive = $false
-    }
-}
-
 # gyan.dev tracks ffmpeg releases more closely than the GitHub build farms and
 # publishes the version as a bare string, so no scraping is needed.
 function Resolve-Ffmpeg {
@@ -158,7 +141,6 @@ function Resolve-Anime4K {
 }
 
 $components = [ordered]@{
-    rqbit   = @{ Resolve = ${function:Resolve-Rqbit};   Files = @('rqbit.exe') }
     ffmpeg  = @{ Resolve = ${function:Resolve-Ffmpeg};  Files = @('ffmpeg.exe', 'ffprobe.exe') }
     mpv     = @{ Resolve = ${function:Resolve-Mpv};     Files = @('mpv.exe', 'mpv.com') }
     # mpv resolves the chain from bin/shaders, so the layout matters.

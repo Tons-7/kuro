@@ -38,8 +38,7 @@ export function Layout() {
   // Every episode is the same page; re-keying would tear the player down.
   const pageKey = fullBleed ? 'watch' : pathname
 
-  // Scroll to top on navigation, except back/forward (POP), where the old
-  // position is the point.
+  // Scroll to top on navigation, except back/forward (POP), where the old position is the point.
   const navigation = useNavigationType()
   useEffect(() => {
     if (navigation !== 'POP') window.scrollTo(0, 0)
@@ -81,8 +80,7 @@ export function Layout() {
 function Header() {
   const [scrolled, setScrolled] = useState(false)
 
-  // The header sits over the hero art, so it only earns a background once the
-  // page has moved past it.
+  // The header sits over the hero art, so it only earns a background once the page has moved past it.
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)
     onScroll()
@@ -179,7 +177,7 @@ function Tabs() {
           end={tab.end}
           className={({ isActive }) =>
             cx(
-              // A phone shares its row out evenly so all five fit, none cut off.
+              // Phone: shared evenly so all five fit.
               'shrink-0 rounded-full px-3 py-1.5 text-sm transition-colors max-sm:flex-1 max-sm:px-2 max-sm:text-center',
               isActive
                 ? 'bg-base-700 text-white shadow-card ring-1 ring-white/10'
@@ -212,8 +210,7 @@ function SearchBox() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Instant results from what kuro already holds; AniList is the slow path
-  // behind Enter or the last row.
+  // Instant results from what kuro already holds; AniList is the slow path behind Enter or the last row.
   const q = useDebounced(value.trim(), 200)
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
@@ -279,8 +276,7 @@ function SearchBox() {
           aria-label="Search anime"
           className={cx(
             'w-full rounded-md border border-base-800 bg-base-900/80 py-1.5 pl-8 text-sm text-base-100 placeholder:text-base-500 focus:border-accent-500 focus:outline-none',
-            // Padding only while there's something to clear, so the button never
-            // sits over the text.
+            // Padding only while there's something to clear, so the button never sits over the text.
             value ? 'pr-8' : 'pr-3',
           )}
         />
@@ -316,8 +312,7 @@ function SearchBox() {
         <ul
           id="kuro-search-results"
           role="listbox"
-          // Anchored to the box it ran off the left edge of a phone; there it
-          // spans the screen instead.
+          // Anchored to the box it ran off the left edge of a phone; there it spans the screen instead.
           className="absolute top-full right-0 z-50 mt-1.5 w-80 max-w-[90vw] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1 shadow-panel max-sm:fixed max-sm:inset-x-2 max-sm:top-14 max-sm:w-auto max-sm:max-w-none"
         >
           {hits.map((hit, i) => (

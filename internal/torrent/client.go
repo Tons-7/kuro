@@ -1,6 +1,7 @@
-// Package torrent drives rqbit, which runs as a sidecar process. Its streaming
-// endpoint blocks until the requested pieces arrive; reading the file directly
-// cannot, because a sparse region on NTFS reads as zeroes with no error.
+// Package torrent is the client for kuro's torrent engine (internal/engine),
+// spoken over loopback HTTP. Its streaming endpoint blocks until the requested
+// pieces arrive; reading the file directly cannot, because a sparse region on
+// NTFS reads as zeroes with no error.
 package torrent
 
 import (
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -21,7 +23,11 @@ import (
 )
 
 type Client struct {
-	http   *http.Client
+	http *http.Client
+	// No timeouts at all: stream reads take as long as the swarm, bounded by
+	// the caller's context. Even headers wait for the first piece, which on a
+	// slow swarm takes minutes.
+	stream *http.Client
 	base   string
 	engine Engine
 
@@ -32,11 +38,10 @@ type Client struct {
 	badMagnets map[string]time.Time
 }
 
-// Engine is what runs the sidecar this client talks to. Wiring one in makes
-// calls start it on demand instead of failing when it is not up yet.
+// Engine is what this client talks to. Wiring one in makes calls start it on
+// demand instead of failing when it is not up yet.
 type Engine interface {
 	Ensure(context.Context) error
-	Down()
 }
 
 func (c *Client) WithEngine(e Engine) *Client {
@@ -44,40 +49,30 @@ func (c *Client) WithEngine(e Engine) *Client {
 	return c
 }
 
-// setBase repoints the client, for an engine started on a fallback port.
-func (c *Client) setBase(base string) {
-	c.mu.Lock()
-	c.base = strings.TrimRight(base, "/")
-	c.mu.Unlock()
-}
-
-// Addr is the engine's host:port as currently used, after any port fallback.
+// Addr is the engine's host:port.
 func (c *Client) Addr() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if u, err := url.Parse(c.base); err == nil {
 		return u.Host
 	}
 	return ""
 }
 
-func (c *Client) url(path string) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.base + path
-}
+func (c *Client) url(path string) string { return c.base + path }
 
-// engineGone tells a dead engine from a caller that gave up or an engine that
-// is merely slow; only the first should trigger a restart.
-func engineGone(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+// ErrUnavailable wraps every reason the engine cannot be reached, so callers
+// can tell "no engine" from "the engine said no".
+var ErrUnavailable = errors.New("torrent engine unavailable")
+
+// Within reports whether path is dir or inside it.
+func Within(dir, path string) bool {
+	if dir == "" || path == "" {
 		return false
 	}
-	var timeout interface{ Timeout() bool }
-	if errors.As(err, &timeout) && timeout.Timeout() {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	if err != nil {
 		return false
 	}
-	return true
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // How long a dead magnet stays skipped. Long enough to spare a retry storm,
@@ -87,6 +82,7 @@ const inspectFailTTL = 3 * time.Minute
 func NewClient(base string) *Client {
 	return &Client{
 		http:       &http.Client{Timeout: 60 * time.Second},
+		stream:     &http.Client{},
 		base:       strings.TrimRight(base, "/"),
 		badMagnets: map[string]time.Time{},
 	}
@@ -119,25 +115,38 @@ type Stats struct {
 	Finished      bool   `json:"finished"`
 	// Per file, in the order of Detail.Files.
 	FileProgress []int64 `json:"file_progress"`
-	Live         *struct {
-		DownloadSpeed struct {
-			Mbps float64 `json:"mbps"`
-		} `json:"download_speed"`
-		Snapshot struct {
-			PeerStats struct {
-				Live int `json:"live"`
-			} `json:"peer_stats"`
-		} `json:"snapshot"`
-	} `json:"live"`
+	Live         *Live   `json:"live"`
 }
 
-// Peers is how many are actually connected. A tracker's seeder count is
-// routinely wrong.
+// Live is present while the torrent is downloading.
+type Live struct {
+	DownloadSpeed struct {
+		// MiB/s, despite the name.
+		Mbps float64 `json:"mbps"`
+	} `json:"download_speed"`
+	Snapshot struct {
+		// Includes unverified bytes, so it moves mid-piece.
+		FetchedBytes int64 `json:"fetched_bytes"`
+		PeerStats    struct {
+			Live int `json:"live"`
+		} `json:"peer_stats"`
+	} `json:"snapshot"`
+}
+
+// Peers is how many are actually connected. A tracker's seeder count is routinely wrong.
 func (s Stats) Peers() int {
 	if s.Live == nil {
 		return 0
 	}
 	return s.Live.Snapshot.PeerStats.Live
+}
+
+// Received counts every byte arrived, verified or not.
+func (s Stats) Received() int64 {
+	if s.Live == nil {
+		return s.ProgressBytes
+	}
+	return max(s.ProgressBytes, s.Live.Snapshot.FetchedBytes)
 }
 
 // FileDone falls back to the torrent's state without per-file progress.
@@ -200,7 +209,8 @@ func (c *Client) markMagnetFailed(magnet string) {
 }
 
 // Add downloads exactly one file. A season batch has a dozen episodes in it
-// and only the requested one should ever touch the disk.
+// and only the requested one should ever touch the disk. A pack already held
+// keeps its other selected files.
 func (c *Client) Add(ctx context.Context, magnet string, file File) (*Torrent, error) {
 	return c.add(ctx, magnet, url.Values{
 		"overwrite":        {"true"},
@@ -237,8 +247,8 @@ func (c *Client) Stats(ctx context.Context, id int) (Stats, error) {
 	return s, err
 }
 
-// StreamURL is handed straight to mpv or ffmpeg. rqbit serves it with Range
-// support and moves its priority window to wherever the player seeks.
+// StreamURL is handed straight to mpv or ffmpeg. The engine serves it with Range
+// support and fetches first wherever the player reads.
 func (c *Client) StreamURL(id, fileIndex int) string {
 	return c.url(fmt.Sprintf("/torrents/%d/stream/%d", id, fileIndex))
 }
@@ -260,7 +270,7 @@ func (c *Client) WaitLive(ctx context.Context, id int, timeout time.Duration) er
 		case stats.State == "live" || stats.Finished:
 			return nil
 
-		// After a restart rqbit re-checks part-downloaded files and answers stream
+		// After a restart the engine re-checks carried-over files and answers stream
 		// reads with "invalid state: initializing"; extend the deadline while
 		// progress climbs so a swarm timeout doesn't expire on local disk work.
 		case stats.State == "initializing" && stats.ProgressBytes > verified:
@@ -298,8 +308,7 @@ func (c *Client) Prewarm(ctx context.Context, id, fileIndex int, window int64) e
 	}
 	stream := c.StreamURL(id, fileIndex)
 
-	// Tail first, head last: each range request moves rqbit's priority window,
-	// and it should end up where playback begins.
+	// Tail first, head last: the head is what playback reads first.
 	for _, spec := range []string{
 		fmt.Sprintf("bytes=-%d", window),
 		fmt.Sprintf("bytes=0-%d", window-1),
@@ -324,8 +333,15 @@ func (c *Client) PrewarmHead(ctx context.Context, id, fileIndex int, window int6
 		fmt.Sprintf("bytes=0-%d", window-1), window)
 }
 
-// A ranged read is also how rqbit is told what to fetch next, so the bytes are
-// discarded but the request is the point.
+func (c *Client) streamClient() *http.Client {
+	if c.stream != nil {
+		return c.stream
+	}
+	return http.DefaultClient
+}
+
+// A ranged read is also how the engine is told what to fetch next, so the bytes
+// are discarded but the request is the point.
 func (c *Client) readRange(ctx context.Context, stream, spec string, window int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stream, nil)
 	if err != nil {
@@ -333,7 +349,7 @@ func (c *Client) readRange(ctx context.Context, stream, spec string, window int6
 	}
 	req.Header.Set("Range", spec)
 
-	res, err := c.http.Do(req)
+	res, err := c.streamClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("prewarm %s: %w", spec, err)
 	}
@@ -381,7 +397,7 @@ func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction f
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, offset+window-1))
 
-	res, err := c.http.Do(req)
+	res, err := c.streamClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -394,7 +410,7 @@ func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction f
 // broke: the queue drops the first and reports the second.
 var ErrPaused = errors.New("download paused")
 
-// How often Await asks rqbit where it is. Overridden in tests.
+// How often Await asks the engine where it is. Overridden in tests.
 var awaitPoll = 5 * time.Second
 
 // Await blocks until the torrent has everything it was asked for. It gives up
@@ -433,12 +449,11 @@ func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
 	}
 }
 
-// Checking reports rqbit re-verifying a file after a launch; progress climbs
-// from zero and pausing it freezes the check part way.
+// Checking reports the engine verifying data on disk; progress climbs from zero.
 func (s Stats) Checking() bool { return s.State == "initializing" && !s.Finished }
 
-// PauseUnfinished stops every part-downloaded torrent at startup: rqbit resumes
-// its whole session on launch, so without this the queue downloads all at once.
+// PauseUnfinished stops every part-downloaded torrent at startup: the engine
+// resumes its whole session on launch, so without this all download at once.
 // keep exempts a torrent; ones still checking are counted for a later pass.
 func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string) bool) (paused, kept int, checking []string, err error) {
 	list, err := c.List(ctx)
@@ -515,8 +530,8 @@ func (c *Client) List(ctx context.Context) (listing, error) {
 	return out, err
 }
 
-// Live maps info hash to the id rqbit is currently using. Ids are per session
-// and reused, so one recorded before a restart may name a different torrent.
+// Live maps info hash to the engine's current id. Ids are per session, so one
+// recorded before a restart may name a different torrent.
 func (c *Client) Live(ctx context.Context) (map[string]int, error) {
 	list, err := c.List(ctx)
 	if err != nil {
@@ -532,7 +547,7 @@ func (c *Client) Live(ctx context.Context) (map[string]int, error) {
 	return out, nil
 }
 
-// Ready reports whether the sidecar is accepting requests yet.
+// Ready reports whether the engine is accepting requests.
 func (c *Client) Ready(ctx context.Context) bool {
 	_, err := c.List(ctx)
 	return err == nil
@@ -563,9 +578,6 @@ func (c *Client) do(req *http.Request, out any) error {
 
 	res, err := c.http.Do(req)
 	if err != nil {
-		if c.engine != nil && engineGone(err) {
-			c.engine.Down()
-		}
 		return err
 	}
 	defer res.Body.Close()
@@ -576,7 +588,7 @@ func (c *Client) do(req *http.Request, out any) error {
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("rqbit %s: HTTP %d: %s",
+		return fmt.Errorf("engine %s: HTTP %d: %s",
 			req.URL.Path, res.StatusCode, strings.TrimSpace(string(body)))
 	}
 	if out == nil || len(bytes.TrimSpace(body)) == 0 {
@@ -665,10 +677,27 @@ var (
 	// A revision suffix is glued on ("05v2"), leaving no word boundary.
 	versionSuffix = regexp.MustCompile(`(?i)(\d{1,4})v\d\b`)
 	episodeNum    = regexp.MustCompile(`(?i)(?:\bS\d{1,2}E(\d{1,4})\b|(?:^|[\s_.-])(\d{1,4})(?:[\s_.-]|$))`)
+	seasonEpisode = regexp.MustCompile(`(?i)\bS\d{1,2}E(\d{1,4})\b`)
+	// "Show - 11 - 511 Kinderheim": the dashed number, not the title's.
+	dashed = regexp.MustCompile(`[\s_]-[\s_]+(\d{1,4})(?:v\d)?(?:[\s_]|$)`)
+	// "FLAC.2.0", "DDP5.1": read as numbers, every file of a pack was episode 2.
+	audioLayout = regexp.MustCompile(`(?i)(?:^|[\s_.-]|[a-z])[2567]\.[01](?:[\s_.-]|$)`)
 )
 
 func episodeInName(name string) int {
 	cleaned := episodeTags.ReplaceAllString(name, " ")
+	// SxxEyy wins over any other number.
+	if m := seasonEpisode.FindStringSubmatch(cleaned); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n
+		}
+	}
+	cleaned = audioLayout.ReplaceAllString(cleaned, " ")
+	if m := dashed.FindStringSubmatch(cleaned); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 && !(len(m[1]) == 4 && n >= 1900 && n <= 2099) {
+			return n
+		}
+	}
 	cleaned = versionSuffix.ReplaceAllString(cleaned, "$1 ")
 
 	matches := episodeNum.FindAllStringSubmatch(cleaned, -1)

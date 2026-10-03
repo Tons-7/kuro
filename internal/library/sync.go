@@ -29,8 +29,7 @@ func NewSync(s *store.Store, al *anilist.Client, log *slog.Logger) *Sync {
 	return &Sync{store: s, al: al, log: log}
 }
 
-// WithMAL mirrors each episode to MyAnimeList as it is watched, rather than
-// leaving it to the periodic job.
+// WithMAL mirrors each episode to MyAnimeList as it is watched, rather than leaving it to the periodic job.
 func (s *Sync) WithMAL(m *MALSync) *Sync {
 	s.mal = m
 	return s

@@ -11,8 +11,7 @@ import (
 	"kuro/internal/store"
 )
 
-// A record AniList returned this recently is not written again: a page served
-// from the client's ten-minute cache holds nothing newer.
+// Not rewritten within the client's cache window: nothing newer can arrive.
 const rememberEvery = 10 * time.Minute
 
 type recentIDs struct {
@@ -38,11 +37,8 @@ func (r *recentIDs) fresh(media []anilist.Media, now time.Time) []anilist.Media 
 	return out
 }
 
-// Remember keeps every show AniList returns anywhere — browse, search, the
-// schedule, a studio — so the local search, the anime page's fallback and the
-// airing refresh know it. A show the corpus lacks is added too, so a new one
-// is matchable the moment it is seen, not the day the id list catches up.
-// Nothing served from the saved copy is written: it is old by definition.
+// Remember saves every show AniList returns, adding unknown ones to the corpus
+// so a new show is matchable at once. Saved answers are never written back.
 func (i *Importer) Remember(ctx context.Context, media []anilist.Media) {
 	if anilist.UsedSaved(ctx) {
 		return
@@ -83,8 +79,7 @@ func (i *Importer) remember(ctx context.Context, media []anilist.Media) {
 	}
 }
 
-// Refresh re-reads saved shows still airing whose row is past due, so a show
-// nobody has opened since still knows its next episode and when it ended.
+// Refresh re-reads airing shows that are due, opened or not.
 func (i *Importer) Refresh(ctx context.Context, limit int) (int, error) {
 	ids, err := i.store.StaleAiring(ctx, time.Now(), limit)
 	if err != nil || len(ids) == 0 {
@@ -93,8 +88,7 @@ func (i *Importer) Refresh(ctx context.Context, limit int) (int, error) {
 	return i.Hydrate(ctx, ids)
 }
 
-// FromRecord turns a saved row back into the shape AniList serves, for the
-// anime page when AniList cannot be reached. Studio ids are not kept, only names.
+// FromRecord rebuilds AniList's shape from a saved row. Studio ids aren't kept.
 func FromRecord(a store.Anime) anilist.Media {
 	m := anilist.Media{
 		ID: a.ID, IDMal: a.MalID,
@@ -128,7 +122,7 @@ func FromRecord(a store.Anime) anilist.Media {
 	if a.TrailerID != nil {
 		m.Trailer = &anilist.Trailer{ID: a.TrailerID, Site: a.TrailerSite}
 	}
-	// A saved broadcast time already past says nothing about the next one.
+	// A past broadcast time says nothing about the next.
 	if a.NextEpisode != nil && a.NextAiringAt != nil && *a.NextAiringAt > int(time.Now().Unix()) {
 		until := *a.NextAiringAt - int(time.Now().Unix())
 		m.NextAiring = &anilist.Airing{

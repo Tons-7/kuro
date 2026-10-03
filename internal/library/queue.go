@@ -23,8 +23,7 @@ type Downloader struct {
 	prefs func(ctx context.Context, animeID int) score.Preferences
 	log   *slog.Logger
 
-	// Woken on a new entry so a queued episode starts at once rather than on
-	// the next tick.
+	// Woken on a new entry so a queued episode starts at once rather than on the next tick.
 	wake chan struct{}
 
 	mu      sync.Mutex
@@ -143,13 +142,13 @@ const (
 	queueStall = 10 * time.Minute
 )
 
-// Re-check cadence for torrents rqbit was still verifying at startup.
+// Re-check cadence for torrents the engine was still verifying at startup.
 var (
 	quietRecheck = 10 * time.Second
 	quietFor     = 15 * time.Minute
 )
 
-// Quiet pauses the torrents rqbit auto-resumed on launch, which would otherwise
+// Quiet pauses the torrents the engine resumed on launch, which would otherwise
 // all download at once; a "keep whole episode" one is left to finish. Ones
 // still being verified are revisited once the check ends.
 func (d *Downloader) Quiet(ctx context.Context) {

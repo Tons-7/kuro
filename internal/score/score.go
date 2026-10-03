@@ -150,12 +150,10 @@ type Candidate struct {
 	// One episode's length in minutes, 0 when unknown; scales the size limit.
 	RuntimeMinutes int
 
-	// The release states the episode asked for. Anything else is a guess,
-	// however well seeded.
+	// The release states the episode asked for. Anything else is a guess, however well seeded.
 	Confirmed bool
 
-	// The release names some other show. Set by the finder, which knows the
-	// titles this one goes by.
+	// The release names some other show. Set by the finder, which knows the titles this one goes by.
 	WrongShow bool
 
 	// Numbers a file for the episode may carry inside this release, the one
@@ -261,8 +259,7 @@ func better(a, b Result) bool {
 	if a.AutoPick != b.AutoPick {
 		return a.AutoPick
 	}
-	// No resolution named is unproven quality: last, even if it is the only one
-	// naming the episode.
+	// No resolution named is unproven quality: last, even if it is the only one naming the episode.
 	if a.AutoPick && (a.Release.Resolution == "") != (b.Release.Resolution == "") {
 		return b.Release.Resolution == ""
 	}
@@ -270,6 +267,10 @@ func better(a, b Result) bool {
 	// can't outrank the actual episode on score alone.
 	if a.Confirmed != b.Confirmed {
 		return a.Confirmed
+	}
+	// A swarm counted at zero is nearly always dead; try it after live ones.
+	if a.AutoPick && empty(a) != empty(b) {
+		return !empty(a)
 	}
 	if a.AutoPick && a.Release.Batch != b.Release.Batch {
 		return !a.Release.Batch
@@ -289,6 +290,9 @@ func better(a, b Result) bool {
 	}
 	return a.Score > b.Score
 }
+
+// empty: counted at zero seeders. An unknown count isn't empty.
+func empty(r Result) bool { return r.Torrent.SeedersKnown && r.Torrent.Seeders == 0 }
 
 // Best returns the release to start automatically, or false when nothing
 // qualifies and the user should choose.

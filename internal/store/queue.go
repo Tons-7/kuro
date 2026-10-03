@@ -67,8 +67,7 @@ func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int
 // NextQueued claims the oldest pending episode and marks it active, so a
 // restart mid-download does not leave a row that nothing will ever pick up.
 func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
-	// One statement: a cancel between a read and the claim would otherwise be
-	// downloaded anyway.
+	// One statement: a cancel between a read and the claim would otherwise be downloaded anyway.
 	var q QueuedDownload
 	err := s.w.QueryRowContext(ctx, `
 		UPDATE download_queue SET state = 'active', started_at = ?

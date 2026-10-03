@@ -14,9 +14,6 @@ func TestComponentFilesPerOS(t *testing.T) {
 		name, goos string
 		want       []string
 	}{
-		{"rqbit", "windows", []string{"rqbit.exe"}},
-		{"rqbit", "linux", []string{"rqbit"}},
-		{"rqbit", "darwin", []string{"rqbit"}},
 		{"ffmpeg", "windows", []string{"ffmpeg.exe", "ffprobe.exe"}},
 		{"ffmpeg", "linux", []string{"ffmpeg", "ffprobe"}},
 		{"mpv", "windows", []string{"mpv.exe", "mpv.com"}},
@@ -30,34 +27,11 @@ func TestComponentFilesPerOS(t *testing.T) {
 	}
 }
 
-func TestRqbitAssetPerPlatform(t *testing.T) {
-	cases := []struct {
-		goos, goarch, want string
-	}{
-		{"windows", "amd64", "rqbit.exe"},
-		{"darwin", "arm64", "rqbit-osx-universal"},
-		{"darwin", "amd64", "rqbit-osx-universal"},
-		{"linux", "amd64", "rqbit-linux-amd64"},
-		{"linux", "arm64", "rqbit-linux-arm64"},
-	}
-	for _, c := range cases {
-		got, err := rqbitAssetFor(c.goos, c.goarch)
-		if err != nil || got != c.want {
-			t.Errorf("%s/%s: %q, %v; want %q", c.goos, c.goarch, got, err, c.want)
-		}
-	}
-	if _, err := rqbitAssetFor("plan9", "amd64"); err == nil {
-		t.Error("an unsupported OS should not resolve an asset")
-	}
-}
-
-// rqbit and Anime4K are always auto-fetched; ffmpeg and mpv depend on the OS.
-// The command is only ever shown for what this OS cannot fetch.
+// Anime4K is always auto-fetched; ffmpeg and mpv depend on the OS. The
+// command is only ever shown for what this OS cannot fetch.
 func TestManualCommandOnlyForUnfetchable(t *testing.T) {
-	for _, name := range []string{"rqbit", "anime4k"} {
-		if ManualCommand(name) != "" {
-			t.Errorf("%s is auto-fetched everywhere; it should have no manual command", name)
-		}
+	if ManualCommand("anime4k") != "" {
+		t.Error("anime4k is auto-fetched everywhere; it should have no manual command")
 	}
 	// The exact command is OS-specific, but on Windows nothing is manual.
 	if runtime.GOOS == "windows" {

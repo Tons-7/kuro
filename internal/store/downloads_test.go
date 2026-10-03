@@ -13,7 +13,7 @@ func TestDownloadStatusListsEachTorrentOnce(t *testing.T) {
 	seedCatalogue(t, s, 154587, "FINISHED", 28)
 
 	if _, err := s.w.ExecContext(ctx, `
-		INSERT INTO torrent (info_hash, rqbit_id, name, total_bytes, state, added_at)
+		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at)
 		VALUES ('abc', 1, '[Erai-raws] Sousou no Frieren - 12.mkv', 100, 'live', 1)`); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestDownloadStatusHidesSupersededRelease(t *testing.T) {
 
 	// The chosen release for episode 12.
 	if _, err := s.w.ExecContext(ctx, `
-		INSERT INTO torrent (info_hash, rqbit_id, name, total_bytes, state, added_at)
+		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at)
 		VALUES ('chosen', 1, 'Frieren - 12 [good].mkv', 100, 'live', 2)`); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestDownloadStatusHidesSupersededRelease(t *testing.T) {
 	}
 	// A second release for the same episode, deselected in favour of the chosen one.
 	if _, err := s.w.ExecContext(ctx, `
-		INSERT INTO torrent (info_hash, rqbit_id, name, total_bytes, state, added_at)
+		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at)
 		VALUES ('superseded', 2, 'Frieren - 12 [other].mkv', 100, 'live', 1)`); err != nil {
 		t.Fatal(err)
 	}
@@ -97,9 +97,9 @@ func TestDownloadStatusFoldsASeasonPack(t *testing.T) {
 	seedCatalogue(t, s, 154587, "FINISHED", 28)
 
 	for _, r := range []TorrentRecord{
-		{InfoHash: "pack", RqbitID: 1, Name: "Frieren BD", TotalSize: 100, AnimeID: 154587, EpKey: "5", FileIndex: 7, FilePath: "05.mkv"},
-		{InfoHash: "pack", RqbitID: 1, Name: "Frieren BD", TotalSize: 100, AnimeID: 154587, EpKey: "3", FileIndex: 2, FilePath: "03.mkv"},
-		{InfoHash: "pack", RqbitID: 1, Name: "Frieren BD", TotalSize: 100, AnimeID: 154587, EpKey: "12", FileIndex: 9, FilePath: "12.mkv"},
+		{InfoHash: "pack", EngineID: 1, Name: "Frieren BD", TotalSize: 100, AnimeID: 154587, EpKey: "5", FileIndex: 7, FilePath: "05.mkv"},
+		{InfoHash: "pack", EngineID: 1, Name: "Frieren BD", TotalSize: 100, AnimeID: 154587, EpKey: "3", FileIndex: 2, FilePath: "03.mkv"},
+		{InfoHash: "pack", EngineID: 1, Name: "Frieren BD", TotalSize: 100, AnimeID: 154587, EpKey: "12", FileIndex: 9, FilePath: "12.mkv"},
 	} {
 		if err := s.RecordTorrent(ctx, r); err != nil {
 			t.Fatal(err)

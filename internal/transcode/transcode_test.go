@@ -47,8 +47,7 @@ Dialogue: 0,0:00:01.00,0:00:05.00,Default,styled line one
 Dialogue: 0,0:00:06.00,0:00:10.00,Default,styled line two
 `
 
-// A Matroska file with a styled subtitle track and an embedded font, which is
-// what anime actually ships as.
+// A Matroska file with a styled subtitle track and an embedded font, which is what anime actually ships as.
 func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -95,8 +94,7 @@ func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 	return out
 }
 
-// Encoder failures are otherwise invisible: the only symptom is segments that
-// never appear.
+// Encoder failures are otherwise invisible: the only symptom is segments that never appear.
 type testWriter struct{ t *testing.T }
 
 func (w testWriter) Write(p []byte) (int, error) {
@@ -139,8 +137,7 @@ func TestProbeReadsEveryStream(t *testing.T) {
 	}
 }
 
-// H.264 with AAC needs no re-encoding: only the container is unusable, and
-// rewriting that is nearly free.
+// H.264 with AAC needs no re-encoding: only the container is unusable, and rewriting that is nearly free.
 func TestPlanCopiesPlayableStreams(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := testMKV(t, ffmpeg, 6)
@@ -357,8 +354,7 @@ func TestRenderable(t *testing.T) {
 			t.Errorf("%s should be renderable", codec)
 		}
 	}
-	// Bitmap subtitles would have to be burned in, which is deliberately not
-	// done.
+	// Bitmap subtitles would have to be burned in, which is deliberately not done.
 	for _, codec := range []string{"hdmv_pgs_subtitle", "dvd_subtitle"} {
 		if Renderable(codec) {
 			t.Errorf("%s is a bitmap format and cannot be rendered as text", codec)
@@ -404,8 +400,7 @@ func TestKeyframeFlagsMatchEncoderKind(t *testing.T) {
 	}
 }
 
-// A copy seek lands on the preceding keyframe, so the offset is biased forward
-// to reach the intended one.
+// A copy seek lands on the preceding keyframe, so the offset is biased forward to reach the intended one.
 func TestRemuxSeekIsBiased(t *testing.T) {
 	s := &Session{
 		Source: "http://x/1",
@@ -420,8 +415,7 @@ func TestRemuxSeekIsBiased(t *testing.T) {
 	if !strings.Contains(args, "-start_number 10") {
 		t.Errorf("segment numbering must continue from the seek point: %s", args)
 	}
-	// Without these the segments do not line up with the playlist already
-	// given to the player.
+	// Without these the segments do not line up with the playlist already given to the player.
 	for _, want := range []string{"-copyts", "-hls_segment_type fmp4", "frag_discont"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("missing %q: %s", want, args)

@@ -94,12 +94,17 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 		}
 		kept = append(kept, m)
 	}
+	// The studio's total includes what the filters dropped, so it is unknown.
+	total := result.Total
+	if len(formats)+len(statuses)+len(genres) > 0 {
+		total = 0
+	}
 
 	send(w, http.StatusOK, map[string]any{
 		"items":   s.decorate(r, kept),
 		"page":    max(page, 1),
 		"hasMore": result.HasNextPage,
-		"total":   result.Total,
+		"total":   total,
 		"studio":  map[string]any{"id": studio, "name": name},
 	})
 }
@@ -277,7 +282,7 @@ func (s *Server) filters(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			genres, tags = fresh, freshTags
-			// A saved answer is shown but not held for a day as if fetched.
+			// Shown, but not cached for a day like a live answer.
 			if !anilist.UsedSaved(r.Context()) {
 				s.vocab.mu.Lock()
 				s.vocab.genres, s.vocab.tags, s.vocab.fetched = fresh, freshTags, time.Now()

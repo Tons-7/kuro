@@ -74,8 +74,7 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 		frontier = next
 	}
 
-	// A walk over saved answers is not a fetch: marking it would hold off the
-	// real one for a week.
+	// Saved answers aren't a fetch; marking one would delay the real walk a week.
 	if anilist.UsedSaved(ctx) {
 		return 0, nil
 	}

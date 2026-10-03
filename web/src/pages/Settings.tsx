@@ -29,8 +29,7 @@ export function Settings() {
   }, [wanted])
 
   return (
-    // Centred as one block: the slack becomes margins, not a gulf between
-    // every label and its control.
+    // Centred as one block: the slack becomes margins, not a gulf between every label and its control.
     <div className="mx-auto max-w-[59rem] space-y-5">
       <h1 className="text-xl font-semibold text-white">Settings</h1>
 
@@ -257,13 +256,20 @@ function PlaybackTab() {
           />
         </Row>
         <Row
-          label="Download next episode while watching"
-          hint="Shares your connection with the episode playing. Leave off on a slow line."
+          label="Download ahead while watching"
+          hint="Shares your connection with the episode playing; with two, the second starts once the first has landed. Leave off on a slow line."
         >
-          <Switch
-            on={f.get('cache.prefetch_next')}
-            onChange={(v) => f.set('cache.prefetch_next', String(v))}
-          />
+          <Select
+            value={f.get('cache.prefetch_next') ? (f.value('cache.prefetch_count') === '2' ? '2' : '1') : '0'}
+            onChange={(v) => {
+              f.set('cache.prefetch_next', String(v !== '0'))
+              if (v !== '0') f.set('cache.prefetch_count', v)
+            }}
+          >
+            <option value="0">Off</option>
+            <option value="1">Next episode</option>
+            <option value="2">Next 2 episodes</option>
+          </Select>
         </Row>
       </Section>
 
@@ -525,8 +531,71 @@ function QualityTab() {
         <Row label="Auto-download followed anime">
           <Switch on={f.get('autodownload.enabled')} onChange={(v) => f.set('autodownload.enabled', String(v))} />
         </Row>
+        <PeersFirewallRow />
       </Section>
     </div>
+  )
+}
+
+interface PeersFirewall {
+  status: { supported: boolean; firewall?: string; hint?: string; command?: string }
+  port: number
+  allowed: boolean
+  blocked: boolean
+}
+
+// Whether torrent peers can connect in. Downloads work without it, from fewer
+// peers. Host only: a paired device cannot change this machine's firewall.
+function PeersFirewallRow() {
+  const qc = useQueryClient()
+  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const host = !!access.data?.host
+  const fw = useQuery({
+    queryKey: ['torrent-firewall'],
+    queryFn: () => api.get<PeersFirewall>('/api/torrent/firewall'),
+    enabled: host,
+  })
+  const allow = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<PeersFirewall>('/api/torrent/firewall'),
+    onSuccess: (data) => qc.setQueryData(['torrent-firewall'], data),
+  })
+  if (!host || !fw.data) return null
+  const { status, port, allowed, blocked } = fw.data
+
+  // Linux and macOS: kuro only says what it found.
+  if (!status.supported) {
+    if (!status.firewall) return null
+    return (
+      <div className="py-2.5">
+        <p className="text-sm text-base-200">Incoming peers</p>
+        <p className="text-xs text-base-500">{status.hint}</p>
+        {status.command && (
+          <code className="mt-2 block rounded bg-base-900 px-2 py-1.5 text-xs break-all text-accent-300 select-all">
+            {status.command}
+          </code>
+        )}
+      </div>
+    )
+  }
+
+  const hint = allow.isError
+    ? (allow.error as Error).message
+    : allowed
+      ? `Peers can connect to kuro on port ${port}.`
+      : blocked
+        ? 'Windows Firewall is blocking kuro, probably from an earlier Cancel on its prompt. Downloads find fewer peers.'
+        : `Windows Firewall keeps peers from connecting in on port ${port}. Downloads still work, from fewer peers.`
+  return (
+    <Row label="Incoming peers" hint={hint}>
+      {allowed ? (
+        <span className="text-sm text-accent-400">✓ Allowed</span>
+      ) : (
+        <button onClick={() => allow.mutate()} disabled={allow.isPending} className={buttonClass('secondary', 'sm')}>
+          {allow.isPending ? 'Waiting for Windows…' : 'Allow'}
+        </button>
+      )}
+    </Row>
   )
 }
 
@@ -974,7 +1043,7 @@ function LibraryTab() {
         <button
           onClick={() => scan.mutate()}
           disabled={local.data?.scanning || roots.length === 0}
-          className="flex items-center gap-2 rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700 disabled:opacity-50"
+          className={buttonClass()}
         >
           {local.data?.scanning && <Spinner className="size-3.5" />}
           {local.data?.scanning ? 'Scanning…' : 'Scan now'}
@@ -1041,7 +1110,7 @@ function BackupSection() {
       </Row>
 
       <Row label="Import" hint="A file exported here, or a MyAnimeList export (.xml or .xml.gz)">
-        <label className="cursor-pointer rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700">
+        <label className={cx(buttonClass(), 'cursor-pointer')}>
           {load.isPending ? 'Importing…' : 'Choose file'}
           <input
             type="file"
@@ -1222,8 +1291,7 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-// A new token signs every paired phone and TV out at once; they pair again
-// with the new code.
+// A new token signs every paired phone and TV out at once; they pair again with the new code.
 function RevokeDevices() {
   const qc = useQueryClient()
   const [confirming, setConfirming] = useState(false)
@@ -1443,8 +1511,7 @@ function AboutTab() {
     setWaiting(true)
     let ticks = 0
     const timer = window.setInterval(async () => {
-      // A new version that never comes up (or a rollback) must not leave the
-      // page spinning for good.
+      // A new version that never comes up (or a rollback) must not leave the page spinning for good.
       if (++ticks === 90) setStuck(true)
       try {
         const health = await api.get<{ version?: string }>('/api/health')
@@ -1585,9 +1652,10 @@ function ComponentsSection() {
             key={c.name}
             label={c.label}
             hint={
-              c.present
-                ? `Installed${c.version ? ` · ${c.version}` : ''}`
-                : `${c.size}${c.required ? ' · required' : ' · optional'}`
+              c.problem ??
+              (c.present
+                ? `${c.system ? 'On this system' : 'Installed'}${c.version ? ` · ${c.version}` : ''}`
+                : `${c.size}${c.required ? ' · required' : ' · optional'}`)
             }
           >
             {c.present && progress?.stage !== 'failed' && (!c.latest || c.latest === c.version) ? (

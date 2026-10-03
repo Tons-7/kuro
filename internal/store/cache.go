@@ -10,7 +10,7 @@ import (
 )
 
 // Brings a download the engine holds under the cache budget.
-func (s *Store) TrackTorrent(ctx context.Context, infoHash string, rqbitID int, name string) error {
+func (s *Store) TrackTorrent(ctx context.Context, infoHash string, engineID int, name string) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -19,10 +19,10 @@ func (s *Store) TrackTorrent(ctx context.Context, infoHash string, rqbitID int, 
 
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO torrent (info_hash, rqbit_id, name, total_bytes, state, added_at)
+		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at)
 		VALUES (?,?,?,0,'live',?)
-		ON CONFLICT(info_hash) DO UPDATE SET rqbit_id = excluded.rqbit_id`,
-		infoHash, rqbitID, name, now); err != nil {
+		ON CONFLICT(info_hash) DO UPDATE SET engine_id = excluded.engine_id`,
+		infoHash, engineID, name, now); err != nil {
 		return err
 	}
 
@@ -99,7 +99,7 @@ func (s *Store) DropTorrentCache(ctx context.Context, infoHash string) error {
 type CacheEntry struct {
 	InfoHash  string `json:"infoHash"`
 	FileIndex int    `json:"fileIndex"`
-	RqbitID   *int   `json:"rqbitId,omitempty"`
+	EngineID  *int   `json:"engineId,omitempty"`
 	Bytes     int64  `json:"bytes"`
 	Complete  bool   `json:"complete"`
 	Pinned    bool   `json:"pinned"`
@@ -128,7 +128,7 @@ type CacheUsage struct {
 // torrent_file is joined loosely: only downloads that went through playback
 // have one, and requiring it hid the rest from the budget.
 const cacheListQuery = `
-SELECT c.info_hash, c.file_index, t.rqbit_id, c.bytes_on_disk, c.complete, c.pinned, c.kept,
+SELECT c.info_hash, c.file_index, t.engine_id, c.bytes_on_disk, c.complete, c.pinned, c.kept,
        CASE WHEN e.status IN ('CURRENT','REPEATING') THEN 1 ELSE 0 END,
        f.anime_id, coalesce(f.ep_key, ''), coalesce(a.title_romaji, t.name),
        c.last_played_at, t.name
@@ -152,7 +152,7 @@ func (s *Store) CacheEntries(ctx context.Context) ([]CacheEntry, error) {
 			e                                 CacheEntry
 			complete, pinned, kept, protected int
 		)
-		if err := rows.Scan(&e.InfoHash, &e.FileIndex, &e.RqbitID, &e.Bytes,
+		if err := rows.Scan(&e.InfoHash, &e.FileIndex, &e.EngineID, &e.Bytes,
 			&complete, &pinned, &kept, &protected, &e.AnimeID, &e.EpKey, &e.Title,
 			&e.LastPlayed, &e.Name); err != nil {
 			return nil, err
@@ -190,10 +190,7 @@ func (s *Store) CacheUsage(ctx context.Context) (CacheUsage, error) {
 	return usage, nil
 }
 
-// KeepDownload moves a whole torrent between the cache tier and the kept tier.
-// Whole because eviction deletes whole torrents.
-// KeepFile moves one file of a pack between the tiers; the pack row keeps
-// whatever any of its files is.
+// KeepFile moves one file of a pack between the tiers; the pack row keeps whatever any of its files is.
 func (s *Store) KeepFile(ctx context.Context, infoHash string, fileIndex int, kept bool) (bool, error) {
 	res, err := s.w.ExecContext(ctx,
 		`UPDATE cache_entry SET kept = ? WHERE info_hash = ? AND file_index = ?`,
@@ -238,6 +235,8 @@ func (s *Store) DownloadFiles(ctx context.Context, infoHash string) ([]DownloadF
 	return out, rows.Err()
 }
 
+// KeepDownload moves a whole torrent between the cache tier and the kept tier,
+// whole because eviction deletes whole torrents.
 func (s *Store) KeepDownload(ctx context.Context, infoHash string, kept bool) (bool, error) {
 	res, err := s.w.ExecContext(ctx,
 		`UPDATE cache_entry SET kept = ? WHERE info_hash = ?`, boolInt(kept), infoHash)

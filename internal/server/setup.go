@@ -14,6 +14,8 @@ import (
 	"kuro/internal/deps"
 	"kuro/internal/indexer"
 	"kuro/internal/player"
+	"kuro/internal/torrent"
+	"kuro/internal/transcode"
 )
 
 // Component is one external program kuro shells out to. None are bundled:
@@ -26,14 +28,17 @@ type Component struct {
 	Required bool   `json:"required"`
 	Present  bool   `json:"present"`
 	Version  string `json:"version,omitempty"`
-	// Latest is what is published, when known; newer than Version means an
-	// update is on offer.
+	// Latest is what is published, when known; newer than Version means an update is on offer.
 	Latest string `json:"latest,omitempty"`
 	Needs  string `json:"needs,omitempty"`
 	// Manual holds a package-manager command when kuro cannot fetch this
 	// component on this OS, so the page guides instead of offering a download
 	// that would fail.
 	Manual string `json:"manual,omitempty"`
+	// System: found on PATH rather than downloaded into bin/.
+	System bool `json:"system,omitempty"`
+	// Problem says why one that is there cannot be used.
+	Problem string `json:"problem,omitempty"`
 }
 
 // setup reports what is installed so the first-run screen can say exactly what
@@ -43,12 +48,11 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 
 	components := []Component{
 		{
-			Name: "rqbit", Label: "Torrent engine",
-			Purpose:  "Streams episodes. Nothing plays from a torrent without it.",
-			Size:     "10 MB",
+			Name: "engine", Label: "Torrent engine",
+			Purpose:  "Built into kuro: streams and downloads episodes. Nothing to install.",
 			Required: true,
-			Present:  s.hasBinary("rqbit"),
-			Version:  versions["rqbit"],
+			Present:  true,
+			Version:  "built in",
 		},
 		{
 			Name: "ffmpeg", Label: "Transcoder",
@@ -78,15 +82,21 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i := range components {
+		if components[i].Name == "ffmpeg" && components[i].Present {
+			s.describeSystemFFmpeg(r.Context(), &components[i])
+		}
+	}
+	for i := range components {
 		if !components[i].Present {
 			components[i].Manual = deps.ManualCommand(components[i].Name)
 		}
 	}
-	// Versions come from the network; the page gets what was last resolved
-	// and a refresh runs behind it.
+	// Versions come from the network; the page gets what was last resolved and a refresh runs behind it.
 	if s.deps != nil {
 		for i := range components {
-			if !components[i].Present {
+			// The built-in engine updates with kuro itself.
+			// A system install is its package manager's to update.
+			if !components[i].Present || components[i].System || !deps.Known(components[i].Name) {
 				continue
 			}
 			components[i].Latest = s.deps.LatestKnown(components[i].Name)
@@ -210,10 +220,9 @@ func fileExists(path string) bool {
 // Long enough that a failing lookup cannot be retried on every poll.
 const latestRetry = 10 * time.Minute
 
-// refreshLatest resolves a component's newest version in the background. One
-// at a time per component: the page polls every second, nothing is cached when
-// the lookup fails, and the retries would otherwise pile up against the very
-// rate limit that caused the failure.
+// refreshLatest resolves a component's newest version in the background, one
+// lookup at a time per component so failed ones don't pile up against the
+// rate limit as the page polls.
 func (s *Server) refreshLatest(name string) {
 	s.latestMu.Lock()
 	if s.latestJobs == nil {
@@ -253,6 +262,50 @@ func (s *Server) installComponent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, http.StatusAccepted, map[string]any{"installing": name})
+}
+
+type systemTool struct {
+	modTime   time.Time
+	version   string
+	canEncode bool
+}
+
+// describeSystemFFmpeg fills in an ffmpeg found on PATH: its version, and
+// whether it can encode at all. One that cannot counts as missing, so Setup
+// offers kuro's own, which then takes precedence from bin/.
+func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
+	path := s.cfg.Tool("ffmpeg")
+	if torrent.Within(s.cfg.BinDir, path) {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	s.systemMu.Lock()
+	t, ok := s.systemFF[path]
+	s.systemMu.Unlock()
+	if !ok || !t.modTime.Equal(info.ModTime()) {
+		probe, cancel := context.WithTimeout(ctx, time.Minute)
+		t = systemTool{
+			modTime:   info.ModTime(),
+			version:   transcode.Version(probe, path),
+			canEncode: transcode.CanEncode(probe, path),
+		}
+		cancel()
+		s.systemMu.Lock()
+		if s.systemFF == nil {
+			s.systemFF = map[string]systemTool{}
+		}
+		s.systemFF[path] = t
+		s.systemMu.Unlock()
+	}
+	c.System = true
+	c.Version = t.version
+	if !t.canEncode {
+		c.Present = false
+		c.Problem = "The ffmpeg on this system cannot encode H.264 (no libx264, no working hardware encoder)."
+	}
 }
 
 // hasBinary is true when kuro downloaded the tool into bin/ or the OS provides

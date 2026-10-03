@@ -36,8 +36,7 @@ var subtitleMarkers = []struct {
 	{"it", regexp.MustCompile(`(?i)\bita(?:lian)?[\s._-]*sub\b`)},
 }
 
-// 内嵌 and 硬字幕 mean burnt into the picture; "hardsub" is the western spelling
-// of the same thing.
+// 内嵌 and 硬字幕 mean burnt into the picture; "hardsub" is the western spelling of the same thing.
 var hardSubbed = regexp.MustCompile(`内嵌|硬字幕|(?i)\bhard[\s._-]?sub(?:bed|s)?\b`)
 
 // detectSubtitles returns the languages a release name claims to carry, in the

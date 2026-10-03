@@ -41,11 +41,19 @@ $port = @(Get-NetFirewallRule -DisplayName %s | ForEach-Object { Shape $_ })
 $prog = @(Get-NetFirewallApplicationFilter -Program %s | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' } | ForEach-Object { Shape $_ })
 [pscustomobject]@{ networks = $nets; port = $port; program = $prog } | ConvertTo-Json -Depth 4 -Compress`
 
-// Check reads the network categories and every rule that decides whether a
-// device on them reaches the port.
+// Check reads the network categories and every rule that decides whether a device on them reaches the port.
 func Check(ctx context.Context, port int, exe string) (Status, error) {
+	return check(ctx, RuleName(port), exe)
+}
+
+// CheckPeers is Check for the torrent peer port; PortRule is kuro's peer rule.
+func CheckPeers(ctx context.Context, port int, exe string) (Status, error) {
+	return check(ctx, PeerRuleName(port), exe)
+}
+
+func check(ctx context.Context, rule, exe string) (Status, error) {
 	out, err := powershell(ctx, "-EncodedCommand",
-		encoded(fmt.Sprintf(statusScript, quote(RuleName(port)), quote(exe)))).Output()
+		encoded(fmt.Sprintf(statusScript, quote(rule), quote(exe)))).Output()
 	if err != nil {
 		return Status{Supported: true}, fmt.Errorf("read firewall: %w", err)
 	}
@@ -77,7 +85,24 @@ func Allow(ctx context.Context, port int, exe string, public bool) error {
 	if public {
 		profiles = "Private,Domain,Public"
 	}
-	script := fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe))
+	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe)))
+}
+
+const allowPeersScript = `$ErrorActionPreference = 'Stop'
+Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
+foreach ($proto in 'TCP', 'UDP') {
+  New-NetFirewallRule -DisplayName %[1]s -Description 'Lets torrent peers connect to kuro.' -Direction Inbound -Action Allow -Protocol $proto -LocalPort %[2]d -Program %[3]s -Profile Any | Out-Null
+}
+Get-NetFirewallApplicationFilter -Program %[3]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
+
+// AllowPeers lets torrent peers reach kuro.exe on the peer port from anywhere,
+// TCP and UDP, removing block rules a declined prompt left on kuro.exe.
+func AllowPeers(ctx context.Context, port int, exe string) error {
+	return elevated(ctx, fmt.Sprintf(allowPeersScript, quote(PeerRuleName(port)), port, quote(exe)))
+}
+
+// elevated runs script through Windows' administrator prompt.
+func elevated(ctx context.Context, script string) error {
 	// The elevated child cannot report back directly; its exit code can.
 	launcher := fmt.Sprintf(`try { $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','%s'; exit $p.ExitCode } catch { exit 1223 }`,
 		encoded(script))

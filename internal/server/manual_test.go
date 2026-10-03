@@ -104,8 +104,7 @@ func TestBookmarkEndpoints(t *testing.T) {
 	}
 }
 
-// Genres are AniList's, so a filtered draw is answered from there; a plain one
-// stays local to the corpus.
+// Genres are AniList's, so a filtered draw is answered from there; a plain one stays local to the corpus.
 func TestRandomWithGenresAsksAniList(t *testing.T) {
 	var queries []string
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {

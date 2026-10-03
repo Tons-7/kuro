@@ -131,8 +131,7 @@ export function EpisodeList({
     )
   }, [aired, term, show])
 
-  // Ticking N marks everything before it too; the first unwatched one says
-  // how far back that reaches.
+  // Ticking N marks everything before it too; the first unwatched one says how far back that reaches.
   const firstUnwatched = useMemo(() => aired.find((e) => !e.watched && !isUnaired(e)), [aired])
 
   const pages = Math.ceil(filtered.length / PAGE_SIZE)

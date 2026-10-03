@@ -23,8 +23,6 @@ func componentFiles(name string) []string { return componentFilesFor(name, runti
 func componentFilesFor(name, goos string) []string {
 	ext := exeExtFor(goos)
 	switch name {
-	case "rqbit":
-		return []string{"rqbit" + ext}
 	case "ffmpeg":
 		return []string{"ffmpeg" + ext, "ffprobe" + ext}
 	case "mpv":
@@ -34,29 +32,6 @@ func componentFilesFor(name, goos string) []string {
 		return []string{"mpv"}
 	}
 	return nil
-}
-
-// rqbitAsset is the release asset for this OS/arch. rqbit publishes a plain
-// binary per platform, so there is no archive to unpack.
-func rqbitAsset() (string, error) { return rqbitAssetFor(runtime.GOOS, runtime.GOARCH) }
-
-func rqbitAssetFor(goos, goarch string) (string, error) {
-	switch goos {
-	case "windows":
-		return "rqbit.exe", nil
-	case "darwin":
-		return "rqbit-osx-universal", nil
-	case "linux":
-		switch goarch {
-		case "amd64":
-			return "rqbit-linux-amd64", nil
-		case "arm64":
-			return "rqbit-linux-arm64", nil
-		case "arm":
-			return "rqbit-linux-arm-v7", nil
-		}
-	}
-	return "", fmt.Errorf("no rqbit build for %s/%s", goos, goarch)
 }
 
 // ffmpegLinuxURL is John Van Sickle's static build, which bundles ffmpeg and
@@ -77,7 +52,7 @@ func ffmpegLinuxURLFor(goarch string) (string, error) {
 // fetch on this OS, or "" when it can. Anime4K and, on Windows, everything is
 // auto-fetched; ffmpeg on macOS and mpv on every non-Windows OS are not.
 func ManualCommand(name string) string {
-	if runtime.GOOS == "windows" || name == "anime4k" || name == "rqbit" {
+	if runtime.GOOS == "windows" || name == "anime4k" {
 		return ""
 	}
 	if name == "ffmpeg" && runtime.GOOS == "linux" {

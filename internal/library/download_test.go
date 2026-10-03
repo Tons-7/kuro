@@ -14,10 +14,9 @@ import (
 	"kuro/internal/torrent"
 )
 
-// Downloading an episode already held promotes that copy to kept instead of
-// fetching a second one.
+// Downloading an episode already held promotes that copy to kept instead of fetching a second one.
 func TestDownloadPromotesTheCachedCopy(t *testing.T) {
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -54,10 +53,9 @@ func TestDownloadPromotesTheCachedCopy(t *testing.T) {
 	}
 }
 
-// An asked-for download is outside the cache budget, so a full cache refuses a
-// prefetch but not a download.
+// An asked-for download is outside the cache budget, so a full cache refuses a prefetch but not a download.
 func TestDownloadIgnoresTheCacheBudget(t *testing.T) {
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -98,7 +96,7 @@ func TestDownloadIgnoresTheCacheBudget(t *testing.T) {
 // A held release that no longer delivers is replaced on play; the replacement
 // inherits its keep and the dead one leaves the engine instead of lingering.
 func TestStartReplacesADeadHeldRelease(t *testing.T) {
-	engine := newFakeRqbit(deadHash)
+	engine := newFakeEngine(deadHash)
 	p := newPlayback(t, engine, []indexer.Torrent{
 		release(goodHash, "[Best] Sousou no Frieren - 01 [1080p].mkv", 900),
 	})
@@ -108,7 +106,7 @@ func TestStartReplacesADeadHeldRelease(t *testing.T) {
 	engine.ids[9] = deadHash
 	engine.mu.Unlock()
 	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash: deadHash, RqbitID: 9, Name: "dead", AnimeID: 1, EpKey: "1",
+		InfoHash: deadHash, EngineID: 9, Name: "dead", AnimeID: 1, EpKey: "1",
 		FilePath: "dead.mkv", TotalSize: 100,
 	}); err != nil {
 		t.Fatal(err)

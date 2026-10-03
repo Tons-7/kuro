@@ -120,7 +120,7 @@ func cacheState(t *testing.T, s *store.Store, hash string, index int, bytes int6
 
 	ctx := context.Background()
 	if err := s.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash: hash, RqbitID: index, Name: hash,
+		InfoHash: hash, EngineID: index, Name: hash,
 		FileIndex: index, FilePath: hash, TotalSize: bytes,
 	}); err != nil {
 		t.Fatal(err)
@@ -128,8 +128,7 @@ func cacheState(t *testing.T, s *store.Store, hash string, index int, bytes int6
 	if err := s.SetCacheBytes(ctx, hash, index, bytes, complete); err != nil {
 		t.Fatal(err)
 	}
-	// Recording pins unconditionally, so unpinning is what makes an entry a
-	// candidate at all.
+	// Recording pins unconditionally, so unpinning is what makes an entry a candidate at all.
 	if err := s.PinCache(ctx, hash, index, pinned); err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +295,7 @@ func episode(t *testing.T, s *store.Store, hash string, index, animeID, ep int) 
 	t.Helper()
 	ctx := context.Background()
 	if err := s.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash: hash, RqbitID: index, Name: hash, AnimeID: animeID, EpKey: fmt.Sprint(ep),
+		InfoHash: hash, EngineID: index, Name: hash, AnimeID: animeID, EpKey: fmt.Sprint(ep),
 		FileIndex: index, FilePath: hash, TotalSize: 1 << 30,
 	}); err != nil {
 		t.Fatal(err)
@@ -332,8 +331,7 @@ func TestAutoDeleteIsOffByDefault(t *testing.T) {
 	}
 }
 
-// "now": a watched episode goes once nothing plays it; unwatched, pinned and
-// kept ones stay.
+// "now": a watched episode goes once nothing plays it; unwatched, pinned and kept ones stay.
 func TestAutoDeleteNowTakesOnlyWatchedCachedEpisodes(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -428,8 +426,7 @@ func TestAutoDeleteSparesAnEpisodeGoneBackTo(t *testing.T) {
 	}
 }
 
-// Deleting a torrent takes every file in it, so a batch stays while any
-// episode of it is still wanted.
+// Deleting a torrent takes every file in it, so a batch stays while any episode of it is still wanted.
 func TestAutoDeleteSparesABatchWithAnUnwatchedEpisode(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()

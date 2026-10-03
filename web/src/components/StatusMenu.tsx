@@ -5,11 +5,7 @@ import { useSetStatus } from '../lib/queries'
 import { cx } from '../lib/format'
 import { useDismiss, useModalFocus } from './ui'
 
-/**
- * The bookmark control. On the sites this is modelled on the bookmark button
- * is the list tag: pressing it offers watching, completed, on hold and the
- * rest, rather than being a separate flag that syncs nowhere.
- */
+/** The bookmark control is the list status (watching, completed, …), not a separate flag. */
 export function StatusMenu({
   animeId,
   current,

@@ -65,8 +65,7 @@ var (
 	bitDepthRe = regexp.MustCompile(`(?i)\b(8|10)\s*-?\s*bits?\b|\bhi(10)p\b`)
 	extRe      = regexp.MustCompile(`(?i)\.(mkv|mp4|avi|ts|m2ts|webm)$`)
 
-	// Where the title stops and quality metadata begins, for scene-style names
-	// with no brackets to strip.
+	// Where the title stops and quality metadata begins, for scene-style names with no brackets to strip.
 	metaTokens = `\d{3,4}[pi]|BD|BDRip|BDMV|Blu-?ray|Remux|WEB-?DL|WEB-?Rip|WEB|HDTV|TVRip|DVD|DVDRip|CR|HIDIVE|AMZN|NF|Baha|Funi|x26[45]|H\.?26[45]|HEVC|AVC|AV1|VP9|MPEG-?2|AAC|FLAC|Opus|E?-?AC-?3|DDP?|DTS|TrueHD|Dual|Multi|10-?bits?|8-?bits?|Hi10P|Complete|Batch`
 	metaStart  = regexp.MustCompile(`(?i)[\s._]+\b(` + metaTokens + `)\b`)
 
@@ -132,6 +131,10 @@ func Parse(name string) Release {
 		r.Extension = strings.ToLower(m[1])
 		work = extRe.ReplaceAllString(work, "")
 	}
+	// "[CBM]_Monster_-_02_-_Downfall": underscores as spaces.
+	if !strings.Contains(work, " ") && strings.Count(work, "_") >= 2 {
+		work = strings.ReplaceAll(work, "_", " ")
+	}
 
 	r.Group = detectGroup(work)
 
@@ -178,8 +181,7 @@ func Parse(name string) Release {
 		}
 	}
 
-	// The part is removed before numbering: "Part 2 - 17" otherwise reads as
-	// an episode range of 2 to 17.
+	// The part is removed before numbering: "Part 2 - 17" otherwise reads as an episode range of 2 to 17.
 	r.Part = partNumber(work)
 	numbered := work
 	if r.Part > 0 {

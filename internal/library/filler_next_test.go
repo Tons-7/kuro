@@ -54,10 +54,10 @@ func (c *countingIndexer) count() int {
 // With the filler rule on, "prepare the next episode" resolves the next one
 // worth watching, not simply episode+1.
 func TestPrepareFollowsTheFillerRule(t *testing.T) {
-	rqbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"torrents":[]}`)
 	}))
-	t.Cleanup(rqbit.Close)
+	t.Cleanup(eng.Close)
 	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestPrepareFollowsTheFillerRule(t *testing.T) {
 
 	idx := &countingIndexer{}
 	finder := NewFinder(st, idx, discard())
-	p := NewPrefetcher(st, finder, torrent.NewClient(rqbit.URL), discard())
+	p := NewPrefetcher(st, finder, torrent.NewClient(eng.URL), discard())
 
 	p.Prepare(1, 1, 0, score.DefaultPreferences())
 	// The resolve runs in the background; wait for it to finish.

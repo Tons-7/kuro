@@ -40,8 +40,7 @@ func OpenApp(ctx context.Context, url string) { (&Window{}).Open(ctx, url) }
 // that passes for native with no cgo or bundled runtime. Failing to show
 // anything is not acceptable, so every step is best-effort.
 func (w *Window) Open(ctx context.Context, url string) {
-	// The server has only just bound its port; a window that opens first shows
-	// a connection error.
+	// The server has only just bound its port; a window that opens first shows a connection error.
 	select {
 	case <-ctx.Done():
 		return
@@ -69,8 +68,7 @@ func (w *Window) Open(ctx context.Context, url string) {
 	showTab(url)
 }
 
-// Close ends the window. Bounded: shutdown must not hang on a browser that
-// ignores the kill.
+// Close ends the window. Bounded: shutdown must not hang on a browser that ignores the kill.
 func (w *Window) Close() {
 	w.mu.Lock()
 	l := w.run
@@ -138,8 +136,7 @@ func windowArgs(url, profile string, maximized bool) []string {
 	}
 	return []string{
 		"--app=" + url,
-		// Without a profile of its own the window joins an existing
-		// browser session and app mode is ignored.
+		// Without a profile of its own the window joins an existing browser session and app mode is ignored.
 		"--user-data-dir=" + profile,
 		start,
 		"--window-size=1440,900",

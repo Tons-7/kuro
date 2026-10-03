@@ -161,8 +161,7 @@ func (ix *Index) Add(m Media) {
 	for tok := range entry.tokens {
 		ix.byToken[tok] = append(ix.byToken[tok], pos)
 	}
-	// Compounds let "rezero" reach "re zero kara hajimeru", which release
-	// groups write both ways.
+	// Compounds let "rezero" reach "re zero kara hajimeru", which release groups write both ways.
 	for _, k := range entry.keys {
 		for i := 0; i+1 < len(k.tokens); i++ {
 			if len(k.tokens[i]) <= 5 && len(k.tokens[i+1]) <= 5 {

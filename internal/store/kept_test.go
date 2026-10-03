@@ -13,7 +13,7 @@ func TestCacheUsageLeavesKeptDownloadsOutOfTheBudget(t *testing.T) {
 
 	for _, hash := range []string{"cached", "kept"} {
 		if err := s.RecordTorrent(ctx, TorrentRecord{
-			InfoHash: hash, RqbitID: 1, Name: hash, FilePath: hash + ".mkv", TotalSize: 100,
+			InfoHash: hash, EngineID: 1, Name: hash, FilePath: hash + ".mkv", TotalSize: 100,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func TestRecordTorrentCarriesKeepToTheReplacement(t *testing.T) {
 	record := func(hash string, index int, ep string) {
 		t.Helper()
 		if err := s.RecordTorrent(ctx, TorrentRecord{
-			InfoHash: hash, RqbitID: 1, Name: hash, AnimeID: 7, EpKey: ep,
+			InfoHash: hash, EngineID: 1, Name: hash, AnimeID: 7, EpKey: ep,
 			FileIndex: index, FilePath: hash + ".mkv", TotalSize: 100,
 		}); err != nil {
 			t.Fatal(err)

@@ -26,8 +26,7 @@ func TestUnwatchRewindsProgressAndClearsLaterTicks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 1; n <= 5; n++ {
-		// One report may claim at most two minutes played; the flag needs half
-		// the episode.
+		// One report may claim at most two minutes played; the flag needs half the episode.
 		for i := 0; i < 8; i++ {
 			if _, err := s.SavePlayback(ctx, PlaybackState{AnimeID: 1, EpKey: epKey(n), Position: 1400, Duration: 1440, Played: 120}); err != nil {
 				t.Fatal(err)

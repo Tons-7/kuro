@@ -14,12 +14,13 @@ import (
 	qrcode "github.com/yeqown/go-qrcode/v2"
 
 	"kuro/internal/config"
+	"kuro/internal/library"
 	"kuro/internal/store"
+	"kuro/internal/torrent"
 	"kuro/internal/transcode"
 )
 
-// from sets the client address, which is what decides whether the token is
-// demanded at all.
+// from sets the client address, which is what decides whether the token is demanded at all.
 func (h *harness) from(t *testing.T, addr, target string, header http.Header) *http.Response {
 	t.Helper()
 	req := httptest.NewRequest("GET", target, nil)
@@ -170,10 +171,10 @@ func TestForeignHostOnLoopbackStillNeedsTheToken(t *testing.T) {
 // The source reaches ffmpeg as -i, so only the two shapes /api/play hands out
 // may be accepted; anything else is a fetch or a file read of the caller's choosing.
 func TestStreamOpenRejectsForeignSources(t *testing.T) {
-	// The address a stock install resolves to, not one written by hand: the
-	// engine's own default lives on its copy, so a config that never set it
-	// would reject every torrent stream.
-	h := newHarness(t, config.Config{Torrent: config.Torrent{APIAddr: config.DefaultTorrentAPIAddr}}, nil)
+	const engineAddr = "127.0.0.1:3030"
+	h := newHarness(t, config.Config{}, nil)
+	h.server.playback = library.NewPlayback(h.store, nil, torrent.NewClient("http://"+engineAddr), nil, t.TempDir(),
+		slog.New(slog.DiscardHandler))
 	// Present so the handler reaches the source check rather than reporting no
 	// transcoder; nothing here ever runs ffmpeg.
 	h.server.streams = transcode.NewManager("ffmpeg", "ffprobe", t.TempDir(), "libx264", slog.New(slog.DiscardHandler))
@@ -197,7 +198,7 @@ func TestStreamOpenRejectsForeignSources(t *testing.T) {
 	}
 
 	// And the engine's own stream URL is still accepted, or nothing plays.
-	engine := "http://" + config.DefaultTorrentAPIAddr + "/torrents/4/stream/2"
+	engine := "http://" + engineAddr + "/torrents/4/stream/2"
 	req := httptest.NewRequest("POST", "/api/stream/open?id=1&episode=1&source="+url.QueryEscape(engine), nil)
 	req.RemoteAddr = "127.0.0.1:5555"
 	req.Host = "127.0.0.1:4321"
@@ -206,18 +207,6 @@ func TestStreamOpenRejectsForeignSources(t *testing.T) {
 	h.handler.ServeHTTP(rec, req)
 	if rec.Code == http.StatusBadRequest {
 		t.Errorf("the engine's own stream URL was rejected: %s", rec.Body.String())
-	}
-}
-
-// A stock config never writes the engine address, so anything comparing against
-// it must still resolve to where rqbit actually listens.
-func TestDefaultConfigCarriesTheEngineAddress(t *testing.T) {
-	if config.DefaultTorrentAPIAddr == "" {
-		t.Fatal("no default engine address")
-	}
-	var stock config.Config
-	if stock.Torrent.APIAddr != "" {
-		t.Fatal("the zero value should be empty; Load is what fills it")
 	}
 }
 
@@ -283,8 +272,7 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 	}
 }
 
-// Switching network access off must shut out a phone still on a kept-alive
-// connection, token or not.
+// Switching network access off must shut out a phone still on a kept-alive connection, token or not.
 func TestNetworkOffRefusesPairedDevices(t *testing.T) {
 	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil)
 	h.server.token = "s3cret"
@@ -550,8 +538,7 @@ func TestAccessNetworkSwitchMovesTheListener(t *testing.T) {
 		t.Fatalf("LANAddr = %q, want the same port on every interface", got)
 	}
 
-	// Only from the machine itself: a paired phone must not be able to open the
-	// port on the owner's behalf.
+	// Only from the machine itself: a paired phone must not be able to open the port on the owner's behalf.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/access/network", strings.NewReader(`{"lan":true}`))
 	r.RemoteAddr = "192.168.1.20:5555"

@@ -16,7 +16,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-func checkingRqbit(t *testing.T, polls *int, mu *sync.Mutex) *httptest.Server {
+func checkingEngine(t *testing.T, polls *int, mu *sync.Mutex) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -49,7 +49,7 @@ func quietDownloader(t *testing.T, url string) *Downloader {
 func TestQuietGivesUpAfterTheDeadline(t *testing.T) {
 	var mu sync.Mutex
 	polls := 0
-	srv := checkingRqbit(t, &polls, &mu)
+	srv := checkingEngine(t, &polls, &mu)
 
 	wasEvery, wasFor := quietRecheck, quietFor
 	quietRecheck, quietFor = 10*time.Millisecond, 60*time.Millisecond
@@ -74,7 +74,7 @@ func TestQuietGivesUpAfterTheDeadline(t *testing.T) {
 func TestQuietStopsWhenCancelled(t *testing.T) {
 	var mu sync.Mutex
 	polls := 0
-	srv := checkingRqbit(t, &polls, &mu)
+	srv := checkingEngine(t, &polls, &mu)
 	was := quietRecheck
 	quietRecheck = 10 * time.Millisecond
 	t.Cleanup(func() { quietRecheck = was })

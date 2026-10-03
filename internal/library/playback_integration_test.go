@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"kuro/internal/engine"
 	"kuro/internal/player"
 	"kuro/internal/torrent"
 )
@@ -46,30 +47,30 @@ func TestStreamIntoPlayer(t *testing.T) {
 	if os.PathSeparator == '\\' {
 		suffix = ".exe"
 	}
-	rqbitPath := filepath.Join(bin, "rqbit"+suffix)
 	mpvPath := filepath.Join(bin, "mpv"+suffix)
-
-	for _, p := range []string{rqbitPath, mpvPath} {
-		if _, err := os.Stat(p); err != nil {
-			t.Skipf("%s not present", p)
-		}
+	if _, err := os.Stat(mpvPath); err != nil {
+		t.Skipf("%s not present", mpvPath)
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	sup := torrent.NewSupervisor(torrent.Options{
-		Binary:   rqbitPath,
-		CacheDir: t.TempDir(),
-		APIAddr:  "127.0.0.1:3042",
+	dir := t.TempDir()
+	eng, err := engine.New(engine.Options{
+		CacheDir:    dir,
+		SessionDir:  filepath.Join(dir, EngineSessionDirName),
+		ListenPort:  4347,
+		DisableUPnP: true,
 	}, log)
-	defer sup.Stop()
-
-	client, err := sup.Start(ctx)
 	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Stop()
+	if err := eng.Ensure(ctx); err != nil {
 		t.Fatalf("start torrent engine: %v", err)
 	}
+	client := eng.Client()
 
 	magnet := magnetWithTrackers()
 	inspected, err := client.Inspect(ctx, magnet)
@@ -137,8 +138,8 @@ func TestStreamIntoPlayer(t *testing.T) {
 		t.Errorf("duration = %.0f, expected the full clip length", duration)
 	}
 
-	// Seeking well beyond the downloaded region is the real test: rqbit has to
-	// repoint its priority window and block until those pieces arrive.
+	// Seeking well beyond the downloaded region is the real test: the engine has
+	// to repoint its priority window and block until those pieces arrive.
 	if err := p.Seek(duration / 2); err != nil {
 		t.Fatalf("seek: %v", err)
 	}

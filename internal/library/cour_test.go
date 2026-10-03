@@ -244,8 +244,7 @@ var calamityReleases = []struct {
 	{"[Group] Bleach - 45 [1080p].mkv", false, false, nil},
 	// Absolute numbering is unique across the whole show.
 	{"[Group] Bleach - 411 [1080p].mkv", true, true, []int{45, 411}},
-	// An unnumbered pack is settled by its file list, by the numbers a bare
-	// pack can carry.
+	// An unnumbered pack is settled by its file list, by the numbers a bare pack can carry.
 	{"[Group] Bleach - Sennen Kessen-hen [1080p][BD]", true, false, []int{45, 411}},
 	// The original series' pack holds a file numbered 45: its own episode 45.
 	{"[Group] Bleach [1080p][BD]", false, false, nil},

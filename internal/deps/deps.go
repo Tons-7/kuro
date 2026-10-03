@@ -45,7 +45,6 @@ type component struct {
 // Files are per-OS: an executable is ffmpeg.exe on Windows and ffmpeg
 // elsewhere, and mpv ships an extra console shim only on Windows.
 var components = []component{
-	{name: "rqbit", files: componentFiles("rqbit"), resolve: resolveRqbit},
 	{name: "ffmpeg", files: componentFiles("ffmpeg"), resolve: resolveFfmpeg},
 	{name: "mpv", files: componentFiles("mpv"), resolve: resolveMpv},
 	{name: "anime4k", glob: "*.glsl", into: "shaders", resolve: resolveAnime4K},
@@ -76,11 +75,10 @@ type Manager struct {
 	http   *http.Client
 	log    *slog.Logger
 
-	mu         sync.Mutex
-	running    map[string]*Progress
-	installed  func(name string)
-	installing func(name string)
-	latest     map[string]latestVersion
+	mu        sync.Mutex
+	running   map[string]*Progress
+	installed func(name string)
+	latest    map[string]latestVersion
 }
 
 type latestVersion struct {
@@ -94,14 +92,6 @@ func (m *Manager) OnInstalled(hook func(name string)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.installed = hook
-}
-
-// OnInstalling is called once a new binary is in place, to stop the old one
-// still running so the next use starts the new.
-func (m *Manager) OnInstalling(hook func(name string)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.installing = hook
 }
 
 // Latest is the newest version published for a component, remembered for an
@@ -200,14 +190,9 @@ func (m *Manager) Install(name string) error {
 		m.set(name, func(p *Progress) { p.Stage = StageDone })
 		m.log.Info("dependency installed", "component", name)
 
-		// Only now: the old binary kept running through the download, and
-		// stopping it here makes the next use start the new one.
 		m.mu.Lock()
-		before, hook := m.installing, m.installed
+		hook := m.installed
 		m.mu.Unlock()
-		if before != nil {
-			before(name)
-		}
 		if hook != nil {
 			hook(name)
 		}
@@ -355,8 +340,7 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 	return nil
 }
 
-// Reports every few megabytes; per read would spend more time locking than
-// copying.
+// Reports every few megabytes; per read would spend more time locking than copying.
 type counter struct {
 	reader   io.Reader
 	report   func(int64)
@@ -406,8 +390,7 @@ func extract(ctx context.Context, archive, dest string) error {
 	return nil
 }
 
-// systemTar names Windows' own bsdtar rather than trusting PATH, where Git/MSYS
-// put GNU tar first.
+// systemTar names Windows' own bsdtar rather than trusting PATH, where Git/MSYS put GNU tar first.
 func systemTar() string {
 	if runtime.GOOS != "windows" {
 		return "tar"
@@ -503,11 +486,8 @@ func writeEntry(f entry, target string) error {
 	return err
 }
 
-// install replaces the target, which fails while the program is running — kuro
-// holds ffmpeg open for as long as something is playing.
 // install writes dest whole or not at all: copied beside it, then renamed in.
-// A running binary can be renamed on Windows, so it is moved aside, not
-// overwritten; a half-written copy never takes its place.
+// A running binary (ffmpeg mid-play) can be renamed on Windows, not overwritten.
 func install(src, dest string) error {
 	fresh := dest + ".new"
 	if err := copyTo(src, fresh); err != nil {
@@ -575,6 +555,39 @@ func findAll(root, pattern string) ([]string, error) {
 		return nil
 	})
 	return out, err
+}
+
+// obsolete are components kuro no longer uses: rqbit, replaced by the built-in engine.
+var obsolete = []string{"rqbit"}
+
+// RemoveObsolete deletes binaries of components kuro dropped and their
+// versions.json entries, returning what it removed.
+func (m *Manager) RemoveObsolete() []string {
+	path := filepath.Join(m.binDir, "versions.json")
+	versions := map[string]string{}
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		_ = json.Unmarshal(raw, &versions)
+	}
+	var removed []string
+	listed := false
+	for _, name := range obsolete {
+		for _, file := range []string{name, name + ".exe"} {
+			if err := os.Remove(filepath.Join(m.binDir, file)); err == nil {
+				removed = append(removed, file)
+			}
+		}
+		if _, ok := versions[name]; ok {
+			delete(versions, name)
+			listed = true
+		}
+	}
+	if listed {
+		if raw, err := json.MarshalIndent(versions, "", "    "); err == nil {
+			os.WriteFile(path, raw, 0o644)
+		}
+	}
+	return removed
 }
 
 // record mirrors what fetch-deps.ps1 writes, so the two are interchangeable.

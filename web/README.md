@@ -1,32 +1,21 @@
-# React + TypeScript + Vite
+# kuro web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The single-page app kuro serves. React 19, TanStack Query, Tailwind v4, built
+with Vite. `npm run build` writes `dist/`, which `embed.go` bakes into the Go
+binary, so a frontend change needs a fresh `go build` too.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm run dev                 # Vite on its own port, proxying /api to a running kuro
+npx tsgo -b --force         # the real typecheck (`npm run typecheck` checks nothing)
+npm run lint                # oxlint
+npm test                    # browser checks against an isolated scratch kuro
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`src/pages` are the routes, `src/components` shared UI, `src/player` the
+browser player (hls.js, subtitle renderer, Anime4K), `src/lib` the API client,
+queries and formatting.
+
+Browser checks live in `scripts/` and run through `scripts/run-player-check.mjs
+<check>`, which builds kuro and starts it in `%TEMP%\kuro-e2e` on port 4399 with
+its own data, cache and peer port. Never point a check at a running kuro: the
+older probe scripts that hardcode port 4321 talk to the real app.

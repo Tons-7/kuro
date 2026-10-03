@@ -12,8 +12,7 @@ import (
 // popularityFloor keeps the result to things worth watching.
 const popularityFloor = 5000
 
-// randomQuery asks for one anime at a random offset; pageInfo.total bounds the
-// next draw.
+// randomQuery asks for one anime at a random offset; pageInfo.total bounds the next draw.
 const randomQuery = `query Random($page: Int!, $format: MediaFormat, $genres: [String], $year: Int, $isAdult: Boolean, $floor: Int) {
   Page(page: $page, perPage: 1) {
     pageInfo { total }

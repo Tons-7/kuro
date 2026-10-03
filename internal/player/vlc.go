@@ -71,8 +71,7 @@ func insideInstall(dir string) string {
 	return filepath.Join(dir, name)
 }
 
-// FindVLC is where VLC is on this machine, or empty. PATH first, then the
-// places its installer uses.
+// FindVLC is where VLC is on this machine, or empty. PATH first, then the places its installer uses.
 func FindVLC() string {
 	if p, err := exec.LookPath("vlc"); err == nil {
 		return p
@@ -148,8 +147,7 @@ func (v *VLC) Play(_ context.Context, opts Options) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start VLC: %w", err)
 	}
-	// Own channel per instance: a tracker still draining the old one never
-	// sees the new episode's events.
+	// Own channel per instance: a tracker still draining the old one never sees the new episode's events.
 	events := make(chan Event, 8)
 	v.mu.Lock()
 	v.cmd, v.ctl, v.events = cmd, ctl, events

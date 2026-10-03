@@ -85,8 +85,7 @@ func first(rs []Result) Result {
 	return rs[0]
 }
 
-// Most English releases state no subtitle language, so stating one must not
-// buy a lower resolution.
+// Most English releases state no subtitle language, so stating one must not buy a lower resolution.
 func TestSubtitleLabelNeverBeatsResolution(t *testing.T) {
 	prefs := DefaultPreferences()
 	plain := seeded("[SubsPlease] Show - 05 (1080p) [ABCD1234].mkv", 1<<30, 50)
@@ -99,8 +98,7 @@ func TestSubtitleLabelNeverBeatsResolution(t *testing.T) {
 	}
 }
 
-// The pick used to depend on the order the indexer listed results in: A beat
-// B, B beat C, C beat A.
+// The pick used to depend on the order the indexer listed results in: A beat B, B beat C, C beat A.
 func TestPickDoesNotDependOnOrder(t *testing.T) {
 	prefs := DefaultPreferences()
 	a := seeded("[G1] Show - 05 [1080p WEB-DL AVC AAC].mkv", 1<<30, 20)

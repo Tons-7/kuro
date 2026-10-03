@@ -132,8 +132,7 @@ export function useAnime4K({
 
     return () => {
       cancelled = true
-      // Otherwise the frame loop and its device leak on every restart until the
-      // GPU gives up.
+      // Otherwise the frame loop and its device leak on every restart until the GPU gives up.
       device?.destroy()
       device = undefined
     }

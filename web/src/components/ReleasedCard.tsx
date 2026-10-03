@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import type { ScheduleItem } from '../lib/api'
 import { relativeTime } from '../lib/format'
 import { HoverInfo } from './HoverInfo'
-import { PlayIcon } from './PosterCard'
+import { PlayIcon, toCard } from './PosterCard'
 import { Badge } from './ui'
 
 /** A just-aired episode: the art plays it, the title opens the show. */
@@ -11,8 +11,12 @@ export function ReleasedCard({ item, tags }: { item: ScheduleItem; tags?: boolea
 
   return (
     <div className="group/released">
+      {/* The usual panel; play is this release's episode. */}
       <HoverInfo
         anime={{
+          ...(item.show ? toCard(item.show) : {}),
+          status: item.show?.status ?? null,
+          listStatus: item.show?.listStatus ?? null,
           id: item.animeId,
           title: item.title,
           romaji: item.romaji,

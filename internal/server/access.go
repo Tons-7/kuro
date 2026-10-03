@@ -382,6 +382,41 @@ func (s *Server) allowFirewall(w http.ResponseWriter, r *http.Request) {
 	s.accessFirewall(w, r)
 }
 
+// peersFirewall says whether torrent peers can connect in. Downloads work without it, from fewer peers.
+func (s *Server) peersFirewall(w http.ResponseWriter, r *http.Request) {
+	port := s.cfg.Torrent.PeerPort()
+	exe, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	st, err := firewall.CheckPeers(ctx, port, exe)
+	if err != nil {
+		s.fail(w, "firewall", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{
+		"status":  st,
+		"port":    port,
+		"allowed": st.Reachable(),
+		"blocked": st.Blocked(),
+	})
+}
+
+func (s *Server) allowPeersFirewall(w http.ResponseWriter, r *http.Request) {
+	port := s.cfg.Torrent.PeerPort()
+	exe, _ := os.Executable()
+	err := firewall.AllowPeers(r.Context(), port, exe)
+	if errors.Is(err, firewall.ErrCancelled) {
+		send(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		s.fail(w, "firewall", err)
+		return
+	}
+	s.log.Info("firewall rule added", "rule", firewall.PeerRuleName(port))
+	s.peersFirewall(w, r)
+}
+
 func (s *Server) openNetworkSettings(w http.ResponseWriter, r *http.Request) {
 	if err := firewall.OpenNetworkSettings(); err != nil {
 		s.fail(w, "open network settings", err)
@@ -453,8 +488,7 @@ func qrCells(content string) ([][]bool, error) {
 	return bm.cells, nil
 }
 
-// qrSVG keeps the output vector and free of image encoders: the browser scales
-// it to whatever the screen is.
+// qrSVG keeps the output vector and free of image encoders: the browser scales it to whatever the screen is.
 func qrSVG(content string) ([]byte, error) {
 	cells, err := qrCells(content)
 	if err != nil {

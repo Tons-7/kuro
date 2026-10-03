@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { catalogueSource } from '../lib/api'
 import { relativeTime } from '../lib/format'
 
-/** Shown while AniList can't be reached and pages come from what kuro saved. */
+/** Shown while pages come from kuro's saved copy. */
 export function SavedCopyNotice() {
   const savedAt = useSyncExternalStore(catalogueSource.subscribe, catalogueSource.savedAt)
   const qc = useQueryClient()

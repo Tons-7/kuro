@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type Hls from 'hls.js'
+import type JASSUB from 'jassub'
 // ?worker&url, not ?url: the plain form copies worker.js verbatim, leaving its
 // relative imports pointing at paths that do not exist in a flat bundle.
 import jassubWorkerUrl from 'jassub/dist/worker/worker.js?worker&url'
@@ -8,10 +9,9 @@ import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
 
 /**
- * Attaches an HLS stream. hls.js wins whenever it can run: recent Chrome also
- * answers canPlayType for HLS (its own built-in player), but that player hides
- * every error and ignores resume positions. The native path is only for
- * browsers without MSE (iOS Safari), which really cannot run hls.js.
+ * Attaches an HLS stream. hls.js wins whenever it can run: Chrome's built-in
+ * HLS hides errors and ignores resume positions. Native is only for browsers
+ * without MSE (iOS Safari).
  */
 export function useHlsSource(
   video: HTMLVideoElement | null,
@@ -21,8 +21,7 @@ export function useHlsSource(
 ) {
   const [error, setError] = useState<string | null>(null)
   const hls = useRef<Hls | null>(null)
-  // Read at attach time, not tracked: a resume update mid-episode must not tear
-  // the player down.
+  // Read at attach time, not tracked: a resume update mid-episode must not tear the player down.
   const startRef = useRef(startAt)
   startRef.current = startAt
   const goneRef = useRef(onGone)
@@ -81,8 +80,7 @@ export function useHlsSource(
         // transcode reads as a stall. Keep the lookahead modest.
         maxBufferLength: 20,
         maxMaxBufferLength: 60,
-        // No LL-HLS parts here; it only adds edge-seeking behaviour to a plain
-        // on-demand transcode.
+        // No LL-HLS parts here; it only adds edge-seeking behaviour to a plain on-demand transcode.
         lowLatencyMode: false,
         manifestLoadingMaxRetry: 8,
         manifestLoadingRetryDelay: 800,
@@ -216,11 +214,9 @@ export function useSeekRecovery(video: HTMLVideoElement | null, hls: RefObject<H
 const KEEPALIVE_EVERY = 45_000
 
 /**
- * A backgrounded tab stops requesting segments and the server reaps the
- * session after ten minutes; every request then 404s for ever. Ping the
- * playlist while playing to keep it alive; a 404 means it is gone and onLost
- * reopens it. No pings while paused, so an abandoned tab still frees its
- * encoder — the visibility/play pings recover on return.
+ * A backgrounded tab stops fetching and the server reaps the session after ten
+ * minutes. Ping the playlist while playing; a 404 means it's gone and onLost
+ * reopens it. No pings while paused, so an abandoned tab frees its encoder.
  */
 export function useKeepAlive(
   video: HTMLVideoElement | null,
@@ -263,10 +259,9 @@ export function useKeepAlive(
 }
 
 /**
- * A tab back from the background can return with the clock stopped despite
- * data buffered ahead, until the user pauses and unpauses by hand. Do that
- * poke for them: a tiny seek, then media-error recovery. A stopped clock with
- * nothing buffered is a slow encoder, not a wedge, and is left alone.
+ * A tab back from the background can have its clock stopped with data
+ * buffered ahead. Poke it: a tiny seek, then media-error recovery. Nothing
+ * buffered means a slow encoder, which is left alone.
  */
 export function useStallWatchdog(video: HTMLVideoElement | null, hls: RefObject<Hls | null>) {
   useEffect(() => {
@@ -305,6 +300,18 @@ export function useStallWatchdog(video: HTMLVideoElement | null, hls: RefObject<
   }, [video, hls])
 }
 
+export interface SubtitleLook {
+  /** Dialogue size as a multiple of the file's own. */
+  scale: number
+  /** Seconds the subtitles show late; negative shows them early. */
+  delay: number
+}
+
+type ASSStyle = Awaited<ReturnType<JASSUB['renderer']['getStyles']>>[number]
+
+// Signs and songs are typeset to the picture; only dialogue is resized.
+const TYPESET_STYLE = /sign|song|kara|title|logo|note|insert|\b(op|ed)\b/i
+
 /**
  * Renders ASS subtitles with JASSUB. Native tracks cannot express the styling
  * anime subtitles rely on, and the embedded fonts have to be handed over.
@@ -315,8 +322,14 @@ export function useSubtitles(
   trackIndex: number | null,
   fonts: string[] = [],
   rebuild?: unknown,
+  look: SubtitleLook = { scale: 1, delay: 0 },
 ) {
-  const instance = useRef<{ destroy: () => void | Promise<void> } | null>(null)
+  const instance = useRef<JASSUB | null>(null)
+  const lookRef = useRef(look)
+  lookRef.current = look
+  // Set per renderer: re-applies the size, and redraws the current cue.
+  const restyle = useRef<(() => Promise<void>) | null>(null)
+  const repaint = useRef<(() => void) | null>(null)
 
   // Identity, not contents, is what re-ran this effect.
   const fontKey = fonts.join('|')
@@ -353,8 +366,7 @@ export function useSubtitles(
     let detach: (() => void) | undefined
 
     void (async () => {
-      // Awaited: overlapping destroy with the next instance left a dead
-      // renderer on screen.
+      // Awaited: overlapping destroy with the next instance left a dead renderer on screen.
       await instance.current?.destroy()
       instance.current = null
       if (!track) return
@@ -363,10 +375,10 @@ export function useSubtitles(
       // run this again the moment they arrive.
       if (!video.videoWidth || !video.videoHeight) return
 
-      const { default: JASSUB } = await import('jassub')
+      const { default: Renderer } = await import('jassub')
       if (cancelled) return
 
-      const renderer = new JASSUB({
+      const renderer = new Renderer({
         video,
         subUrl: track.url,
         fonts,
@@ -378,6 +390,7 @@ export function useSubtitles(
         // Uncapped by default, and it repaints on every step of a resize —
         // dragging a window edge was enough to lock up the machine.
         maxRenderHeight: 1080,
+        timeOffset: -lookRef.current.delay,
       })
       instance.current = renderer
 
@@ -406,27 +419,69 @@ export function useSubtitles(
         )
       }
       document.addEventListener('visibilitychange', resync)
-      detach = () => document.removeEventListener('visibilitychange', resync)
+      // A paused seek may present no new frame, leaving the old cue up.
+      video.addEventListener('seeked', resync)
+      detach = () => {
+        document.removeEventListener('visibilitychange', resync)
+        video.removeEventListener('seeked', resync)
+      }
+      repaint.current = resync
 
-      void keepFilling(renderer, track.url, video, () => cancelled)
+      // Sizes are scaled from the file's own, read again after every track
+      // refresh (which resets them), so steps never compound.
+      let originals: ASSStyle[] | null = null
+      let applied = 1
+      restyle.current = async () => {
+        const scale = lookRef.current.scale
+        if (scale === applied || cancelled) return
+        const worker = renderer.renderer
+        originals ??= await worker.getStyles()
+        if (!originals.length) originals = null
+        await Promise.all(
+          (originals ?? []).map((s, i) =>
+            TYPESET_STYLE.test(s.Name) ? undefined : worker.setStyle({ ...s, FontSize: s.FontSize * scale }, i),
+          ),
+        )
+        applied = scale
+        resync()
+      }
+      resync()
+      void restyle.current()
+
+      void keepFilling(renderer, track.url, video, () => cancelled, () => {
+        originals = null
+        applied = 1
+        void restyle.current?.()
+      })
     })()
 
     return () => {
       cancelled = true
       detach?.()
+      restyle.current = null
+      repaint.current = null
       void instance.current?.destroy()
       instance.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video, stream, trackIndex, fontKey, rebuild, surface])
+
+  useEffect(() => {
+    if (!instance.current) return
+    instance.current.timeOffset = -look.delay
+    repaint.current?.()
+  }, [look.delay])
+
+  useEffect(() => {
+    void restyle.current?.()
+  }, [look.scale])
 }
 
 function cueCount(ass: string): number {
   return (ass.match(/^Dialogue:/gm) ?? []).length
 }
 
-// A gap larger than this is an unfilled hole in the download, not the silence
-// between two lines of dialogue.
+// A gap larger than this is an unfilled hole in the download, not the silence between two lines of dialogue.
 const CUE_GAP = 30
 
 /**
@@ -458,19 +513,19 @@ const FILL_QUIET = 45_000
 // How far past the playhead the track should reach before polling can relax.
 const FILL_AHEAD = 120
 
-/**
- * A track reads only as far as the download reached, so keep asking while the
- * source can still grow (the server says when it can't). Growth is counted in
- * cues, not reach, since head and tail load first and can leave a hole between.
- */
-// Polls touch the session, so one left running on a paused or hidden tab keeps
-// it from ever idling out and holds the download queue. They wait here.
+// Polls touch the session, so on a paused or hidden tab they would keep it
+// from idling out and hold the download queue. They wait here.
 async function untilWatching(video: HTMLVideoElement | null, cancelled: () => boolean) {
   while (!cancelled() && (document.visibilityState !== 'visible' || (video && video.paused))) {
     await new Promise((r) => setTimeout(r, 1000))
   }
 }
 
+/**
+ * A track reads only as far as the download reached, so keep asking while the
+ * source can grow. Growth is counted in cues, not reach: head and tail load
+ * first and can leave a hole between.
+ */
 async function keepFilling(
   // Lives behind a Comlink proxy; setTrack must be called as a method on it, or
   // Comlink tries to post the un-cloneable proxy itself.
@@ -478,6 +533,7 @@ async function keepFilling(
   url: string,
   video: HTMLVideoElement,
   cancelled: () => boolean,
+  onTrack: () => void,
 ) {
   const worker = renderer.renderer
   if (!worker?.setTrack) return
@@ -520,6 +576,7 @@ async function keepFilling(
         loaded = text
         quiet = 0
         await worker.setTrack(text)
+        onTrack()
       } else {
         quiet++
       }
@@ -531,11 +588,10 @@ async function keepFilling(
 }
 
 /**
- * Fonts are dumped after the stream opens; doing it first delayed the episode
- * by twenty seconds. Until they land the renderer substitutes.
+ * Fonts are dumped after the stream opens (first, they delayed the episode
+ * 20 s); the renderer substitutes until then. A new generation means the
+ * session was rebuilt and its fonts deleted, so they are asked for again.
  */
-// generation changes when the session is rebuilt under the same URL: the
-// reaper deleted its fonts, so they are asked for again.
 export function useEmbeddedFonts(fontsUrl?: string, generation = 0) {
   const [fonts, setFonts] = useState<string[]>([])
   const lastUrl = useRef(fontsUrl)
@@ -619,12 +675,10 @@ export function useAutoSkip(
 }
 
 /**
- * Moves the whole player into a floating window. Native video PiP carries only
- * the video frames, so it would drop the subtitle canvas.
+ * Moves the whole player into a floating window; native video PiP would drop
+ * the subtitle canvas. container must be a React portal host, or its event
+ * handlers die once moved out of the root.
  */
-// container must be a React portal host: React listens for events on portal
-// containers, so moving one into the floating window keeps its handlers,
-// where a plain subtree moved out of the root would go dead.
 export function useDocumentPiP(container: HTMLElement | null) {
   const [active, setActive] = useState(false)
   const [win, setWin] = useState<Window | null>(null)
@@ -708,8 +762,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
     })
   }
 
-  // Leaving the page takes the player with it, so the floating window would be
-  // left holding a dead one.
+  // Leaving the page takes the player with it, so the floating window would be left holding a dead one.
   useEffect(() => {
     return () => {
       const w = (window as unknown as { documentPictureInPicture?: { window: Window | null } })
@@ -753,9 +806,8 @@ export interface Sheet {
 }
 
 /**
- * Asks for the preview sheet, and keeps asking while it is being built. The
- * frames are sampled across the whole episode, so it cannot exist until the
- * file does — a few polls, then it either appears or it never will.
+ * Asks for the preview sheet, polling a few times while it is built; it needs
+ * the whole file.
  */
 export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null): Sheet | undefined {
   const [sheet, setSheet] = useState<Sheet | undefined>()

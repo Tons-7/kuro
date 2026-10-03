@@ -102,5 +102,8 @@ func (s Status) Reachable() bool {
 // RuleName carries the port, so a changed port gets a rule of its own.
 func RuleName(port int) string { return fmt.Sprintf("kuro (LAN, TCP %d)", port) }
 
+// PeerRuleName names the pair of rules (TCP, UDP) for the torrent peer port.
+func PeerRuleName(port int) string { return fmt.Sprintf("kuro (torrent peers, %d)", port) }
+
 // ErrCancelled: the administrator prompt was declined.
 var ErrCancelled = fmt.Errorf("the administrator prompt was declined")

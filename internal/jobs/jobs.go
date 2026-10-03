@@ -56,8 +56,7 @@ var ErrRunning = errors.New("already running")
 
 type Scheduler struct {
 	log *slog.Logger
-	// ctx lives as long as the scheduler, so a manual run is not tied to the
-	// request that asked for it.
+	// ctx lives as long as the scheduler, so a manual run is not tied to the request that asked for it.
 	ctx context.Context
 
 	mu      sync.Mutex
@@ -104,8 +103,7 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 		s.execute(ctx, e)
 	}
 
-	// Consecutive failures back off so a persistently broken job stops
-	// hammering whatever it depends on.
+	// Consecutive failures back off so a persistently broken job stops hammering whatever it depends on.
 	for {
 		e.mu.Lock()
 		wait := e.job.Every

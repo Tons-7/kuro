@@ -2,8 +2,7 @@ import { Component, type ReactNode } from 'react'
 import { cx } from '../lib/format'
 import { buttonClass } from './ui'
 
-// After a self-update the old page asks for chunks that no longer exist; any
-// render error used to blank the whole app with nothing to click.
+// After a self-update the old page asks for chunks that no longer exist.
 const STALE_CHUNK = /dynamically imported module|Importing a module script failed|error loading dynamically/i
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {

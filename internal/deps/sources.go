@@ -53,38 +53,6 @@ func (m *Manager) getJSON(ctx context.Context, url string, out any) error {
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-// rqbit tags its betas as full releases, so the prerelease flag cannot be
-// trusted; a plain semver tag is the only reliable marker of a stable build.
-// Each platform's build is a single binary, so there is no archive to unpack.
-func resolveRqbit(ctx context.Context, m *Manager) (Release, error) {
-	asset, err := rqbitAsset()
-	if err != nil {
-		return Release{}, err
-	}
-
-	var releases []ghRelease
-	if err := m.getJSON(ctx,
-		"https://api.github.com/repos/ikatson/rqbit/releases?per_page=40", &releases); err != nil {
-		return Release{}, err
-	}
-
-	for _, r := range releases {
-		if !semverTag.MatchString(r.Tag) {
-			continue
-		}
-		for _, a := range r.Assets {
-			if a.Name == asset {
-				return Release{
-					Version: strings.TrimPrefix(r.Tag, "v"),
-					URL:     a.URL,
-					Digest:  sha256Of(a.Digest),
-				}, nil
-			}
-		}
-	}
-	return Release{}, fmt.Errorf("no stable rqbit release carrying %s", asset)
-}
-
 // ffmpeg has no single cross-platform source: Windows from gyan.dev, Linux from
 // John Van Sickle's static builds, and macOS from a package manager (Homebrew's
 // ffmpeg is on PATH), which is how kuro finds it there.
@@ -105,8 +73,7 @@ func resolveFfmpeg(ctx context.Context, m *Manager) (Release, error) {
 	}
 }
 
-// gyan.dev publishes the current version as a bare string, so nothing has to be
-// scraped to find it.
+// gyan.dev publishes the current version as a bare string, so nothing has to be scraped to find it.
 func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://www.gyan.dev/ffmpeg/builds/release-version", nil)

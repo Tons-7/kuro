@@ -341,8 +341,7 @@ func (c *Client) FillerSiteEpisodes(ctx context.Context, slug string) ([]Filler,
 		if err != nil || number == 0 {
 			continue
 		}
-		// The class is "manga_canon odd" or "filler even"; only the first word
-		// is the classification.
+		// The class is "manga_canon odd" or "filler even"; only the first word is the classification.
 		kind := strings.ReplaceAll(strings.Fields(m[1])[0], "_", "-")
 		out = append(out, Filler{Episode: number, Kind: normaliseKind(kind)})
 	}
@@ -532,8 +531,7 @@ func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 		if host >= 0 {
 			res, err = fetch(host, page)
 		} else {
-			// A mirror that has not caught up answers 404 or nothing; the
-			// other may have the episodes.
+			// A mirror that has not caught up answers 404 or nothing; the other may have the episodes.
 			for i := range hosts {
 				res, err = fetch(i, page)
 				if err == nil && len(res.Data) > 0 {

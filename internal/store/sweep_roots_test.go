@@ -13,8 +13,7 @@ func TestSweepLocalOnlyTouchesTheRootsThatWalked(t *testing.T) {
 	ctx := context.Background()
 
 	anime := filepath.Join("D:", "Anime")
-	// A sibling whose name starts with the first root's, which a bare prefix
-	// match would sweep as well.
+	// A sibling whose name starts with the first root's, which a bare prefix match would sweep as well.
 	movies := filepath.Join("D:", "AnimeMovies")
 	downloads := filepath.Join("E:", "Downloads")
 

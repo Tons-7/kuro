@@ -14,7 +14,7 @@ import (
 // The binary is moved aside, never truncated, and a copy that fails leaves the old one in place.
 func TestInstallReplacesWholeOrNotAtAll(t *testing.T) {
 	dir := t.TempDir()
-	dest := filepath.Join(dir, "rqbit.exe")
+	dest := filepath.Join(dir, "ffmpeg.exe")
 	if err := os.WriteFile(dest, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +42,12 @@ func TestInstallReplacesWholeOrNotAtAll(t *testing.T) {
 }
 
 func TestKnownComponents(t *testing.T) {
-	for _, name := range []string{"rqbit", "ffmpeg", "mpv", "anime4k"} {
+	for _, name := range []string{"ffmpeg", "mpv", "anime4k"} {
 		if !Known(name) {
 			t.Errorf("%s should be installable", name)
 		}
 	}
-	if Known("definitely-not-a-component") {
+	if Known("rqbit") || Known("definitely-not-a-component") {
 		t.Error("an unknown name must not be installable")
 	}
 }
@@ -200,13 +200,12 @@ func TestFindAllMatchesByPattern(t *testing.T) {
 	}
 }
 
-// versions.json is shared with fetch-deps.ps1, so recording one component must
-// leave the others alone.
+// versions.json is shared with fetch-deps.ps1, so recording one component must leave the others alone.
 func TestRecordKeepsOtherVersions(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, nil)
 
-	if err := m.record("rqbit", "9.0.0"); err != nil {
+	if err := m.record("ffmpeg", "9.0"); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.record("mpv", "20260814"); err != nil {
@@ -217,9 +216,31 @@ func TestRecordKeepsOtherVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"rqbit": "9.0.0"`, `"mpv": "20260814"`} {
+	for _, want := range []string{`"ffmpeg": "9.0"`, `"mpv": "20260814"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("versions.json missing %s:\n%s", want, raw)
 		}
+	}
+}
+
+// A leftover rqbit and its version are cleared; other components are kept.
+func TestRemoveObsolete(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir, nil)
+	os.WriteFile(filepath.Join(dir, "rqbit.exe"), []byte("x"), 0o755)
+	os.WriteFile(filepath.Join(dir, "ffmpeg.exe"), []byte("x"), 0o755)
+	m.record("rqbit", "9.0.1")
+	m.record("ffmpeg", "9.0")
+
+	removed := m.RemoveObsolete()
+	if len(removed) != 1 || removed[0] != "rqbit.exe" {
+		t.Fatalf("removed %v", removed)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ffmpeg.exe")); err != nil {
+		t.Error("ffmpeg was removed")
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "versions.json"))
+	if strings.Contains(string(raw), "rqbit") || !strings.Contains(string(raw), "ffmpeg") {
+		t.Errorf("versions.json = %s", raw)
 	}
 }

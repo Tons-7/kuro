@@ -1,10 +1,11 @@
 // A running kuro honours data_dir, cache_dir and bin_dir from config.toml.
 //   KURO_EXE=...\kuro.exe node scripts/folders-config-check.mjs
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { linkBin } from './harness-lib.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const exe = process.env.KURO_EXE
@@ -25,18 +26,16 @@ const root = join(scratch, 'root')
 const tools = join(scratch, 'tools')
 mkdirSync(root, { recursive: true })
 mkdirSync(join(scratch, 'appdata'), { recursive: true })
-spawnSyncOrThrow('cmd', ['/c', 'mklink', '/J', tools, join(repo, 'bin')])
+linkBin(join(repo, 'bin'), tools)
 writeFileSync(
   join(root, 'config.toml'),
-  `addr = "127.0.0.1:${PORT}"\ndata_dir = "data"\ncache_dir = "store"\nbin_dir = '${tools}'\n\n[torrent]\napi_addr = "127.0.0.1:3032"\nlisten_port = 4342\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
+  `addr = "127.0.0.1:${PORT}"\ndata_dir = "data"\ncache_dir = "store"\nbin_dir = '${tools}'\n\n[torrent]\nlisten_port = 4345\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
 )
 
+const appdata = join(scratch, 'appdata')
 const kuro = spawn(exe, ['--no-window'], {
-  // rqbit's session lives in Windows known folders; shared, it loads the real app's torrents.
-  env: {
-    ...process.env, KURO_ROOT: root, LOCALAPPDATA: join(scratch, 'appdata'), KURO_NO_WINDOW: '1',
-    RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'), RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
-  },
+  // APPDATA too: the engine imports rqbit's per-user session when it has none.
+  env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, KURO_NO_WINDOW: '1' },
   stdio: 'ignore',
 })
 try {
@@ -59,8 +58,3 @@ try {
 await sleep(1000)
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)
-
-function spawnSyncOrThrow(cmd, args) {
-  const r = spawnSync(cmd, args, { stdio: 'ignore' })
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed`)
-}

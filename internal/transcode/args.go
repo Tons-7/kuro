@@ -37,8 +37,7 @@ func (s *Session) args(offset float64, startSegment int) []string {
 	}
 
 	if offset > 0 {
-		// A copy seek lands on the preceding keyframe; the bias reaches the
-		// intended one.
+		// A copy seek lands on the preceding keyframe; the bias reaches the intended one.
 		seek := offset
 		if s.Plan.VideoCopy {
 			seek += 0.5

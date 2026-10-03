@@ -76,8 +76,7 @@ func TestCorpusExtractionRates(t *testing.T) {
 	}
 }
 
-// The title is what gets matched against AniList, so leaking quality tags into
-// it breaks episode lookup.
+// The title is what gets matched against AniList, so leaking quality tags into it breaks episode lookup.
 func TestCorpusTitlesAreClean(t *testing.T) {
 	leaks := []string{
 		"1080p", "720p", "480p", "2160p", "x265", "x264", "HEVC", "AVC",

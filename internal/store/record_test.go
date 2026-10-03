@@ -13,7 +13,7 @@ func TestRecordTorrentForAnUnknownAnime(t *testing.T) {
 
 	err := s.RecordTorrent(ctx, TorrentRecord{
 		InfoHash:  "abc123",
-		RqbitID:   4,
+		EngineID:  4,
 		Name:      "[Erai-raws] Death Note - 01 ~ 37",
 		TotalSize: 900,
 		AnimeID:   1535,

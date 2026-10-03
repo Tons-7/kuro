@@ -96,8 +96,7 @@ type Viewer struct {
 	} `json:"mediaListOptions"`
 }
 
-// List queries never infer the authenticated user, so this is fetched once at
-// login and cached.
+// List queries never infer the authenticated user, so this is fetched once at login and cached.
 func (c *Client) Viewer(ctx context.Context) (Viewer, error) {
 	var out struct {
 		Viewer Viewer `json:"Viewer"`

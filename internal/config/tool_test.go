@@ -51,3 +51,21 @@ func TestToolPrefersBinThenPath(t *testing.T) {
 		t.Errorf("path tool = %q, want %q", got, onPath)
 	}
 }
+
+// ffprobe comes from wherever ffmpeg does, even with a stray one in bin/.
+func TestFfprobePairsWithFfmpeg(t *testing.T) {
+	bin, pathDir := t.TempDir(), t.TempDir()
+	for _, p := range []string{
+		filepath.Join(bin, ExeName("ffprobe")),
+		filepath.Join(pathDir, ExeName("ffmpeg")),
+		filepath.Join(pathDir, ExeName("ffprobe")),
+	} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", pathDir)
+	if got, want := (Config{BinDir: bin}).Tool("ffprobe"), filepath.Join(pathDir, ExeName("ffprobe")); got != want {
+		t.Errorf("ffprobe = %q, want the one beside ffmpeg %q", got, want)
+	}
+}

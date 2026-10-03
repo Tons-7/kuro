@@ -159,7 +159,7 @@ check(await until(() => page.url().endsWith('/4242'), 10_000), 'navigated client
 
 // Wait for the search to give up: that is when the failure is shown.
 const gaveUp = await until(
-  () => page.getByText(/Nothing found|No release|couldn't find|not found|no release/i).first().isVisible().catch(() => false),
+  () => page.getByText(/Nothing found|No release|couldn't find|couldn't search|not found|no release/i).first().isVisible().catch(() => false),
   150_000,
 )
 check(gaveUp, 'the search reported failure')

@@ -35,8 +35,7 @@ func (m *memArchive) SaveAnswer(_ context.Context, key string, body []byte) erro
 	return nil
 }
 
-// AniList answering, then down: a page gets the last answer and is told so,
-// background work gets the error.
+// AniList answering, then down: a page gets the last answer and is told so, background work gets the error.
 func TestSavedAnswerStandsInWhileAniListIsDown(t *testing.T) {
 	var down atomic.Bool
 	var calls atomic.Int32

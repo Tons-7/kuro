@@ -64,8 +64,7 @@ func TestOtherShowsNeverWinTheEpisode(t *testing.T) {
 	}
 }
 
-// Derived episode rows are permanent, so another show's numbers must not
-// become this one's episodes.
+// Derived episode rows are permanent, so another show's numbers must not become this one's episodes.
 func TestEpisodeNumbersIgnoreOtherShows(t *testing.T) {
 	st := monsterStore(t)
 	f := NewFinder(st, fixedIndexer{results: []indexer.Torrent{
@@ -84,8 +83,7 @@ func TestEpisodeNumbersIgnoreOtherShows(t *testing.T) {
 	}
 }
 
-// Rejected releases stay in the list so the manual picker can show what was
-// found, with the reason attached.
+// Rejected releases stay in the list so the manual picker can show what was found, with the reason.
 func TestOtherShowsAreKeptButBlocked(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -173,7 +171,7 @@ func TestHeldReleaseOfAnotherShowIsNotReused(t *testing.T) {
 // Download used to promote whatever was held to kept, then, finding it named
 // another show, return as if done: the wrong file pinned, nothing fetched.
 func TestDownloadFetchesAfreshWhenTheHeldReleaseIsAnotherShow(t *testing.T) {
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -211,7 +209,7 @@ func TestDownloadFetchesAfreshWhenTheHeldReleaseIsAnotherShow(t *testing.T) {
 
 // The queue used to commit to the best-ranked release and fail with it.
 func TestDownloadWalksPastADeadRelease(t *testing.T) {
-	engine := newFakeRqbit(deadHash)
+	engine := newFakeEngine(deadHash)
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -265,8 +263,7 @@ func TestAReleasePickedByHandIsNeverSecondGuessed(t *testing.T) {
 	}
 }
 
-// Without titles there is nothing to check against, and refusing everything
-// would strand playback.
+// Without titles there is nothing to check against, and refusing everything would strand playback.
 func TestHeldReleaseStandsWithoutTitles(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()

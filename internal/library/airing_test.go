@@ -29,7 +29,7 @@ func airingStore(t *testing.T, nextEpisode int, airingAt int64, progress int) *s
 	if _, err := st.MarkWatched(ctx, 7, progress); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetFollow(ctx, store.Follow{AnimeID: 7}, true); err != nil {
+	if err := st.SetFollow(ctx, 7, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetSetting(ctx, "notify.enabled", "true"); err != nil {
@@ -119,8 +119,7 @@ func TestAutoDownloadWithNotificationsOff(t *testing.T) {
 	}
 }
 
-// Someone saving the season for later still gets every aired week, not only
-// the one after their progress.
+// Someone saving the season for later still gets every aired week, not only the one after their progress.
 func TestAnnouncesEveryAiredEpisodePastProgress(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Unix()
 	st := airingStore(t, 6, tomorrow, 3)

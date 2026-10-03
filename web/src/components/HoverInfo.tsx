@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { cx, readableTint, relativeTime, tint } from '../lib/format'
+import { cx, episodeCount, readableTint, relativeTime, tint } from '../lib/format'
 import { ProgressBar } from './ui'
 
 export interface HoverAnime {
@@ -115,14 +115,6 @@ function airingState(anime: HoverAnime): { label: string; tone: string; live?: b
 }
 
 // "10/13 eps" while airing, "13 eps" once out, "10 eps" with no total yet.
-function episodeCount(anime: HoverAnime): string | null {
-  const { episodes, aired } = anime
-  if (anime.status === 'RELEASING' && aired && episodes && aired < episodes) return `${aired}/${episodes} eps`
-  if (episodes) return `${episodes} ${episodes === 1 ? 'ep' : 'eps'}`
-  if (aired) return `${aired} eps`
-  return null
-}
-
 function day(date: string): string {
   const [y, m, d] = date.split('-').map(Number)
   if (!m) return String(y)

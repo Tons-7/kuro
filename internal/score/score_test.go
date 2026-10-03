@@ -229,8 +229,7 @@ func TestUnlabelledHighResBeatsLabelledLowRes(t *testing.T) {
 	}
 }
 
-// The partial credit must stay below a real tier match, so a properly labelled
-// Blu-ray still wins.
+// The partial credit must stay below a real tier match, so a properly labelled Blu-ray still wins.
 func TestFullTierBeatsPartialCredit(t *testing.T) {
 	prefs := DefaultPreferences()
 	prefs.HardwareTranscode = true

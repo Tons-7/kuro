@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// AnimeRecord is the saved row, for when AniList cannot give a current one.
-// A stub (synced_at 0) holds no record worth showing.
+// AnimeRecord is the saved row, for when AniList is down. Stubs don't count.
 func (s *Store) AnimeRecord(ctx context.Context, id int) (Anime, time.Time, bool, error) {
 	var (
 		a      Anime
@@ -39,15 +38,13 @@ func (s *Store) AnimeRecord(ctx context.Context, id int) (Anime, time.Time, bool
 	return a, time.Unix(synced, 0), true, nil
 }
 
-// How long a saved airing show may go unchecked. Past its next broadcast it is
-// due at once: the episode count, the next date and in time the status change.
+// How long an airing show may go unchecked; once its next episode airs, it is due.
 const (
 	airingMaxAge   = 6 * time.Hour
 	upcomingMaxAge = 24 * time.Hour
 )
 
-// StaleAiring lists saved shows still airing or announced whose row is due a
-// refresh, those whose broadcast has passed first.
+// StaleAiring lists airing or announced shows due a refresh, just-aired first.
 func (s *Store) StaleAiring(ctx context.Context, now time.Time, limit int) ([]int, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT id FROM anime

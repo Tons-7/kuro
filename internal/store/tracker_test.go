@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// seedTracked writes the minimum needed for a list entry to exist and be
-// resolvable to a MyAnimeList id.
+// seedTracked writes the minimum needed for a list entry to exist and resolve to a MyAnimeList id.
 func seedTracked(t *testing.T, s *Store, animeID, malID, episodes int) {
 	t.Helper()
 	ctx := context.Background()
@@ -56,8 +55,7 @@ func TestPendingMALPushesFindsUnsentProgress(t *testing.T) {
 	}
 }
 
-// Anime that MAL has no id for cannot be updated there, so they must not sit
-// in the queue failing forever.
+// Anime that MAL has no id for cannot be updated there, so they must not sit in the queue failing forever.
 func TestPendingMALPushesSkipsUnmappedAnime(t *testing.T) {
 	s := newTestStore(t)
 
@@ -149,8 +147,7 @@ func TestPendingMALPushTargetsOneAnime(t *testing.T) {
 	}
 }
 
-// Per-tracker state must be independent, or connecting MAL would look like
-// AniList had already been told.
+// Per-tracker state must be independent, or connecting MAL would look like AniList had already been told.
 func TestTrackersDoNotShareState(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -16,8 +16,7 @@ type DirtyEntry struct {
 	Episodes    int
 	StartedAt   string
 	CompletedAt string
-	// Repeat is how many full rewatches are finished, what AniList calls
-	// repeat and MAL num_times_rewatched.
+	// Repeat is how many full rewatches are finished: AniList's repeat, MAL's num_times_rewatched.
 	Repeat int
 	// Score on kuro's 0-100 scale; 0 is unrated.
 	Score int
@@ -216,8 +215,7 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 	now := time.Now().Unix()
 	today := time.Now().Format("2006-01-02")
 
-	// Marking something completed without a date leaves a gap the trackers
-	// display as an empty finish date.
+	// Marking something completed without a date leaves a gap the trackers display as an empty finish date.
 	var completed any
 	if status == "COMPLETED" {
 		completed = today

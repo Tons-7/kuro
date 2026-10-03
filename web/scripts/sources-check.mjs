@@ -7,11 +7,12 @@
 // The sites are never in the repository; without them the last scenario is
 // skipped. SKIP_BUILD=1 reuses the last build, KEEP=1 keeps the scratch dir.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync, existsSync, openSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { chromium } from 'playwright'
+import { linkBin } from './harness-lib.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const webDir = resolve(scriptDir, '..')
@@ -74,11 +75,7 @@ async function start(name) {
   const logFd = openSync(join(scratch, `${name}.log`), 'w')
   server = spawn(kuroExe, [], {
     cwd: root,
-    // rqbit's session lives in Windows known folders; shared, it loads the real app's torrents.
-    env: {
-      ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1',
-      RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'), RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
-    },
+    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, KURO_NO_WINDOW: '1' },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })
@@ -154,7 +151,7 @@ try {
   stage(`scratch instance at ${scratch}`)
   rmSync(scratch, { recursive: true, force: true })
   for (const d of [scratch, root, appdata, shots]) mkdirSync(d, { recursive: true })
-  symlinkSync(join(repo, 'bin'), join(root, 'bin'), process.platform === 'win32' ? 'junction' : 'dir')
+  linkBin(join(repo, 'bin'), join(root, 'bin'))
 
   if (process.env.SKIP_BUILD !== '1') {
     stage('building')
@@ -188,9 +185,8 @@ try {
   // B: an existing install updating. Its config predates sites; its database
   // is the one from before.
   stage('existing install: old config, existing database')
-  // Its own engine port: a kuro already running here would otherwise lend its
-  // rqbit to the test.
-  const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n\n[torrent]\napi_addr = "127.0.0.1:3031"\n`
+  // Its own peer port, off the real app's.
+  const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n\n[torrent]\nlisten_port = 4342\n`
   writeFileSync(configPath, old)
   await start('update')
   check(readFileSync(configPath, 'utf8') === old, "update: the user's config is left untouched")

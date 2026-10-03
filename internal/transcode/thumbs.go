@@ -31,8 +31,7 @@ func NewThumbnails(ffmpeg string, log *slog.Logger) *Thumbnails {
 	}
 }
 
-// Sheet describes where each frame sits, so the client can turn a hovered time
-// into a background offset.
+// Sheet describes where each frame sits, so the client can turn a hovered time into a background offset.
 type Sheet struct {
 	Ready bool `json:"ready"`
 	// Seconds between frames.

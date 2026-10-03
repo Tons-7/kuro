@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,14 +45,14 @@ type Options struct {
 	Anime4K      bool
 	Anime4KMode  string
 	Anime4KSize  string
-	// Audio is the sub/dub preference; mpv picks the matching track of a
-	// dual-audio file by language.
+	// Audio is the sub/dub preference; mpv picks the matching track of a dual-audio file by language.
 	Audio string
-	Extra []string
+	// SubLanguages are the settings' ISO 639-1 codes, best first.
+	SubLanguages []string
+	Extra        []string
 }
 
-// AudioLanguages is mpv's --alang list for a preference, empty when either
-// track will do.
+// AudioLanguages is mpv's --alang list for a preference, empty when either track will do.
 func AudioLanguages(pref string) string {
 	switch pref {
 	case "dub":
@@ -60,6 +61,37 @@ func AudioLanguages(pref string) string {
 		return "jpn,ja,jp,japanese"
 	}
 	return ""
+}
+
+// languageTags are what files tag a language's tracks with, as the browser
+// player matches them (web/src/player/Player.tsx).
+var languageTags = map[string][]string{
+	"en": {"en", "eng", "english"},
+	"es": {"es", "spa", "spanish", "es-419", "es-es"},
+	"pt": {"pt", "por", "portuguese", "pt-br"},
+	"fr": {"fr", "fre", "fra", "french"},
+	"de": {"de", "ger", "deu", "german"},
+	"it": {"it", "ita", "italian"},
+	"ru": {"ru", "rus", "russian"},
+	"ar": {"ar", "ara", "arabic"},
+	"zh": {"zh", "chi", "zho", "chinese"},
+	"ko": {"ko", "kor", "korean"},
+	"id": {"id", "ind", "indonesian"},
+	"vi": {"vi", "vie", "vietnamese"},
+	"th": {"th", "tha", "thai"},
+}
+
+// SubtitleLanguages is mpv's --slang list for the settings' codes, in order.
+func SubtitleLanguages(codes []string) string {
+	var out []string
+	for _, c := range codes {
+		if tags, ok := languageTags[strings.ToLower(c)]; ok {
+			out = append(out, tags...)
+		} else if c != "" {
+			out = append(out, c)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 type MPV struct {
@@ -121,7 +153,7 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 		"--force-window=immediate",
 		"--keep-open=no",
 		"--title=" + orDefault(opts.Title, "kuro"),
-		// The stream is served over HTTP by rqbit; without a generous cache
+		// The stream is served over HTTP by the engine; without a generous cache
 		// mpv re-requests aggressively and fights the piece scheduler.
 		"--cache=yes",
 		"--demuxer-max-bytes=256MiB",
@@ -135,6 +167,9 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 	}
 	if alang := AudioLanguages(opts.Audio); alang != "" {
 		args = append(args, "--alang="+alang)
+	}
+	if slang := SubtitleLanguages(opts.SubLanguages); slang != "" {
+		args = append(args, "--slang="+slang)
 	}
 	if opts.Anime4K {
 		// gpu-next is what actually runs the shader chain well; gpu-hq only

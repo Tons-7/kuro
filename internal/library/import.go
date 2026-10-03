@@ -102,7 +102,7 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 // Save stores media the caller already has, so viewing a page keeps the local
 // record current instead of refetching later.
 func (i *Importer) Save(ctx context.Context, media []anilist.Media) (int, error) {
-	// Stamping an old answer synced now would pass it off as current.
+	// A saved answer stamped synced-now would pass for current.
 	if len(media) == 0 || anilist.UsedSaved(ctx) {
 		return 0, nil
 	}

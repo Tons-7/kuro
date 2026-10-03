@@ -60,6 +60,12 @@ await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 await post('/api/prefs', { key: 'playback.autoskip_op', value: 'false' })
 // A per-show override, which only this show carries.
 await post('/api/prefs', { key: 'playback.autoskip_op', value: 'true', animeId: ANIME })
+const served = (await api(`/api/prefs?anime=${ANIME}`)).body
+check(
+  served?.effective?.['playback.autoplay'] === 'true' && served?.effective?.['playback.autonext'] === 'true',
+  'the server applies the global settings to this show',
+  JSON.stringify({ effective: served?.effective?.['playback.autoplay'], overrides: served?.overrides }),
+)
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })

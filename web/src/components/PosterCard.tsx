@@ -152,8 +152,7 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
             {typeof anime.percent === 'number' && anime.percent > 0 && (
               <ProgressBar value={anime.percent} className="mb-1.5" />
             )}
-            {/* One line whatever the card width: on a phone's three columns the
-                episode count gives way before anything wraps. */}
+            {/* One line; on narrow cards the episode count truncates first. */}
             <div className="flex items-center gap-1.5 text-[11px] whitespace-nowrap text-base-300">
               {anime.format && <span>{anime.format.replace('_', ' ')}</span>}
               {anime.episodes ? (

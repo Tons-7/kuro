@@ -64,6 +64,10 @@ type Server struct {
 	latestMu   sync.Mutex
 	latestJobs map[string]time.Time
 
+	// What a system ffmpeg is and can do, per binary; Setup polls every second.
+	systemMu sync.Mutex
+	systemFF map[string]systemTool
+
 	// Shows whose episode list is being derived from releases.
 	derivingMu sync.Mutex
 	deriving   map[int]struct{}
@@ -269,6 +273,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/access/firewall", hostOnly(s.accessFirewall))
 	mux.HandleFunc("POST /api/access/firewall", hostOnly(s.allowFirewall))
 	mux.HandleFunc("POST /api/access/network-settings", hostOnly(s.openNetworkSettings))
+	mux.HandleFunc("GET /api/torrent/firewall", hostOnly(s.peersFirewall))
+	mux.HandleFunc("POST /api/torrent/firewall", hostOnly(s.allowPeersFirewall))
 
 	app := apiOnly()
 	if assets, ok := web.FS(); ok {
@@ -447,8 +453,7 @@ func (s *Server) logging(next http.Handler) http.Handler {
 
 func send(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	// None of this is worth a second: a stale list is what makes a toggle look
-	// like it did nothing.
+	// None of this is worth a second: a stale list is what makes a toggle look like it did nothing.
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)

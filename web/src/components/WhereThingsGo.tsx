@@ -152,7 +152,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
             </button>
             <button
               onClick={() => move.reset()}
-              className="rounded-md bg-base-800 px-3 py-1.5 text-base-100 hover:bg-base-700"
+              className={buttonClass()}
             >
               Cancel
             </button>

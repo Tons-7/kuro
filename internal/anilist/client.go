@@ -158,7 +158,7 @@ func (c *Client) Query(ctx context.Context, query string, vars map[string]any, o
 	}
 
 	saved := archiveKey(body, c.bearer() != "")
-	// AniList failed moments ago: a saved answer beats waiting out the retries.
+	// Failed moments ago: serve the saved answer rather than wait on retries.
 	if c.isDown() && c.fromArchive(ctx, saved, out) {
 		return nil
 	}
@@ -175,16 +175,14 @@ func (c *Client) Query(ctx context.Context, query string, vars map[string]any, o
 		if c.isDown() && c.fromArchive(ctx, saved, out) {
 			return nil
 		}
-		// It failed, and the reason is worth reproducing rather than reporting
-		// second-hand.
+		// It failed, and the reason is worth reproducing rather than reporting second-hand.
 		return c.fetch(ctx, query, body, key, saved, out)
 	}
 	defer c.cache.done(key, wg)
 	return c.fetch(ctx, query, body, key, saved, out)
 }
 
-// fetch asks AniList, keeps the answer, and falls back to the saved one only
-// when AniList could not be reached.
+// fetch asks AniList, falling back to the saved answer only if it is unreachable.
 func (c *Client) fetch(ctx context.Context, query string, body []byte, key, saved string, out any) error {
 	var data json.RawMessage
 	if err := c.execute(ctx, query, body, &data); err != nil {
@@ -281,8 +279,7 @@ func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool)
 			}
 		}
 
-		// This response already succeeded, so hold back the next caller rather
-		// than the current one.
+		// This response already succeeded, so hold back the next caller rather than the current one.
 		if remaining(res) == 0 {
 			c.log.Debug("anilist quota exhausted, pausing subsequent requests")
 			c.pauseFor(time.Minute)

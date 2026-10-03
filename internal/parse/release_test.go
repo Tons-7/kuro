@@ -133,8 +133,7 @@ func TestParseBatches(t *testing.T) {
 	}
 }
 
-// A resolution written as WxH must not be mistaken for a checksum once the
-// brackets are stripped.
+// A resolution written as WxH must not be mistaken for a checksum once the brackets are stripped.
 func TestResolutionIsNotReadAsChecksum(t *testing.T) {
 	got := Parse("[Group] Some Show - 07 (1920x1080) [AABBCCDD].mkv")
 	if got.CRC32 != "AABBCCDD" {

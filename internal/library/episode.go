@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 
@@ -32,6 +34,15 @@ type Finder struct {
 	// Whether this machine transcodes in real time; atomic because ffmpeg can
 	// arrive mid-session while searches run.
 	hwTranscode atomic.Bool
+	// hydrate fetches a show the catalogue lacks: a fresh install has no titles
+	// until its first corpus build. Nil skips it.
+	hydrate func(ctx context.Context, ids []int) (int, error)
+}
+
+// WithHydrator lets Find fetch a show it has no titles for, instead of failing.
+func (f *Finder) WithHydrator(h func(ctx context.Context, ids []int) (int, error)) *Finder {
+	f.hydrate = h
+	return f
 }
 
 // NewFinder searches idx, which is nil when no site is configured.
@@ -102,6 +113,14 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	titles, err := f.store.SearchTitles(ctx, req.AnimeID)
 	if err != nil {
 		return Candidates{}, err
+	}
+	if len(titles) == 0 && f.hydrate != nil {
+		if _, err := f.hydrate(ctx, []int{req.AnimeID}); err != nil {
+			f.log.Warn("fetch unknown show", "anime", req.AnimeID, "err", err)
+		}
+		if titles, err = f.store.SearchTitles(ctx, req.AnimeID); err != nil {
+			return Candidates{}, err
+		}
 	}
 	total, _ := f.store.EpisodeCount(ctx, req.AnimeID)
 	runtime := f.store.EpisodeRuntime(ctx, req.AnimeID)
@@ -201,7 +220,61 @@ func allFailed(batches []searchBatch) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	return fmt.Errorf("release search failed: %w", errors.Join(errs...))
+	return searchFailed{errs}
+}
+
+// searchFailed reads as one short line per site, not a raw error per query;
+// the errors stay attached for the log and errors.Is.
+type searchFailed struct{ errs []error }
+
+func (e searchFailed) Unwrap() []error { return e.errs }
+
+func (e searchFailed) Error() string {
+	var parts []string
+	for _, err := range flatten(e.errs) {
+		if p := siteProblem(err); !slices.Contains(parts, p) {
+			parts = append(parts, p)
+		}
+	}
+	return "couldn't search for releases: " + strings.Join(parts, "; ")
+}
+
+func flatten(errs []error) []error {
+	var out []error
+	for _, err := range errs {
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			out = append(out, flatten(joined.Unwrap())...)
+		} else {
+			out = append(out, err)
+		}
+	}
+	return out
+}
+
+// siteProblem names the site and the cause in a few words; indexer errors start "site: ".
+func siteProblem(err error) string {
+	site, rest, ok := strings.Cut(err.Error(), ": ")
+	if !ok {
+		return err.Error()
+	}
+	var timeout interface{ Timeout() bool }
+	var dns *net.DNSError
+	switch {
+	case errors.As(err, &timeout) && timeout.Timeout():
+		return site + " timed out"
+	case errors.As(err, &dns):
+		return site + " could not be found"
+	case errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(rest, "refused"):
+		return site + " refused the connection"
+	}
+	var op *net.OpError
+	if errors.As(err, &op) {
+		return site + " is unreachable"
+	}
+	if len(rest) > 80 {
+		rest = rest[:80] + "…"
+	}
+	return site + ": " + rest
 }
 
 func countResults(batches []searchBatch) int {
@@ -222,8 +295,7 @@ func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error)
 
 	seen := map[int]struct{}{}
 	for _, r := range found.Results {
-		// Kept for the picker, but its numbers are another show's, and a derived
-		// row is never removed.
+		// Kept for the picker, but its numbers are another show's, and a derived row is never removed.
 		if r.WrongShow {
 			continue
 		}
@@ -411,8 +483,7 @@ func (f *Finder) derivedAlias(ctx context.Context, req Request, titles []string,
 			counted = true
 			continue
 		}
-		// A run broken by another entry restarts somewhere unknown; a guessed
-		// number is some other episode.
+		// A run broken by another entry restarts somewhere unknown; a guessed number is some other episode.
 		split = split || counted
 		run = 0
 	}
@@ -475,8 +546,7 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 		}
 	}
 
-	// A word in one sibling only names that cour; one several share ("TYBW")
-	// names the show.
+	// A word in one sibling only names that cour; one several share ("TYBW") names the show.
 	count := map[string]int{}
 	for _, s := range franchise.Seasons {
 		if s.ID == req.AnimeID {
@@ -489,8 +559,7 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 				count[w]++
 			}
 		}
-		// An earlier series named by this entry's base title is the cour the
-		// bare name belongs to.
+		// An earlier series named by this entry's base title is the cour the bare name belongs to.
 		if s.Ordinal < ordinal && series(s.Format) {
 			for _, name := range names {
 				for _, t := range all {
@@ -611,8 +680,7 @@ func numbersFor(rel parse.Release, req Request) []int {
 	return append(out, req.Alias.Numbers()...)
 }
 
-// covers reports that a batch's stated range holds the number; a batch stating
-// no range may hold anything.
+// covers reports that a batch's stated range holds the number; a batch stating no range may hold anything.
 func covers(rel parse.Release, n int) bool {
 	return rel.Batch && rel.Episode <= n && (rel.EpisodeEnd == 0 || n <= rel.EpisodeEnd)
 }
@@ -658,8 +726,7 @@ func names(rel parse.Release, req Request) bool {
 	return false
 }
 
-// broadcast reports a later cour's release stating the season TheTVDB files it
-// under, in this show's name.
+// broadcast reports a later cour's release stating the season TheTVDB files it under, in this show's name.
 func broadcast(rel parse.Release, req Request) bool {
 	return rel.Season > 1 && req.Cour.Later && names(rel, req)
 }
@@ -685,22 +752,25 @@ func numbered(rel parse.Release, req Request) (stated, inBatch bool) {
 	return stated, inBatch
 }
 
-// confirms reports that the release names the episode asked for, rather than
-// merely failing to contradict it.
+// confirms reports that the release names the episode asked for, not merely that nothing contradicts it.
 func confirms(rel parse.Release, req Request) bool {
 	if req.Episode <= 0 {
 		return false
 	}
 	stated, inBatch := numbered(rel, req)
-	// A pack stating no range covers anything, which confirms nothing.
-	return stated || (inBatch && rel.Episode > 0)
+	// A pack stating no range confirms nothing...
+	if stated || (inBatch && rel.Episode > 0) {
+		return true
+	}
+	// ...unless it is this whole season ("Monster.2004.S01"); its file list is
+	// checked before download. Not for a later cour, numbered differently.
+	return rel.Batch && rel.Episode == 0 && rel.Season > 0 && rel.Season == req.Season && !req.Cour.Later
 }
 
 // verifies rejects the demonstrably wrong episode, cour or season. A release
 // that omits the season is allowed: most single-season shows never mention one.
 func verifies(rel parse.Release, req Request) bool {
-	// Named for another cour of the same show: a different episode, whatever
-	// its number.
+	// Named for another cour of the same show: a different episode, whatever its number.
 	own, sibling := marked(rel, req)
 	if sibling && !own {
 		return false
@@ -732,8 +802,7 @@ func verifies(rel parse.Release, req Request) bool {
 	if req.Season > 1 && rel.Season > 0 && rel.Season != req.Season {
 		return false
 	}
-	// Season 1 releases usually carry no marker, so only an explicit higher
-	// season contradicts the request.
+	// Season 1 releases usually carry no marker, so only an explicit higher season contradicts the request.
 	if req.Season == 1 && rel.Season > 1 {
 		return false
 	}

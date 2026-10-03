@@ -150,7 +150,7 @@ export function Browse() {
         inputClassName="rounded-xl bg-base-950/60 py-3 pl-10 text-base"
       />
 
-      {/* On a phone one swipeable line, like the tabs, not three ragged rows. */}
+      {/* Phone: one swipeable line. */}
       <div className="no-scrollbar flex items-center gap-2 max-sm:-mx-3 max-sm:overflow-x-auto max-sm:px-3 sm:flex-wrap">
         {/* Genre, format and status take several values at once — the API has
             always accepted a list; only this could not send one. */}
@@ -247,11 +247,12 @@ export function Browse() {
             Clear all
           </button>
         )}
-        {results.data && results.data.total > 0 && (
+        {results.data && results.data.items.length > 0 && (
           <span className="ml-auto text-xs text-base-500 tabular-nums">
-            {/* AniList stops counting at 5,000. */}
-            {results.data.total.toLocaleString()}
-            {results.data.total >= 5000 ? '+' : ''} results
+            {/* AniList's total is a placeholder until the last page. */}
+            {results.data.hasMore
+              ? `${(page * 42).toLocaleString()}+ results`
+              : results.data.total > 0 && `${results.data.total.toLocaleString()} results`}
           </span>
         )}
       </div>
@@ -290,7 +291,8 @@ export function Browse() {
             <PageButton disabled={page <= 1} onClick={() => goToPage(page - 1)} label="Previous" />
             <span className="text-sm text-base-400 tabular-nums">
               Page <span className="font-semibold text-white">{page}</span>
-              {results.data.total > 0 && ` of ${Math.ceil(results.data.total / 42).toLocaleString()}`}
+              {/* Only the last page knows how many there are. */}
+              {!results.data.hasMore && ` of ${page.toLocaleString()}`}
             </span>
             <PageButton
               disabled={!results.data.hasMore}

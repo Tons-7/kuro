@@ -22,7 +22,7 @@ import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
 import { Rail, RailItem } from '../components/Rail'
 import { StatusMenu } from '../components/StatusMenu'
 import { TrailerOverlay } from '../components/TrailerOverlay'
-import { Badge, ErrorState, Skeleton, useDismiss, useDocumentTitle } from '../components/ui'
+import { Badge, ErrorState, LinkButton, Skeleton, useDismiss, useDocumentTitle } from '../components/ui'
 
 /** AniList and Jikan describe an anime differently; only the overlap is used. */
 interface AnimeDetail {
@@ -540,12 +540,9 @@ export function Anime() {
         ) : list.length === 0 ? (
           <div className="surface p-6 text-center">
             <p className="text-sm text-base-400">No episode list for this show yet.</p>
-            <Link
-              to={`/watch/${id}/1`}
-              className="mt-3 inline-block rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
-            >
+            <LinkButton to={`/watch/${id}/1`} className="mt-3">
               Try episode 1 anyway
-            </Link>
+            </LinkButton>
           </div>
         ) : (
           <EpisodeList

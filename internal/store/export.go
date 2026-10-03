@@ -60,8 +60,7 @@ func (s *Store) ExportLibrary(ctx context.Context) ([]ExportEntry, error) {
 	return out, rows.Err()
 }
 
-// AnimeIDByMAL maps a MyAnimeList id to the catalogue's, from what has been
-// imported or the offline corpus.
+// AnimeIDByMAL maps a MyAnimeList id to the catalogue's, from what has been imported or the offline corpus.
 func (s *Store) AnimeIDByMAL(ctx context.Context, malID int) (int, bool, error) {
 	var id int
 	err := s.r.QueryRowContext(ctx, `

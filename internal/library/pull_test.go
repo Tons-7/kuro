@@ -185,8 +185,7 @@ func TestMALPushCarriesTheScore(t *testing.T) {
 	}
 }
 
-// aniServer fakes enough of AniList for a push then a pull: it records
-// mutations and serves one fixed list.
+// aniServer fakes enough of AniList for a push then a pull: it records mutations and serves one fixed list.
 type aniServer struct {
 	list string
 
@@ -236,8 +235,7 @@ func (a *aniServer) handler() http.HandlerFunc {
 			io.WriteString(w, `{"data":{"ToggleFavourite":{"anime":{"pageInfo":{"total":1}}}}}`)
 			return
 		}
-		// By operation name: the media fragment in the list query asks for a
-		// "favourites" count of its own.
+		// By operation name: the list query's media fragment asks for a "favourites" count of its own.
 		if strings.Contains(req.Query, "query Favourites(") {
 			a.mu.Lock()
 			nodes := make([]string, 0, len(a.favourites))

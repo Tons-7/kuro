@@ -39,8 +39,7 @@ const pendingMAL = `
 	ORDER BY e.local_updated_at
 	LIMIT ?3`
 
-// PendingMALPush returns the one entry for animeID, or a zero value when MAL
-// is already up to date on it.
+// PendingMALPush returns the one entry for animeID, or a zero value when MAL is already up to date on it.
 func (s *Store) PendingMALPush(ctx context.Context, tracker string, animeID int) (TrackerEntry, error) {
 	var e TrackerEntry
 	err := s.r.QueryRowContext(ctx, pendingMAL, tracker, animeID, 1).Scan(

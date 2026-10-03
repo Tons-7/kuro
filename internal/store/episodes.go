@@ -690,13 +690,12 @@ func episodesKey(animeID int) string {
 	return "episodes:" + strconv.Itoa(animeID)
 }
 
-// FlagsFetched records the attempt, not the result. A show with no filler and
-// no recaps returns nothing to store, and inferring "not fetched" from an
-// absence of rows restarts the crawl on every page load.
 // flagsRetry is how long a provisional answer stands: an airing show, or one
 // the source did not list yet, gains flagged episodes later.
 const flagsRetry = 7 * 24 * time.Hour
 
+// FlagsFetched reports a recorded attempt: a show without filler stores no
+// rows, so their absence can't mean "not fetched".
 func (s *Store) FlagsFetched(ctx context.Context, malID int) bool {
 	if malID == 0 {
 		return true

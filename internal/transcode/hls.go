@@ -12,8 +12,7 @@ import (
 	"time"
 )
 
-// Six seconds: short enough to seek responsively, long enough that a film's
-// playlist stays manageable.
+// Six seconds: short enough to seek responsively, long enough that a film's playlist stays manageable.
 const (
 	SegmentSeconds = 6.0
 
@@ -23,8 +22,7 @@ const (
 
 	sessionIdle = 10 * time.Minute
 
-	// What always works, and what a hardware encoder that fails at its first
-	// frame is swapped for.
+	// What always works, and what a hardware encoder that fails at its first frame is swapped for.
 	softwareEncoder = "libx264"
 
 	// The last lines carry the cause: ffmpeg's thread-exit lines come last, and
@@ -61,11 +59,8 @@ type Session struct {
 	// the encoder actually is — not against a stale file from an earlier pass.
 	headTo  int
 	touched time.Time
-	// Position in Info.Audio of the track being encoded, and the sub/dub
-	// preference that last picked it. Reopening a live session with the same
-	// preference must not re-pick: that drops every segment mid-load and hands
-	// the player an init file its segments no longer match. A changed preference
-	// (the Sub/Dub toggle) does re-pick.
+	// The encoded track's index in Info.Audio and the preference that picked
+	// it. Only a changed preference re-picks: re-picking drops every segment.
 	audioTrack int
 	audioPref  string
 	// Set once the session is released, so a late waiter's restart branch does
@@ -117,6 +112,16 @@ type Manager struct {
 }
 
 func (m *Manager) OnSeek(hook SeekHook) { m.onSeek = hook }
+
+// Installed checks ffmpeg and ffprobe on each call; Setup can add them live.
+func (m *Manager) Installed() bool {
+	for _, p := range []string{m.ffmpeg, m.prober.ffprobe} {
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
+	}
+	return true
+}
 
 // OnIdle is called for a session the reaper closed. A killed browser never
 // tells the server otherwise, leaving the episode pinned and downloading.
@@ -366,8 +371,7 @@ func (m *Manager) Sources() []string {
 	return out
 }
 
-// Reap discards sessions nobody is watching. Each one holds an ffmpeg process
-// and a directory of segments.
+// Reap discards sessions nobody is watching. Each one holds an ffmpeg process and a directory of segments.
 func (m *Manager) Reap(ctx context.Context) {
 	for {
 		select {
@@ -460,10 +464,8 @@ func (s *Session) SegmentPath(n int) string {
 
 func (s *Session) InitPath() string { return filepath.Join(s.dir, "init.mp4") }
 
-// Prestart launches the encoder at a segment if nothing is running and the
-// segment is not already on disk, and returns at once. It never moves a running
-// pass: only the player's own segment requests drive the encoder, so a head
-// start at a stale resume point cannot fight the segment the player then asks for.
+// Prestart launches the encoder at a segment not on disk if nothing runs, and
+// returns at once. It never moves a running pass; only the player's requests do.
 func (s *Session) Prestart(from int) error {
 	if fileReady(s.SegmentPath(from)) {
 		return nil
@@ -471,10 +473,8 @@ func (s *Session) Prestart(from int) error {
 	return s.startIfIdle(from)
 }
 
-// startIfIdle launches a pass at from only when no pass exists, deciding under
-// the same lock that publishes one. A plain running() check raced: sampled
-// while another start was mid-launch it read idle, and the start that followed
-// killed the pass the player's own request had just begun.
+// startIfIdle launches a pass at from only when none exists, deciding under the
+// lock that publishes one; a separate running() check races a start mid-launch.
 func (s *Session) startIfIdle(from int) error {
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
@@ -493,11 +493,9 @@ func (s *Session) startIfIdle(from int) error {
 	return s.startLocked(from)
 }
 
-// WaitInit returns once the init segment exists. Every pass writes it first, so
-// whichever pass is running — or one started at from if none is — produces it.
-// Unlike WaitSegment this never redirects a running encoder: the init request
-// arrives alongside the first segment request, and aiming both at different
-// segments killed each other's pass before either wrote anything.
+// WaitInit returns once the init segment exists, starting a pass at from if
+// none runs. It never redirects a running encoder: init and the first segment
+// arrive together, and aiming both killed each other's pass.
 func (s *Session) WaitInit(ctx context.Context, from int, timeout time.Duration) (string, error) {
 	path := s.InitPath()
 	if fileReady(path) {
@@ -558,8 +556,7 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 		return path, nil
 	}
 
-	// Known to restarts, so a pass about to serve this request is not killed
-	// under it.
+	// Known to restarts, so a pass about to serve this request is not killed under it.
 	s.addWaiter(n)
 	defer s.dropWaiter(n)
 
@@ -675,12 +672,8 @@ func (s *Session) nextStarted(n int) bool {
 	return fileReady(next)
 }
 
-// ensureHead starts the encoder, or moves it, when the requested segment is
-// outside what the current pass can deliver soon. The rule is Jellyfin's: a
-// segment before this pass, or far past where the encoder has actually reached,
-// needs a restart there; anything within reach is just waited for. An already
-// produced segment (from this or an earlier pass) is served by WaitSegment
-// before this is ever called.
+// ensureHead starts or moves the encoder when segment n is out of the current
+// pass's reach (see shouldRestart). Finished segments never get here.
 func (s *Session) ensureHead(n int) error {
 	s.mu.Lock()
 	active := s.run != nil
@@ -739,12 +732,9 @@ func (s *Session) dropWaiter(n int) {
 	s.mu.Unlock()
 }
 
-// shouldRestart is Jellyfin's rule as a pure decision: relaunch the encoder for
-// a segment before the current pass (a backward seek — it only moves forward)
-// or far past the segment it is working on now, headTo+1 (a real forward jump,
-// not the buffer drifting a few ahead). Everything else the running pass will
-// reach, so it is only waited for. from is the pass start, to the highest
-// finished segment (from-1 before any).
+// shouldRestart is Jellyfin's rule: relaunch for a segment before the current
+// pass or far past the one it is on; anything else the pass will reach. from
+// is the pass start, to the highest finished segment (from-1 before any).
 func shouldRestart(n, from, to int, active bool) bool {
 	switch {
 	case !active:
@@ -791,11 +781,8 @@ func (s *Session) startLocked(from int) error {
 		s.dropTail(head)
 	}
 
-	// An earlier pass may have left a stretch of segments starting at this very
-	// index. They would read as this pass's progress and send a later request
-	// waiting on an encoder nowhere near it, so the contiguous stretch is
-	// cleared; this pass rewrites it in order anyway. Files further on, past a
-	// gap, stay for an instant seek — they never look like this pass's own.
+	// Segments an earlier pass left from here on would read as this pass's
+	// progress; clear the contiguous run. Ones past a gap stay for fast seeks.
 	for n := from; fileReady(s.SegmentPath(n)); n++ {
 		os.Remove(s.SegmentPath(n))
 	}

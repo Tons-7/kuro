@@ -16,6 +16,5 @@ func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags |= breakawayFromJob
 }
 
-// Detach lets a child outlive kuro: the browser window, or the binary an
-// update hands over to.
+// Detach lets a child outlive kuro: the browser window, or the binary an update hands over to.
 func Detach(cmd *exec.Cmd) { detach(cmd) }

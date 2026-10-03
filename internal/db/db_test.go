@@ -27,8 +27,7 @@ func migrated(t *testing.T) *DB {
 	return conn
 }
 
-// A data folder named "Anime #2" or "c%20d" must open that folder's database,
-// not "Anime " or nothing.
+// A data folder named "Anime #2" or "c%20d" must open that folder's database, not "Anime " or nothing.
 func TestOpenKeepsUnusualFolderNames(t *testing.T) {
 	for _, name := range []string{"Anime #2", "c%20d", "100%"} {
 		dir := filepath.Join(t.TempDir(), name)
@@ -153,13 +152,21 @@ func TestMigrateCreatesSchema(t *testing.T) {
 
 	want := []string{
 		"anime", "anime_fts", "episode", "filler", "skip_time", "list_entry",
-		"playback", "watch_session", "torrent", "torrent_file", "cache_entry",
-		"release", "seadex", "follow", "job", "setting", "home_widget", "http_cache",
+		"playback", "torrent", "torrent_file", "cache_entry",
+		"seadex", "follow", "setting", "http_cache",
 	}
 	for _, table := range want {
 		var name string
 		if err := conn.R.QueryRow(`SELECT name FROM sqlite_master WHERE name = ?`, table).Scan(&name); err != nil {
 			t.Errorf("table %q missing: %v", table, err)
+		}
+	}
+	// Dropped by 00029: never used.
+	for _, table := range []string{"watch_session", "release", "job", "home_widget", "image_cache"} {
+		var n int
+		conn.R.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = ?`, table).Scan(&n)
+		if n != 0 {
+			t.Errorf("table %q still exists", table)
 		}
 	}
 }

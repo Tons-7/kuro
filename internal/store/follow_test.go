@@ -51,14 +51,14 @@ func TestFollowIsOnlyForShowsBeingWatched(t *testing.T) {
 	ctx := context.Background()
 	seedAnime(t, s, 1)
 
-	if err := s.SetFollow(ctx, Follow{AnimeID: 1}, true); err != nil {
+	if err := s.SetFollow(ctx, 1, true); err != nil {
 		t.Fatal(err)
 	}
 	if !hasFollow(mustFollows(t, s), 1) {
 		t.Fatal("following did not take")
 	}
 
-	if err := s.SetFollow(ctx, Follow{AnimeID: 1}, false); err != nil {
+	if err := s.SetFollow(ctx, 1, false); err != nil {
 		t.Fatal(err)
 	}
 	if hasFollow(mustFollows(t, s), 1) {

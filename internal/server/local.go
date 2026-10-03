@@ -184,8 +184,7 @@ func (s *Server) localStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only paths this server recorded are servable, so the id cannot be used
-	// to read arbitrary files.
+	// Only paths this server recorded are servable, so the id cannot be used to read arbitrary files.
 	file, err := os.Open(f.Path)
 	if err != nil {
 		http.Error(w, "file unavailable", http.StatusNotFound)

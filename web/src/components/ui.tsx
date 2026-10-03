@@ -368,8 +368,7 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void) {
     function onPointer(e: MouseEvent | TouchEvent) {
       const target = e.target as Node | null
       if (!ref.current || ref.current.contains(target)) return
-      // A portal menu isn't inside the trigger, so without this a click on it
-      // reads as outside and closes it.
+      // A portal menu isn't inside the trigger, so without this a click on it reads as outside and closes it.
       if (target instanceof Element && target.closest('[data-portal-menu]')) return
       onClose()
     }
@@ -435,8 +434,7 @@ export function Badge({
     accent: 'bg-accent-500/15 text-accent-400',
     success: 'bg-emerald-500/15 text-emerald-400',
     warning: 'bg-amber-500/15 text-amber-400',
-    // Over poster art, where a 15% tint leaves the text sitting on whatever
-    // the cover happens to be.
+    // Over poster art, where a 15% tint leaves the text sitting on whatever the cover happens to be.
     overlay: 'bg-base-950/85 text-accent-200 ring-1 ring-accent-400/30 backdrop-blur-sm',
   }
   return (
@@ -451,13 +449,13 @@ export function Badge({
   )
 }
 
+/** Names an unlabelled control after the settings row holding it. */
+export const ControlLabel = createContext<string | undefined>(undefined)
+
 /**
  * A styled select that keeps the real element (native keyboard and phone
  * picker); the browser's own control paints an OS-grey box that clashes.
  */
-/** Names an unlabelled control after the settings row holding it. */
-export const ControlLabel = createContext<string | undefined>(undefined)
-
 export function Select({
   value,
   onChange,

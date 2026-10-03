@@ -139,8 +139,7 @@ func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	rep.Skipped += unmatched
 
-	// Titles for ids the corpus lacks arrive after the reply; a big file is
-	// many rate-limited requests.
+	// Titles for ids the corpus lacks arrive after the reply; a big file is many rate-limited requests.
 	ids := make([]int, 0, len(file.Entries))
 	for _, e := range file.Entries {
 		ids = append(ids, e.AnimeID)

@@ -24,8 +24,7 @@ export class ApiError extends Error {
   }
 }
 
-// When AniList can't be reached the server answers from what it saved and says
-// when that was; any live answer clears it. Unix seconds, or null while live.
+// Age of the saved copy the server is answering from (unix s), null while live.
 let savedAt: number | null = null
 const savedListeners = new Set<() => void>()
 
@@ -201,6 +200,8 @@ export interface ScheduleItem {
   behind: number
   watched: boolean
   jstWeekday: string
+  /** The full show, for the hover panel. */
+  show?: DiscoverItem
 }
 
 export interface ScheduleDay {

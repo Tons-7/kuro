@@ -74,8 +74,7 @@ func TestMarkAllRead(t *testing.T) {
 	}
 }
 
-// Polling runs every half hour; without this the same release is announced
-// again on every pass.
+// Polling runs every half hour; without this the same release is announced again on every pass.
 func TestNotifiedReleaseIsRecordedOnce(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -102,7 +101,7 @@ func TestFollowRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	seedAnime(t, s, 1)
 
-	if err := s.SetFollow(ctx, Follow{AnimeID: 1, Quality: "1080p", Group: "SubsPlease"}, true); err != nil {
+	if err := s.SetFollow(ctx, 1, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,19 +109,16 @@ func TestFollowRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("got %d follows", len(got))
-	}
-	if got[0].Quality != "1080p" || got[0].Group != "SubsPlease" {
-		t.Errorf("follow = %+v", got[0])
+	if len(got) != 1 || got[0].AnimeID != 1 {
+		t.Fatalf("follows = %+v", got)
 	}
 
-	// Following again updates rather than duplicating.
-	if err := s.SetFollow(ctx, Follow{AnimeID: 1, Quality: "720p"}, true); err != nil {
+	// Following again does not duplicate.
+	if err := s.SetFollow(ctx, 1, true); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.Follows(ctx)
-	if len(got) != 1 || got[0].Quality != "720p" {
+	if len(got) != 1 {
 		t.Fatalf("follows = %+v", got)
 	}
 

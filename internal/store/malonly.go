@@ -4,8 +4,7 @@ package store
 // ids are always positive, so the sign alone says which catalogue a record is.
 func MALOnly(animeID int) bool { return animeID < 0 }
 
-// MALIDOf returns the MyAnimeList id a local id stands for, or 0 when the id is
-// an AniList one.
+// MALIDOf returns the MyAnimeList id a local id stands for, or 0 when the id is an AniList one.
 func MALIDOf(animeID int) int {
 	if animeID < 0 {
 		return -animeID

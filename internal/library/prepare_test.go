@@ -37,7 +37,7 @@ func TestPrepareIsOnByDefaultAndNotTheDownloadSwitch(t *testing.T) {
 	if !p.prepareWanted() {
 		t.Error("resolving the next episode should be on out of the box")
 	}
-	if p.wanted() {
+	if p.ahead() != 0 {
 		t.Error("downloading the next episode should stay opt-in")
 	}
 
@@ -54,6 +54,33 @@ func TestPrepareIsOnByDefaultAndNotTheDownloadSwitch(t *testing.T) {
 	}
 	if p.prepareWanted() {
 		t.Error("its own switch does not turn it off")
+	}
+}
+
+func TestDownloadAheadCount(t *testing.T) {
+	st := prefetchStore(t)
+	ctx := context.Background()
+	p := NewPrefetcher(st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if err := st.SetSetting(ctx, "cache.prefetch_next", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if n := p.ahead(); n != 1 {
+		t.Errorf("on with no count = %d, want the next one", n)
+	}
+	for set, want := range map[string]int{"2": 2, "5": 2, "0": 1} {
+		if err := st.SetSetting(ctx, "cache.prefetch_count", set); err != nil {
+			t.Fatal(err)
+		}
+		if n := p.ahead(); n != want {
+			t.Errorf("count %s = %d, want %d", set, n, want)
+		}
+	}
+	if err := st.SetSetting(ctx, "cache.prefetch_next", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if n := p.ahead(); n != 0 {
+		t.Errorf("off = %d", n)
 	}
 }
 
@@ -74,8 +101,7 @@ func TestPreparedReleaseOutlastsAnEpisode(t *testing.T) {
 	}
 }
 
-// An episode already in the library plays with no torrent, so resolving one is
-// a wasted indexer search.
+// An episode already in the library plays with no torrent, so resolving one is a wasted indexer search.
 func TestPrepareSkipsAnEpisodeAlreadyInTheLibrary(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()

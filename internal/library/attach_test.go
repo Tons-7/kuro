@@ -21,9 +21,9 @@ import (
 	"kuro/internal/torrent"
 )
 
-// fakeRqbit is enough of the engine to drive attach: add a torrent, report its
+// fakeEngine is enough of the engine to drive attach: add a torrent, report its
 // state, stream from it, delete it.
-type fakeRqbit struct {
+type fakeEngine struct {
 	mu       sync.Mutex
 	dead     map[string]bool          // by info hash
 	slow     map[string]time.Duration // delay before the first byte, by info hash
@@ -33,18 +33,27 @@ type fakeRqbit struct {
 	added    []string
 	deleted  []string
 	next     int
+
+	// trickle: connected peers and bytes arriving, the head only after this long.
+	// stuck: connected peers that never send a byte.
+	trickle map[string]time.Duration
+	stuck   map[string]bool
+	addedAt map[string]time.Time
+	paused  map[int]bool
 }
 
-func newFakeRqbit(dead ...string) *fakeRqbit {
-	f := &fakeRqbit{dead: map[string]bool{}, slow: map[string]time.Duration{},
-		ids: map[int]string{}, finished: map[string]bool{}}
+func newFakeEngine(dead ...string) *fakeEngine {
+	f := &fakeEngine{dead: map[string]bool{}, slow: map[string]time.Duration{},
+		ids: map[int]string{}, finished: map[string]bool{},
+		trickle: map[string]time.Duration{}, stuck: map[string]bool{}, addedAt: map[string]time.Time{},
+		paused: map[int]bool{}}
 	for _, h := range dead {
 		f.dead[h] = true
 	}
 	return f
 }
 
-func (f *fakeRqbit) handler() http.Handler {
+func (f *fakeEngine) handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /torrents", func(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +77,7 @@ func (f *fakeRqbit) handler() http.Handler {
 			id = f.next
 			f.ids[id] = hash
 			f.added = append(f.added, hash)
+			f.addedAt[hash] = time.Now()
 		}
 		f.mu.Unlock()
 
@@ -88,11 +98,28 @@ func (f *fakeRqbit) handler() http.Handler {
 		var id int
 		fmt.Sscanf(r.PathValue("id"), "%d", &id)
 		f.mu.Lock()
-		done := f.finished[f.ids[id]]
+		hash := f.ids[id]
+		done := f.finished[hash]
+		trickling, stuck := f.trickle[hash] > 0, f.stuck[hash]
+		since := time.Since(f.addedAt[hash])
 		f.mu.Unlock()
-		json.NewEncoder(w).Encode(map[string]any{
-			"state": "live", "progress_bytes": 0, "total_bytes": 1 << 30, "finished": done,
-		})
+		state := "live"
+		if f.isPaused(id) {
+			state = "paused"
+		}
+		out := map[string]any{
+			"state": state, "progress_bytes": 0, "total_bytes": 1 << 30, "finished": done,
+		}
+		if trickling || stuck {
+			fetched := int64(0)
+			if trickling {
+				fetched = since.Milliseconds() * 1000
+			}
+			out["live"] = map[string]any{"snapshot": map[string]any{
+				"fetched_bytes": fetched, "peer_stats": map[string]any{"live": 4},
+			}}
+		}
+		json.NewEncoder(w).Encode(out)
 	})
 
 	mux.HandleFunc("GET /torrents/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +144,16 @@ func (f *fakeRqbit) handler() http.Handler {
 		hash := f.ids[id]
 		dead := f.dead[hash]
 		delay := f.slow[hash]
+		if t := f.trickle[hash]; t > 0 {
+			delay = max(0, t-time.Since(f.addedAt[hash]))
+		}
+		stuck := f.stuck[hash]
 		f.mu.Unlock()
+
+		if stuck {
+			<-r.Context().Done()
+			return
+		}
 
 		if dead {
 			if hj, ok := w.(http.Hijacker); ok {
@@ -129,10 +165,25 @@ func (f *fakeRqbit) handler() http.Handler {
 			}
 		}
 		if delay > 0 {
-			time.Sleep(delay)
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return
+			}
 		}
 		w.Write(make([]byte, 4<<20))
 	})
+
+	for _, action := range []string{"pause", "start"} {
+		mux.HandleFunc("POST /torrents/{id}/"+action, func(w http.ResponseWriter, r *http.Request) {
+			var id int
+			fmt.Sscanf(r.PathValue("id"), "%d", &id)
+			f.mu.Lock()
+			f.paused[id] = action == "pause"
+			f.mu.Unlock()
+			w.Write([]byte(`{}`))
+		})
+	}
 
 	mux.HandleFunc("POST /torrents/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
 		var id int
@@ -147,7 +198,13 @@ func (f *fakeRqbit) handler() http.Handler {
 	return mux
 }
 
-func (f *fakeRqbit) wasDeleted(hash string) bool {
+func (f *fakeEngine) isPaused(id int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paused[id]
+}
+
+func (f *fakeEngine) wasDeleted(hash string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, h := range f.deleted {
@@ -185,7 +242,7 @@ func release(hash, title string, seeders int) indexer.Torrent {
 	}
 }
 
-func newPlayback(t *testing.T, engine *fakeRqbit, results []indexer.Torrent) *Playback {
+func newPlayback(t *testing.T, engine *fakeEngine, results []indexer.Torrent) *Playback {
 	t.Helper()
 
 	srv := httptest.NewServer(engine.handler())
@@ -223,11 +280,9 @@ const (
 	otherHash = "3333333333333333333333333333333333333333"
 )
 
-// A release that never delivers must be removed; rqbit allocates each file at
-// full length up front, so an abandoned candidate holds its whole size against
-// the cache budget.
+// A release that never delivers must be removed, or it holds disk space and an engine slot for nothing.
 func TestAttachRemovesReleasesThatNeverDeliver(t *testing.T) {
-	engine := newFakeRqbit(deadHash)
+	engine := newFakeEngine(deadHash)
 	p := newPlayback(t, engine, []indexer.Torrent{
 		release(deadHash, "[Dead] Sousou no Frieren - 01 [1080p].mkv", 900),
 		release(goodHash, "[Live] Sousou no Frieren - 01 [1080p].mkv", 50),
@@ -254,7 +309,7 @@ func TestAttachRemovesReleasesThatNeverDeliver(t *testing.T) {
 // Deleting is only safe for what this attempt started; a hash the engine already
 // held belongs to a finished download.
 func TestAttachKeepsReleasesTheEngineAlreadyHeld(t *testing.T) {
-	engine := newFakeRqbit(deadHash)
+	engine := newFakeEngine(deadHash)
 	engine.ids[99] = deadHash
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +357,7 @@ func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {
 	raceStagger = 10 * time.Millisecond
 	t.Cleanup(func() { raceStagger = old })
 
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	// The better release, ranked first, delivers only after the worse one has.
 	engine.slow[goodHash] = 400 * time.Millisecond
 
@@ -341,7 +396,7 @@ func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {
 // is cached in memory and the download starts only when play does, so browsing
 // never fills the Downloads tab.
 func TestPrepareResolvesWithoutTouchingTheEngine(t *testing.T) {
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -387,7 +442,7 @@ func TestPrepareResolvesWithoutTouchingTheEngine(t *testing.T) {
 // the finder has nothing, so a fresh search would fail — success proves the
 // prepared release was used.
 func TestAttachUsesThePreparedRelease(t *testing.T) {
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)
 
 	pref := NewPrefetcher(nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))

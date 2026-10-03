@@ -17,8 +17,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// rqbit re-hashes files after a launch; a torrent mid-check is neither paused
-// nor downloading. The startup pass must not pause it (that froze finished
+// A torrent whose data is being hashed is neither paused nor downloading. The startup pass must not pause it (that froze finished
 // episodes at a tenth done) and must come back for it once the check ends.
 func TestQuietRevisitsTorrentsStillChecking(t *testing.T) {
 	var mu sync.Mutex

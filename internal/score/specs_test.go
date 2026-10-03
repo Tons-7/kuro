@@ -42,8 +42,7 @@ func TestSamplesAreRejected(t *testing.T) {
 	}
 }
 
-// The first refusing tier is what gets reported; a dead swarm should not be
-// explained as a size problem.
+// The first refusing tier is what gets reported; a dead swarm should not be explained as a size problem.
 func TestRejectionsStopAtTheFirstTier(t *testing.T) {
 	prefs := DefaultPreferences()
 	prefs.MaxAutoBytes = 1 << 20

@@ -15,9 +15,9 @@ import (
 	"kuro/internal/torrent"
 )
 
-func ownedFixture(t *testing.T) (*Cache, *store.Store, *fakeRqbit) {
+func ownedFixture(t *testing.T) (*Cache, *store.Store, *fakeEngine) {
 	t.Helper()
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -126,20 +126,27 @@ func TestOrphansKeepsEverythingOnRecord(t *testing.T) {
 	}
 }
 
-// Right after a restart rqbit lists nothing yet; everything would look orphaned.
-func TestOrphansRefusesWhileTheEngineIsLoading(t *testing.T) {
+// With the engine holding nothing, records still claim their files and the sweep goes ahead for the rest.
+func TestOrphansWithAnEmptyEngineKeepsWhatIsOnRecord(t *testing.T) {
 	c, st, _ := ownedFixture(t)
+	was := orphanSettle
+	orphanSettle = 0
+	t.Cleanup(func() { orphanSettle = was })
 	record(t, st, "rec", "recorded.mkv", 0)
-	file := filepath.Join(c.dir, "recorded.mkv")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"recorded.mkv", "stray.mkv"} {
+		if err := os.WriteFile(filepath.Join(c.dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if _, err := c.Orphans(context.Background(), false); !errors.Is(err, ErrEngineLoading) {
-		t.Fatalf("err = %v, want ErrEngineLoading", err)
+	if _, err := c.Orphans(context.Background(), false); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(file); err != nil {
-		t.Fatal("deleted while the engine was loading")
+	if _, err := os.Stat(filepath.Join(c.dir, "recorded.mkv")); err != nil {
+		t.Error("a recorded download was deleted")
+	}
+	if _, err := os.Stat(filepath.Join(c.dir, "stray.mkv")); err == nil {
+		t.Error("the stray file was kept")
 	}
 }
 
@@ -163,8 +170,7 @@ func TestClearKeepsKeptDownloads(t *testing.T) {
 	}
 }
 
-// Clearing deletes whole torrents, so a pack with one file still arriving is
-// not finished.
+// Clearing deletes whole torrents, so a pack with one file still arriving is not finished.
 func TestClearFinishedOnlyJudgesTheWholeTorrent(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -179,8 +185,7 @@ func TestClearFinishedOnlyJudgesTheWholeTorrent(t *testing.T) {
 	}
 }
 
-// "Overlord IV" states no season in words; its S04 releases were all refused
-// as season 1 asked for.
+// "Overlord IV" states no season in words; its S04 releases were all refused as season 1 asked for.
 func TestNumeralSequelTakesItsSeason(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -223,13 +228,12 @@ func TestFindReportsAnOutage(t *testing.T) {
 	}
 }
 
-// A candidate that turns out to be a download already on record is someone's,
-// whatever the race assumed.
+// A candidate that turns out to be a download already on record is someone's, whatever the race assumed.
 func TestDiscardSparesADownloadOnRecord(t *testing.T) {
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)
 	if err := p.store.RecordTorrent(context.Background(), store.TorrentRecord{
-		InfoHash: goodHash, RqbitID: 1, Name: "kept", FilePath: "kept.mkv", TotalSize: 1,
+		InfoHash: goodHash, EngineID: 1, Name: "kept", FilePath: "kept.mkv", TotalSize: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}

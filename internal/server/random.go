@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"kuro/internal/anilist"
 	"kuro/internal/library"
@@ -141,6 +142,9 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
+// Jikan queues requests and can stall for a minute; past this the corpus record stands in.
+const jikanWait = 8 * time.Second
+
 // animeCard resolves one corpus id against whichever catalogue it came from.
 // down is set when the lookup failed rather than found nothing, which is worth
 // retrying, unlike a missing show.
@@ -154,7 +158,9 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	progress, listed := onList[id]
 
 	if malID := store.MALIDOf(id); malID > 0 {
-		detail, err := s.enricher.Anime(r.Context(), malID)
+		jikan, cancel := context.WithTimeout(r.Context(), jikanWait)
+		detail, err := s.enricher.Anime(jikan, malID)
+		cancel()
 		if err == nil {
 			var english *string
 			if detail.English != "" {

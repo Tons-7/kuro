@@ -5,8 +5,7 @@ import (
 	"strconv"
 )
 
-// Total supports numbered pages, HasMore supports infinite scroll; a UI can
-// use either.
+// Total supports numbered pages, HasMore supports infinite scroll; a UI can use either.
 type Page[T any] struct {
 	Items   []T  `json:"items"`
 	Total   int  `json:"total"`

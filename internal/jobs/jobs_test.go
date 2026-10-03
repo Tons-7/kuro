@@ -27,7 +27,8 @@ func TestRunsOnStartAndRecordsSuccess(t *testing.T) {
 	defer cancel()
 	s.Start(ctx)
 
-	waitFor(t, func() bool { return runs.Load() == 1 })
+	// The run is recorded after the job returns, so wait on the status itself.
+	waitFor(t, func() bool { return runs.Load() == 1 && s.Status()[0].Runs == 1 })
 
 	st := s.Status()[0]
 	if st.Runs != 1 || st.Failures != 0 || st.LastErr != "" {
@@ -134,8 +135,7 @@ func TestTriggerRunsImmediately(t *testing.T) {
 	}
 }
 
-// Run now must say so when nothing ran, and must not be cancelled with the
-// request that asked.
+// Run now must say so when nothing ran, and must not be cancelled with the request that asked.
 func TestTriggerWhileRunningSaysSo(t *testing.T) {
 	s := newScheduler()
 	release := make(chan struct{})
@@ -161,8 +161,7 @@ func TestTriggerWhileRunningSaysSo(t *testing.T) {
 	}
 }
 
-// A manual success clears the failure count, or a recovered job stays backed
-// off for hours.
+// A manual success clears the failure count, or a recovered job stays backed off for hours.
 func TestAManualSuccessResetsBackoff(t *testing.T) {
 	s := newScheduler()
 	var fail atomic.Bool

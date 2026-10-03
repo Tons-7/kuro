@@ -146,7 +146,7 @@ interface Download {
   kept: boolean
   state: string
   paused?: boolean
-  /** rqbit verifying the file after a launch. */
+  /** The engine hashing data already on disk. */
   checking?: boolean
   mbps?: number
   peers?: number
@@ -345,8 +345,7 @@ export function Downloads() {
     onSuccess: done,
     onSettled: () => setConfirmRemove(null),
   })
-  // Deleting takes the files; rows also shift as downloads finish, so the ✕
-  // asks before it acts.
+  // Deleting takes the files; rows also shift as downloads finish, so the ✕ asks before it acts.
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
   const pause = useMutation({
@@ -363,8 +362,7 @@ export function Downloads() {
     mutationFn: (scope: string) => api.post(`/api/downloads/clear?scope=${scope}`),
     onSuccess: done,
   })
-  // Optimistic: a click on a list fetched a moment ago used to send the wrong
-  // action and look like nothing happened.
+  // Optimistic, so a click on a slightly stale list sends the right action.
   const keep = useMutation({
     meta: { inline: true },
     mutationFn: (d: Download) =>

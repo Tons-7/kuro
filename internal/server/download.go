@@ -35,8 +35,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The same queue as a whole season, so one episode never competes with a
-	// season already being fetched.
+	// The same queue as a whole season, so one episode never competes with a season already being fetched.
 	if _, err := s.store.Enqueue(r.Context(), body.AnimeID, body.Season, []int{body.Episode}); err != nil {
 		s.fail(w, "queue download", err)
 		return

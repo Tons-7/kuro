@@ -115,8 +115,12 @@ const tickFor = (n) =>
     .first()
 
 if (listed) {
-  // Mark episode 3 by hand: 1-3 tick, 4 does not.
+  // Mark episode 3 by hand: 1-3 tick, 4 does not. Marking past unwatched
+  // episodes asks first.
   await tickFor(3).click()
+  const confirmRange = page.getByRole('button', { name: 'Mark 1–3' })
+  check(await until(() => confirmRange.isVisible()), 'marking past unwatched episodes asks first')
+  await confirmRange.click()
   check(await until(async () => (await tickFor(3).getAttribute('aria-label')) === 'Mark not watched'), 'episode 3 ticks when marked')
   check(await until(async () => (await tickFor(2).getAttribute('aria-label')) === 'Mark not watched'), 'episodes before it tick too (progress is a count)')
   check((await tickFor(4).getAttribute('aria-label')) === 'Mark watched', 'episode 4 stays unticked')
@@ -132,6 +136,7 @@ if (listed) {
 
   // Marking again after an unmark works (the round-trip that used to hang).
   await tickFor(3).click()
+  await page.getByRole('button', { name: 'Mark 2–3' }).click()
   check(await until(async () => (await tickFor(3).getAttribute('aria-label')) === 'Mark not watched'), 'episode 3 ticks again after an unmark')
 
   // Score menu: readable, picks, persists.
@@ -179,9 +184,9 @@ check(await until(() => dialog.isVisible()), 'release picker opens')
 check(
   await until(async () => {
     const text = await dialog.innerText()
-    return /seeders/.test(text) || /No release found/.test(text)
+    return /seeders/.test(text) || /No release found|couldn't search for releases/.test(text)
   }, 60_000),
-  'picker lists releases or says there are none',
+  'picker lists releases or says why there are none',
 )
 await page.screenshot({ path: `${shots}/features-picker.png` })
 await page.keyboard.press('Escape')
@@ -189,7 +194,7 @@ check(await until(() => dialog.isVisible().then((v) => !v)), 'picker closes on E
 
 // ---------------------------------------------------------------- browse: random
 await page.goto(`${BASE}/browse`, { waitUntil: 'domcontentloaded' })
-const random = page.getByRole('button', { name: /Random/ })
+const random = page.getByRole('button', { name: /Surprise me/ })
 await random.click()
 check(await until(() => page.url().includes('/anime/'), 30_000), 'random lands on a series page', page.url())
 await page.goto(`${BASE}/browse?genres=Romance,Comedy&formats=TV`, { waitUntil: 'domcontentloaded' })
@@ -197,17 +202,25 @@ let randomRequest
 page.on('request', (r) => {
   if (r.url().includes('/api/random')) randomRequest = r.url()
 })
-await page.getByRole('button', { name: /Random/ }).click()
+await page.getByRole('button', { name: /Surprise me/ }).click()
 check(await until(() => !!randomRequest), 'filtered random asks the server')
 check(/genres=Romance%2CComedy/.test(randomRequest ?? '') && /format=TV/.test(randomRequest ?? ''), 'random carries the genre and format filters', randomRequest)
 
 // ---------------------------------------------------------------- settings: orphans
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('tab', { name: 'Quality' }).click()
-const clean = page.getByRole('button', { name: 'Clean up' })
-check(await clean.isVisible(), 'orphan clean-up is offered')
-await clean.click()
-check(await until(() => page.getByText(/Removed \d+/).isVisible()), 'clean-up reports what it removed')
+// Two steps: Find lists what would go, then Delete N.
+const find = page.getByRole('button', { name: 'Find', exact: true })
+check(await until(() => find.isVisible()), 'orphan clean-up is offered')
+await find.click()
+check(
+  await until(
+    async () =>
+      (await page.getByText('Nothing orphaned.').isVisible()) ||
+      (await page.getByRole('button', { name: /^Delete \d+$/ }).isVisible()),
+  ),
+  'clean-up says what it found',
+)
 
 // ---------------------------------------------------------------- settings: preferred groups
 const groups = page.getByLabel('Preferred release groups')

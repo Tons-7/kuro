@@ -18,8 +18,7 @@ import (
 // shortened form of it rather than a different show.
 const shortFormCoverage = 0.4
 
-// Below this share of common vocabulary two names are different shows:
-// "Monster" and "Re:Monster" share half.
+// Below this share of common vocabulary two names are different shows: "Monster" and "Re:Monster" share half.
 const sameNameOverlap = 0.7
 
 // showIdentity is what a show goes by, prepared once per search.
@@ -130,8 +129,7 @@ func startsWith(tokens, prefix []string) bool {
 	return len(tokens) >= len(prefix) && slices.Equal(tokens[:len(prefix)], prefix)
 }
 
-// baseOf is the title before its subtitle: "Made in Abyss" of
-// "Made in Abyss: Retsujitsu no Ougonkyou".
+// baseOf is the title before its subtitle: "Made in Abyss" of "Made in Abyss: Retsujitsu no Ougonkyou".
 func baseOf(title string) string {
 	cut := len(title)
 	for _, sep := range []string{":", " - ", " – ", " — "} {

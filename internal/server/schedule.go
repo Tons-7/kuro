@@ -55,6 +55,9 @@ type scheduleItem struct {
 	// A late-night broadcast falls on a different date in Japan than it does
 	// for the viewer, and fansub sites quote the Japanese one.
 	JSTWeekday string `json:"jstWeekday"`
+
+	// The full show card, for the hover panel.
+	Show *discoverItem `json:"show,omitempty"`
 }
 
 type scheduleDay struct {
@@ -148,7 +151,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	for n, e := range entries {
 		media[n] = e.Media
 	}
-	s.remember(r, media)
+	shows := s.decorate(r, media)
 
 	onList, err := s.store.ListProgress(r.Context())
 	if err != nil {
@@ -159,7 +162,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	titles := s.store.TitleMode(r.Context(), 0)
 	items := make([]scheduleItem, 0, len(entries))
 
-	for _, e := range entries {
+	for n, e := range entries {
 		progress, listed := onList[e.MediaID]
 		if mineOnly && !listed {
 			continue
@@ -176,6 +179,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 			Format:   e.Media.Format,
 			OnList:   listed,
 			Progress: progress,
+			Show:     &shows[n],
 		}
 		if e.Media.Title.Romaji != nil {
 			item.Romaji = *e.Media.Title.Romaji

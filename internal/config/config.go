@@ -22,8 +22,7 @@ type Config struct {
 	MAL      MAL       `toml:"mal"`
 	Torrent  Torrent   `toml:"torrent"`
 	Indexers []Indexer `toml:"indexer"`
-	// Data is where the database and window profile go; empty means AppData.
-	// Relative to the exe folder.
+	// Data is where the database and window profile go; empty means AppData. Relative to the exe folder.
 	Data string `toml:"data_dir"`
 	// VLC is the player's binary or install folder; empty means the usual places.
 	VLC string `toml:"vlc_path"`
@@ -58,33 +57,31 @@ type Indexer struct {
 	Adult bool `toml:"adult"`
 }
 
-// Torrent tunes the rqbit engine. The defaults trade a little upload and an
-// open port for download speed, which is what most home connections want; a
-// user on a metered or locked-down network can dial them back here.
-// DefaultTorrentAPIAddr is where kuro's own rqbit listens.
-const DefaultTorrentAPIAddr = "127.0.0.1:3030"
+// DefaultListenPort is the peer port when none is set.
+const DefaultListenPort = 4240
 
+// Torrent tunes the built-in engine. The defaults favour download speed.
 type Torrent struct {
-	// APIAddr is rqbit's API. Loopback (default) is kuro's own; another host
-	// is an engine elsewhere, used as found and never spawned.
-	APIAddr string `toml:"api_addr"`
-	// UploadLimitBytes caps upload in bytes/sec. Public trackers give nothing
-	// back for seeding, but some upload feeds the tit-for-tat that keeps peers
-	// unchoking us, so a middling cap downloads faster than a tiny one.
+	// UploadLimitBytes caps upload in bytes/sec; some upload keeps peers unchoking us.
 	UploadLimitBytes int `toml:"upload_limit_bytes"`
-	// ListenPort is the peer port; 0 leaves rqbit's default (4240). Forwarding
-	// it — see UPnP — is what lets peers connect in, which is most of the speed.
+	// ListenPort is the peer port, DefaultListenPort when 0.
 	ListenPort int `toml:"listen_port"`
-	// PeerLimit is the max peers per torrent; 0 leaves rqbit's default.
+	// PeerLimit is the max peers per torrent; 0 is the engine's default.
 	PeerLimit int `toml:"peer_limit"`
-	// UPnP asks the router to forward ListenPort so peers can reach us. Nil
-	// defaults to on; behind a NAT without it the swarm is only the peers that
-	// happen to be reachable outbound, which is the usual cause of slow grabs.
+	// UPnP forwards ListenPort on the router so peers can reach us. Nil is on.
 	UPnP *bool `toml:"upnp"`
 }
 
 // UPnPEnabled reports the port-forward setting, on unless explicitly disabled.
 func (t Torrent) UPnPEnabled() bool { return t.UPnP == nil || *t.UPnP }
+
+// PeerPort is the port peers connect to.
+func (t Torrent) PeerPort() int {
+	if t.ListenPort > 0 {
+		return t.ListenPort
+	}
+	return DefaultListenPort
+}
 
 type AniList struct {
 	ClientID     string `toml:"client_id"`
@@ -186,6 +183,12 @@ func ExeName(base string) string {
 // bin/ if it is there, otherwise one the OS provides on PATH (a brew/apt/pacman
 // install), falling back to the bin/ path so an error names where it looked.
 func (c Config) Tool(base string) string {
+	// ffprobe from the same install as ffmpeg: a mixed pair disagrees on streams and codecs.
+	if base == "ffprobe" {
+		if sibling := filepath.Join(filepath.Dir(c.Tool("ffmpeg")), ExeName("ffprobe")); exists(sibling) {
+			return sibling
+		}
+	}
 	p := c.Path(ExeName(base))
 	if exists(p) {
 		return p
@@ -222,9 +225,6 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{Addr: "127.0.0.1:4321", dataDir: dataDir()}
-	// The engine defaults this too, but on its own copy; anything reading the
-	// address from the config would otherwise see an empty string.
-	cfg.Torrent.APIAddr = DefaultTorrentAPIAddr
 
 	path := filepath.Join(root, "config.toml")
 	switch _, err := toml.DecodeFile(path, &cfg); {
@@ -308,7 +308,7 @@ addr = "127.0.0.1:4321"
 # quotes ('D:\kuro\cache'). Restart after editing.
 # data_dir: database and window profile (default %LOCALAPPDATA%\kuro)
 # cache_dir: downloaded episodes, transcodes, thumbnails, updates
-# bin_dir: rqbit, ffmpeg, mpv, shaders
+# bin_dir: ffmpeg, mpv, shaders
 # data_dir = ""
 # cache_dir = "cache"
 # bin_dir = "bin"

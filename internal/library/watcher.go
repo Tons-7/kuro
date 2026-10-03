@@ -12,8 +12,7 @@ import (
 	"kuro/internal/store"
 )
 
-// Watcher polls followed shows for new episodes, raises notifications, and
-// optionally grabs them.
+// Watcher polls followed shows for new episodes, raises notifications, and optionally grabs them.
 type Watcher struct {
 	store   *store.Store
 	finder  *Finder

@@ -13,7 +13,7 @@ import (
 
 type TorrentRecord struct {
 	InfoHash  string
-	RqbitID   int
+	EngineID  int
 	Name      string
 	TotalSize int64
 	AnimeID   int
@@ -37,8 +37,7 @@ type PlaybackState struct {
 // threshold counts, so tapping the end of the bar doesn't mark it watched.
 const playedShare = 0.5
 
-// A single report cannot honestly claim more than this; the players report
-// every five to ten seconds.
+// A single report cannot honestly claim more than this; the players report every five to ten seconds.
 const maxPlayedPerReport = 120.0
 
 // finished is the one rule for "this episode is done": position reached the
@@ -74,12 +73,12 @@ func (s *Store) RecordTorrent(ctx context.Context, t TorrentRecord) error {
 
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO torrent (info_hash, rqbit_id, name, total_bytes, state, added_at, manual)
+		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at, manual)
 		VALUES (?,?,?,?,'live',?,?)
 		ON CONFLICT(info_hash) DO UPDATE SET
-		    rqbit_id=excluded.rqbit_id, state='live',
+		    engine_id=excluded.engine_id, state='live',
 		    manual=max(torrent.manual, excluded.manual)`,
-		t.InfoHash, t.RqbitID, t.Name, t.TotalSize, now, boolInt(t.Manual)); err != nil {
+		t.InfoHash, t.EngineID, t.Name, t.TotalSize, now, boolInt(t.Manual)); err != nil {
 		return err
 	}
 
@@ -143,15 +142,15 @@ func (s *Store) TorrentForEpisode(ctx context.Context, animeID int, epKey string
 	var t TorrentRecord
 	var manual int
 	err := s.r.QueryRowContext(ctx, `
-		SELECT f.info_hash, coalesce(t.rqbit_id, 0), coalesce(t.name, ''),
+		SELECT f.info_hash, coalesce(t.engine_id, 0), coalesce(t.name, ''),
 		       coalesce(f.size_bytes, 0), f.file_index, coalesce(f.path, ''),
 		       coalesce(t.manual, 0)
 		FROM torrent_file f
 		JOIN torrent t ON t.info_hash = f.info_hash
 		WHERE f.anime_id = ? AND f.ep_key = ? AND f.selected = 1
-		ORDER BY t.rqbit_id IS NULL, t.added_at DESC
+		ORDER BY t.engine_id IS NULL, t.added_at DESC
 		LIMIT 1`, animeID, epKey).
-		Scan(&t.InfoHash, &t.RqbitID, &t.Name, &t.TotalSize, &t.FileIndex, &t.FilePath, &manual)
+		Scan(&t.InfoHash, &t.EngineID, &t.Name, &t.TotalSize, &t.FileIndex, &t.FilePath, &manual)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TorrentRecord{}, false, nil
 	}
@@ -162,8 +161,7 @@ func (s *Store) TorrentForEpisode(ctx context.Context, animeID int, epKey string
 	return t, true, nil
 }
 
-// StartedTorrents is the set of info hashes, lower-cased, holding an episode
-// somebody has begun watching.
+// StartedTorrents is the set of info hashes, lower-cased, holding an episode somebody has begun watching.
 func (s *Store) StartedTorrents(ctx context.Context) (map[string]bool, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT DISTINCT lower(f.info_hash)
@@ -186,7 +184,7 @@ func (s *Store) StartedTorrents(ctx context.Context) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// ReconcileTorrents realigns stored rqbit ids with what the engine actually has.
+// ReconcileTorrents realigns stored engine ids with what the engine actually has.
 // Ids are per-session, so a stale one would evict the wrong file; anything the
 // engine no longer knows loses its id and is marked gone.
 func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (matched, orphaned int, err error) {
@@ -194,7 +192,7 @@ func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (mat
 	if len(live) == 0 {
 		return 0, 0, nil
 	}
-	rows, err := s.r.QueryContext(ctx, `SELECT info_hash, rqbit_id FROM torrent`)
+	rows, err := s.r.QueryContext(ctx, `SELECT info_hash, engine_id FROM torrent`)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -217,8 +215,7 @@ func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (mat
 		return 0, 0, err
 	}
 
-	// Both sides normalised here: rqbit varies hash case, and a case difference
-	// read as "gone" would orphan a live download.
+	// Both sides normalised: a case difference read as "gone" would orphan a live download.
 	byHash := make(map[string]int, len(live))
 	for hash, id := range live {
 		byHash[strings.ToLower(hash)] = id
@@ -235,7 +232,7 @@ func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (mat
 		if ok {
 			if r.id == nil || *r.id != id {
 				if _, err := tx.ExecContext(ctx,
-					`UPDATE torrent SET rqbit_id = ?, state = 'live' WHERE info_hash = ?`,
+					`UPDATE torrent SET engine_id = ?, state = 'live' WHERE info_hash = ?`,
 					id, r.hash); err != nil {
 					return matched, orphaned, err
 				}
@@ -245,7 +242,7 @@ func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (mat
 		}
 
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE torrent SET rqbit_id = NULL, state = 'gone' WHERE info_hash = ?`,
+			`UPDATE torrent SET engine_id = NULL, state = 'gone' WHERE info_hash = ?`,
 			r.hash); err != nil {
 			return matched, orphaned, err
 		}
@@ -272,7 +269,7 @@ type Download struct {
 	Kept      bool     `json:"kept"`
 	State     string   `json:"state"`
 	Paused    bool     `json:"paused"`
-	// Checking: rqbit re-verifying the file after a launch.
+	// Checking: the engine hashing data already on disk.
 	Checking bool    `json:"checking"`
 	Mbps     float64 `json:"mbps,omitempty"`
 	Peers    int     `json:"peers,omitempty"`
@@ -464,8 +461,7 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 	return watched, tx.Commit()
 }
 
-// thresholdFor is the fraction of an episode that counts as watched, honouring
-// a per-show override.
+// thresholdFor is the fraction of an episode that counts as watched, honouring a per-show override.
 func (s *Store) thresholdFor(ctx context.Context, animeID int) float64 {
 	prefs, err := s.Prefs(ctx, animeID)
 	if err != nil {

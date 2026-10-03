@@ -27,8 +27,7 @@ import (
 	"kuro/internal/store"
 )
 
-// Version is stamped by the build (-X kuro/internal/update.Version=...); a
-// "dev" build never updates itself.
+// Version is stamped by the build (-X kuro/internal/update.Version=...); a "dev" build never updates itself.
 var Version = "dev"
 
 const (

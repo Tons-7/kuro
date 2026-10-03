@@ -15,13 +15,13 @@ import (
 	"kuro/internal/torrent"
 )
 
-func restartFixture(t *testing.T, age time.Duration) (*Cache, *store.Store, *fakeRqbit) {
+func restartFixture(t *testing.T, age time.Duration) (*Cache, *store.Store, *fakeEngine) {
 	t.Helper()
 	old := forgetAge
 	forgetAge = age
 	t.Cleanup(func() { forgetAge = old })
 
-	engine := newFakeRqbit()
+	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 
@@ -43,7 +43,7 @@ func record(t *testing.T, st *store.Store, hash, name string, fileIndex int) {
 	t.Helper()
 	ctx := context.Background()
 	if err := st.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash: hash, RqbitID: 7, Name: name, FileIndex: fileIndex,
+		InfoHash: hash, EngineID: 7, Name: name, FileIndex: fileIndex,
 		FilePath: name, TotalSize: 1 << 30,
 	}); err != nil {
 		t.Fatal(err)
@@ -143,8 +143,7 @@ func TestForgettingWaitsOutTheAge(t *testing.T) {
 	}
 }
 
-// The engine losing a kept download says nothing about the file: while it is
-// still on disk, it stays listed.
+// The engine losing a kept download says nothing about the file: while it is on disk, it stays listed.
 func TestAKeptDownloadStillOnDiskStays(t *testing.T) {
 	c, st, engine := restartFixture(t, 0)
 	engine.ids[9] = "other"

@@ -34,6 +34,19 @@ export function relativeTime(unix: number): string {
   return delta >= 0 ? `in ${text}` : `${text} ago`
 }
 
+/** "10/13 eps" while airing, "13 eps" once it has finished, "10 eps" with no total. */
+export function episodeCount(anime: {
+  status?: string | null
+  episodes?: number | null
+  aired?: number | null
+}): string | null {
+  const { episodes, aired } = anime
+  if (anime.status === 'RELEASING' && aired && episodes && aired < episodes) return `${aired}/${episodes} eps`
+  if (episodes) return `${episodes} ${episodes === 1 ? 'ep' : 'eps'}`
+  if (aired) return `${aired} eps`
+  return null
+}
+
 export function airTime(unix: number): string {
   return new Date(unix * 1000).toLocaleTimeString(undefined, {
     hour: '2-digit',

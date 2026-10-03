@@ -16,8 +16,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// Cache keeps what you have watched on disk within a size budget, evicting
-// whole files oldest-first.
+// Cache keeps what you have watched on disk within a size budget, evicting whole files oldest-first.
 type Cache struct {
 	store   *store.Store
 	torrent *torrent.Client
@@ -153,9 +152,7 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 func evictionOrder(entries []store.CacheEntry, stalled map[string]bool) []store.CacheEntry {
 	held := map[string]bool{}
 	for _, e := range entries {
-		// Unfinished too: rqbit allocated the whole file at the start, so
-		// deleting one frees nothing and loses every byte transferred. A stalled
-		// one goes.
+		// Unfinished too: deleting one loses every byte transferred. A stalled one goes.
 		if e.Pinned || e.Kept || (!e.Complete && !stalled[strings.ToLower(e.InfoHash)]) {
 			held[e.InfoHash] = true
 		}
@@ -186,11 +183,10 @@ func evictionOrder(entries []store.CacheEntry, stalled map[string]bool) []store.
 	return append(plain, protected...)
 }
 
-// AutoDelete removes watched episodes of one show by the cache.autodelete rule:
-// "now" once watched, "keep2" once the two after it are watched too. Kept
-// downloads stay unless cache.autodelete_downloads says otherwise; pinned files
-// are playing; a torrent goes only when every file in it qualifies. Library
-// files are not cache entries and are never touched.
+// AutoDelete removes one show's watched episodes per cache.autodelete ("now",
+// or "keep2": once the two after are watched). Kept downloads only with
+// cache.autodelete_downloads; never pinned or library files; a torrent only
+// when all its files qualify.
 func (c *Cache) AutoDelete(ctx context.Context, animeID int) (int, error) {
 	if animeID == 0 {
 		return 0, nil
@@ -379,22 +375,21 @@ func (c *Cache) liveID(ctx context.Context, infoHash string) (int, bool) {
 	return 0, false
 }
 
-// Progress is what has been fetched, not what the file costs on disk: rqbit
-// reserves the full length up front.
+// Progress is what has been fetched, not what the file costs on disk: a seek
+// ahead writes far into the file before the bytes in between arrive.
 type Progress struct {
 	Bytes    int64 `json:"bytes"`
 	Total    int64 `json:"total"`
 	Finished bool  `json:"finished"`
 	Paused   bool  `json:"paused"`
-	// Checking: rqbit verifying the file after a launch, neither paused nor downloading.
+	// Checking: the engine hashing data already on disk, neither paused nor downloading.
 	Checking bool `json:"checking"`
 	// Mbps and Peers are what tell a slow download from a stalled one.
 	Mbps  float64 `json:"mbps"`
 	Peers int     `json:"peers"`
 }
 
-// Pause stops fetching without discarding what is already on disk. Resume
-// starts it again.
+// Pause stops fetching without discarding what is already on disk. Resume starts it again.
 func (c *Cache) Pause(ctx context.Context, infoHash string) error {
 	return c.setRunning(ctx, infoHash, false)
 }
@@ -437,8 +432,11 @@ func (c *Cache) Swarm(ctx context.Context, infoHash string) (mbps float64, peers
 	if err != nil || stats.Live == nil {
 		return 0, 0
 	}
-	return stats.Live.DownloadSpeed.Mbps, stats.Live.Snapshot.PeerStats.Live
+	return megabits(stats.Live.DownloadSpeed.Mbps), stats.Live.Snapshot.PeerStats.Live
 }
+
+// megabits converts the engine's MiB/s to the megabits/s everything shows.
+func megabits(mibps float64) float64 { return mibps * 8 * 1.048576 }
 
 func (c *Cache) Finished(ctx context.Context, infoHash string) bool {
 	if c.torrent == nil {
@@ -497,7 +495,7 @@ func (c *Cache) Progress(ctx context.Context) (map[string]Progress, error) {
 			Paused: stats.Live == nil && !stats.Finished && !stats.Checking(),
 		}
 		if stats.Live != nil {
-			p.Mbps = stats.Live.DownloadSpeed.Mbps
+			p.Mbps = megabits(stats.Live.DownloadSpeed.Mbps)
 			p.Peers = stats.Live.Snapshot.PeerStats.Live
 		}
 		out[strings.ToLower(t.InfoHash)] = p
@@ -505,8 +503,7 @@ func (c *Cache) Progress(ctx context.Context) (map[string]Progress, error) {
 	return out, nil
 }
 
-// rqbit answers before it has reloaded its session, so one absence means
-// "not yet", not "gone".
+// One absence is not trusted: a listing taken while the engine starts can be short.
 const forgetAfter = 2
 
 // A var so tests need not wait.
@@ -620,8 +617,7 @@ func (c *Cache) evict(ctx context.Context, e store.CacheEntry) error {
 	return c.store.DropTorrentCache(ctx, e.InfoHash)
 }
 
-// Sizes come from allocation, not progress: rqbit reserves each file's full
-// length up front, so the space is committed before the bytes arrive.
+// Sizes come from the disk, not progress; see Progress.
 func (c *Cache) refresh(ctx context.Context) error {
 	if c.torrent == nil {
 		return nil
@@ -685,8 +681,7 @@ func (c *Cache) refresh(ctx context.Context) error {
 	return nil
 }
 
-// heldBytes is what the torrent's files actually occupy on disk, which is what
-// the budget spends; progress alone misses a file rqbit has fully allocated.
+// heldBytes is what the torrent's files actually occupy on disk, which is what the budget spends.
 func heldBytes(detail torrent.Detail, fileIndex int) int64 {
 	var total int64
 	for i, f := range detail.Files {
@@ -752,27 +747,29 @@ func (c *Cache) adopt(ctx context.Context) error {
 	return nil
 }
 
-// SessionDirName is rqbit's torrent list, kept beside the downloads it names.
-const SessionDirName = "rqbit-session"
+// EngineSessionDirName holds the engine's torrent list; SessionDirName is
+// rqbit's old one, imported and removed on first run.
+const (
+	SessionDirName       = "rqbit-session"
+	EngineSessionDirName = "engine-session"
+)
 
 // Not downloads: transcode output, scrub sheets, a staged update and the
-// engine's session all live in the cache directory too.
-var ours = map[string]bool{"hls": true, "thumbs": true, "update": true, SessionDirName: true}
+// engines' sessions all live in the cache directory too.
+var ours = map[string]bool{"hls": true, "thumbs": true, "update": true, SessionDirName: true, EngineSessionDirName: true}
 
 type Orphan struct {
 	Name  string `json:"name"`
 	Bytes int64  `json:"bytes"`
 }
 
-// ErrEngineLoading: mid-reload, live downloads would look orphaned.
-var ErrEngineLoading = errors.New("the torrent engine is still loading its downloads; try again in a minute")
-
 // A var so tests need not wait.
 var orphanSettle = 3 * time.Second
 
 // Orphans are cache entries no download claims: listed on dryRun, else deleted.
+// Records claim their files whatever the engine holds.
 func (c *Cache) Orphans(ctx context.Context, dryRun bool) ([]Orphan, error) {
-	first, err := c.torrent.List(ctx)
+	list, err := c.torrent.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -780,30 +777,26 @@ func (c *Cache) Orphans(ctx context.Context, dryRun bool) ([]Orphan, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(first.Torrents) == 0 && len(known) > 0 {
-		return nil, ErrEngineLoading
-	}
+	torrents := list.Torrents
 	if !dryRun {
-		// Two listings that agree: rqbit answers before it has reloaded everything.
+		// A download started meanwhile has files and no record yet.
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(orphanSettle):
 		}
-		second, err := c.torrent.List(ctx)
+		again, err := c.torrent.List(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if len(second.Torrents) != len(first.Torrents) {
-			return nil, ErrEngineLoading
-		}
+		torrents = append(torrents, again.Torrents...)
 	}
 
 	keep := map[string]bool{}
 	for _, name := range known {
 		keep[strings.ToLower(name)] = true
 	}
-	for _, t := range first.Torrents {
+	for _, t := range torrents {
 		keep[strings.ToLower(t.Name)] = true
 		// On disk: its folder, or each file when written straight into the cache.
 		d, err := c.torrent.Details(ctx, t.ID)

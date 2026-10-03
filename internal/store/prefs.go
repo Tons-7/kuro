@@ -34,10 +34,6 @@ var Defaults = map[string]string{
 	// refused (sometimes it's the only one). Same order decides which track plays.
 	"subtitle.languages": `["en"]`,
 
-	// What to show over an English dub. "full" is the safe default (a rewritten
-	// dub script won't match the subtitles); "signs" shows only text and lyrics.
-	"subtitle.on_dub": "full",
-
 	"display.titles": TitleEnglish,
 	// How the app window opens: fullscreen or maximized. Takes effect next launch.
 	"window.mode": "fullscreen",
@@ -50,6 +46,8 @@ var Defaults = map[string]string{
 
 	"cache.budget_bytes":  "5368709120",
 	"cache.prefetch_next": "false",
+	// How many episodes ahead prefetch downloads while it is on: 1 or 2.
+	"cache.prefetch_count": "1",
 	// On: an episode keeps downloading after the player closes, so returning to it
 	// (and its second-half subtitles) needs no swarm.
 	"cache.prefetch_full": "true",
@@ -61,7 +59,6 @@ var Defaults = map[string]string{
 
 	"sync.progress_at":  "0.9",
 	"sync.poll_seconds": "900",
-	"sync.add_missing":  "true",
 
 	"notify.enabled":      "true",
 	"notify.releases":     "sub",
@@ -459,8 +456,7 @@ func (s *Store) Bookmarks(ctx context.Context, p Paging) (Page[LibraryItem], err
 	return NewPage(items, p, total), nil
 }
 
-// RecentlyWatched is ordered by when playback last happened, regardless of
-// whether the episode was finished.
+// RecentlyWatched is ordered by when playback last happened, regardless of whether the episode was finished.
 const recentQuery = `
 SELECT ` + libraryColumns + `
 FROM anime a

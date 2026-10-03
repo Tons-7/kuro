@@ -43,7 +43,7 @@ func TestAutoDownloadIsNotDuplicatedForAFollowedShow(t *testing.T) {
 	ctx := context.Background()
 	seedAnime(t, s, 1)
 
-	if err := s.SetFollow(ctx, Follow{AnimeID: 1}, true); err != nil {
+	if err := s.SetFollow(ctx, 1, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetAnimePref(ctx, 1, "autodownload.enabled", "true"); err != nil {

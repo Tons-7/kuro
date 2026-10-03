@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-func addTorrent(t *testing.T, s *Store, hash string, rqbitID int) {
+func addTorrent(t *testing.T, s *Store, hash string, engineID int) {
 	t.Helper()
 	seedAnime(t, s, 1)
 
 	err := s.RecordTorrent(context.Background(), TorrentRecord{
-		InfoHash: hash, RqbitID: rqbitID, Name: "release " + hash,
+		InfoHash: hash, EngineID: engineID, Name: "release " + hash,
 		TotalSize: 1 << 30, AnimeID: 1, EpKey: "e1", FileIndex: 0, FilePath: "a.mkv",
 	})
 	if err != nil {
@@ -18,10 +18,10 @@ func addTorrent(t *testing.T, s *Store, hash string, rqbitID int) {
 	}
 }
 
-func rqbitID(t *testing.T, s *Store, hash string) (int, bool) {
+func engineID(t *testing.T, s *Store, hash string) (int, bool) {
 	t.Helper()
 	var id *int
-	err := s.r.QueryRow(`SELECT rqbit_id FROM torrent WHERE info_hash = ?`, hash).Scan(&id)
+	err := s.r.QueryRow(`SELECT engine_id FROM torrent WHERE info_hash = ?`, hash).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func rqbitID(t *testing.T, s *Store, hash string) (int, bool) {
 	return *id, true
 }
 
-// rqbit hands out ids per session and reuses them. Trusting an id recorded
+// The engine hands out ids per session and reuses them. Trusting an id recorded
 // before a restart is how a cache sweep deletes the wrong anime.
 func TestReconcileRepointsMovedIDs(t *testing.T) {
 	s := newTestStore(t)
@@ -49,10 +49,10 @@ func TestReconcileRepointsMovedIDs(t *testing.T) {
 		t.Fatalf("matched=%d orphaned=%d", matched, orphaned)
 	}
 
-	if id, _ := rqbitID(t, s, "aaaa"); id != 2 {
+	if id, _ := engineID(t, s, "aaaa"); id != 2 {
 		t.Errorf("aaaa kept id %d, want 2", id)
 	}
-	if id, _ := rqbitID(t, s, "bbbb"); id != 1 {
+	if id, _ := engineID(t, s, "bbbb"); id != 1 {
 		t.Errorf("bbbb kept id %d, want 1", id)
 	}
 }
@@ -74,7 +74,7 @@ func TestReconcileClearsUnknownTorrents(t *testing.T) {
 		t.Fatalf("matched=%d orphaned=%d", matched, orphaned)
 	}
 
-	if id, ok := rqbitID(t, s, "bbbb"); ok {
+	if id, ok := engineID(t, s, "bbbb"); ok {
 		t.Errorf("forgotten torrent still carries id %d", id)
 	}
 
@@ -87,8 +87,7 @@ func TestReconcileClearsUnknownTorrents(t *testing.T) {
 	}
 }
 
-// rqbit reports hashes in whatever case it likes; a case difference must not
-// read as "this torrent disappeared".
+// A hash-case difference must not read as "this torrent disappeared".
 func TestReconcileIsCaseInsensitive(t *testing.T) {
 	s := newTestStore(t)
 
@@ -100,13 +99,12 @@ func TestReconcileIsCaseInsensitive(t *testing.T) {
 	if matched != 1 || orphaned != 0 {
 		t.Fatalf("matched=%d orphaned=%d", matched, orphaned)
 	}
-	if id, _ := rqbitID(t, s, "abcdef"); id != 5 {
+	if id, _ := engineID(t, s, "abcdef"); id != 5 {
 		t.Errorf("id = %d, want 5", id)
 	}
 }
 
-// rqbit answers before it has reloaded its session, so an empty listing at
-// startup is no evidence that anything is gone.
+// An empty listing at startup is no evidence that anything is gone.
 func TestReconcileLeavesEverythingOnAnEmptyListing(t *testing.T) {
 	s := newTestStore(t)
 
@@ -118,7 +116,7 @@ func TestReconcileLeavesEverythingOnAnEmptyListing(t *testing.T) {
 	if matched != 0 || orphaned != 0 {
 		t.Fatalf("matched=%d orphaned=%d", matched, orphaned)
 	}
-	if id, ok := rqbitID(t, s, "aaaa"); !ok || id != 1 {
+	if id, ok := engineID(t, s, "aaaa"); !ok || id != 1 {
 		t.Fatalf("the stored id was cleared: %d %v", id, ok)
 	}
 }

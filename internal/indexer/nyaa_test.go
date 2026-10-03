@@ -177,8 +177,7 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
-// The RSS feed carries an infohash but no magnet link, so it has to be rebuilt
-// with Nyaa's own tracker list.
+// The RSS feed carries an infohash but no magnet link, so it has to be rebuilt with Nyaa's own tracker list.
 func TestMagnet(t *testing.T) {
 	tr := Torrent{Title: "[Group] Show - 01 [1080p]", InfoHash: "abc123"}
 	magnet := tr.Magnet()
@@ -233,8 +232,7 @@ func TestMultiDedupesByInfoHash(t *testing.T) {
 	}
 }
 
-// Nyaa's counts win where both have the torrent; TokyoTosho's silence stays
-// silence where only it does.
+// Nyaa's counts win where both have the torrent; TokyoTosho's silence stays silence where only it does.
 func TestMultiPrefersCountedPeersOverNone(t *testing.T) {
 	m := Multi{Sources: []Source{
 		fakeSource{name: "tokyotosho", results: []Torrent{

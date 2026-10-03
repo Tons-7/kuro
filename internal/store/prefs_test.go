@@ -229,7 +229,7 @@ func TestLocalStateWorksForCorpusOnlyAnime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.SetFollow(ctx, Follow{AnimeID: 154587}, true); err != nil {
+	if err := s.SetFollow(ctx, 154587, true); err != nil {
 		t.Fatalf("follow a corpus-only anime: %v", err)
 	}
 	if err := s.SetBookmark(ctx, 154587, Bookmark{Favourite: true}); err != nil {
@@ -259,8 +259,7 @@ func TestLocalStateWorksForCorpusOnlyAnime(t *testing.T) {
 	}
 }
 
-// A row already imported from AniList must not be overwritten by the sparse
-// corpus version.
+// A row already imported from AniList must not be overwritten by the sparse corpus version.
 func TestEnsureAnimeDoesNotClobberImportedRow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

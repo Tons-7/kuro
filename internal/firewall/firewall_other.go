@@ -44,6 +44,35 @@ func Check(ctx context.Context, port int, _ string) (Status, error) {
 	return Status{}, nil
 }
 
+// CheckPeers is Check for the torrent peer port, TCP and UDP from anywhere.
+func CheckPeers(ctx context.Context, port int, _ string) (Status, error) {
+	switch runtime.GOOS {
+	case "linux":
+		if active(ctx, "firewalld") {
+			return Status{
+				Firewall: "firewalld",
+				Hint:     "firewalld is running and keeps torrent peers from connecting in; downloads find fewer peers.",
+				Command: fmt.Sprintf("sudo firewall-cmd --permanent --add-port=%d/tcp --add-port=%d/udp && sudo firewall-cmd --reload",
+					port, port),
+			}, nil
+		}
+		if active(ctx, "ufw") {
+			return Status{
+				Firewall: "ufw",
+				Hint:     "ufw is running and keeps torrent peers from connecting in; downloads find fewer peers.",
+				Command:  fmt.Sprintf("sudo ufw allow %d", port),
+			}, nil
+		}
+	case "darwin":
+		return Check(ctx, port, "")
+	}
+	return Status{}, nil
+}
+
+func AllowPeers(context.Context, int, string) error {
+	return errors.New("kuro changes the firewall only on Windows; run the command shown instead")
+}
+
 func active(ctx context.Context, unit string) bool {
 	out, err := exec.CommandContext(ctx, "systemctl", "is-active", unit).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "active"

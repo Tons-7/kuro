@@ -38,8 +38,7 @@ func TestBareNumberBeforeTheQualityRun(t *testing.T) {
 	}
 }
 
-// The 264 of "H.264" is a codec, not episode 264: packs and films named that way
-// vanished from results.
+// The 264 of "H.264" is a codec, not episode 264: packs and films named that way vanished from results.
 func TestCodecIsNotABareEpisode(t *testing.T) {
 	for _, name := range []string{
 		"[FLE] The Apothecary Diaries - S02 (BD Remux 1080p H.264 FLAC) [Dual Audio]",
@@ -97,8 +96,7 @@ func TestResolutionGluedToTheSource(t *testing.T) {
 	}
 }
 
-// A finale marker belongs to the episode, not the title, or short titles fail
-// the show check.
+// A finale marker belongs to the episode, not the title, or short titles fail the show check.
 func TestFinaleMarkerLeavesTheTitle(t *testing.T) {
 	for _, name := range []string{
 		"[Erai-raws] Oshi no Ko - 12 END [1080p]",

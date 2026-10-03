@@ -78,13 +78,6 @@ func NewPrefetcher(s *store.Store, f *Finder, tc *torrent.Client, log *slog.Logg
 	}
 }
 
-// Downloading the next episode spends the connection the episode on screen is
-// using, so it stays opt-in.
-func (p *Prefetcher) wanted() bool {
-	global, err := p.store.Prefs(context.Background(), 0)
-	return err == nil && global.Bool("cache.prefetch_next")
-}
-
 // Resolving is just an indexer search — no download, nothing added to the
 // engine — so it has its own switch, on by default, not the download one.
 func (p *Prefetcher) prepareWanted() bool {
@@ -96,22 +89,27 @@ func prepareKey(animeID, episode int) string {
 	return fmt.Sprintf("prepare:%d/%d", animeID, episode)
 }
 
-// Opt-in: it shares bandwidth with the episode playing, which on a slow line
-// stalls the one on screen. Failure is silent, it is only an optimisation.
+// ahead is how many episodes to download past the one playing: 0, 1 or 2.
+func (p *Prefetcher) ahead() int {
+	global, err := p.store.Prefs(context.Background(), 0)
+	if err != nil || !global.Bool("cache.prefetch_next") {
+		return 0
+	}
+	return min(max(global.Int("cache.prefetch_count"), 1), 2)
+}
+
+// Opt-in: it shares the line with the episode playing. Failure is silent.
+// The second episode waits for the first to land rather than halve the line.
 func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences) {
 	if p == nil || p.torrent == nil || animeID == 0 || episode <= 0 {
 		return
 	}
-	if !p.wanted() {
+	count := p.ahead()
+	if count == 0 {
 		return
 	}
 
-	next, err := p.store.NextEpisode(context.Background(), animeID, episode)
-	if err != nil || next == 0 {
-		return
-	}
-	key := fmt.Sprintf("%d/%d", animeID, next)
-
+	key := fmt.Sprintf("%d/%d", animeID, episode)
 	p.mu.Lock()
 	if _, busy := p.running[key]; busy {
 		p.mu.Unlock()
@@ -129,14 +127,33 @@ func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences)
 			close(done)
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(count)*30*time.Minute)
 		defer cancel()
 
-		if _, _, err := p.fetch(ctx, animeID, next, season, prefs, false); err != nil {
-			p.log.Debug("prefetch skipped", "anime", animeID, "episode", next, "err", err)
+		at := episode
+		for i := range count {
+			next, err := p.store.NextEpisode(ctx, animeID, at)
+			if err != nil || next == 0 {
+				return
+			}
+			at = next
+			id, started, err := p.fetch(ctx, animeID, next, season, prefs, false)
+			if err != nil {
+				p.log.Debug("prefetch skipped", "anime", animeID, "episode", next, "err", err)
+				return
+			}
+			if started && i < count-1 {
+				if err := p.torrent.Await(ctx, id, prefetchStall); err != nil {
+					p.log.Debug("prefetch stopped waiting", "anime", animeID, "episode", next, "err", err)
+					return
+				}
+			}
 		}
 	}()
 }
+
+// A prefetch idle this long is no longer waited on.
+const prefetchStall = 3 * time.Minute
 
 // Prepare resolves the episode after this one. Doing the indexer search and
 // metadata lookup now makes pressing next immediate later.
@@ -405,9 +422,11 @@ func (p *Prefetcher) inEngine(ctx context.Context, animeID, episode int) bool {
 // Dead swarms cost the inspect timeout each; three is enough to get past them.
 const fetchAttempts = 3
 
-// fetch reports the rqbit id it started and whether it started anything — rqbit
-// numbers from zero, so the id alone cannot say. keep puts the episode in the
-// kept tier, which the cache budget does not apply to.
+// How long a queued download may take for its first bytes: a slow swarm's first big piece, not forever.
+const prefetchWarmCap = 5 * time.Minute
+
+// fetch reports the torrent id it started and whether it started anything.
+// keep puts the episode in the kept tier, which the cache budget does not apply to.
 func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, prefs score.Preferences, keep bool) (int, bool, error) {
 	if p.inEngine(ctx, animeID, episode) {
 		return 0, false, nil
@@ -446,8 +465,7 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 		return 0, false, fmt.Errorf("no release found")
 	}
 
-	// Playback races candidates; a queued download used to commit to the first
-	// and give up when its swarm was dead. Walk the ranked list instead.
+	// Walk the ranked list: the first pick's swarm may be dead.
 	var best score.Result
 	var inspected, added *torrent.Torrent
 	var file torrent.File
@@ -487,7 +505,10 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 	p.claim(best.Torrent.InfoHash)
 	err = p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
 	if err == nil {
-		err = p.torrent.Prewarm(ctx, added.ID, index, 2<<20)
+		// The stream client waits as long as its context.
+		warm, cancel := context.WithTimeout(ctx, prefetchWarmCap)
+		err = p.torrent.Prewarm(warm, added.ID, index, 2<<20)
+		cancel()
 	}
 	if err != nil {
 		// Cancelled or dead half way: stopped, not left fetching unrecorded.
@@ -499,7 +520,7 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 
 	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
 		InfoHash:  best.Torrent.InfoHash,
-		RqbitID:   added.ID,
+		EngineID:  added.ID,
 		Name:      inspected.Details.Name,
 		TotalSize: file.Length,
 		AnimeID:   animeID,

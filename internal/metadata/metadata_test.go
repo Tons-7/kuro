@@ -88,8 +88,7 @@ func TestEpisodesEmptyResponse(t *testing.T) {
 	}
 }
 
-// The dataset is an array of shows, each with nested mappings and an array of
-// episode objects.
+// The dataset is an array of shows, each with nested mappings and an array of episode objects.
 const fillerJSON = `[
   {"slug":"naruto","title":"Naruto","mappings":{"anilist_id":20,"mal_id":20},
    "episodes":[

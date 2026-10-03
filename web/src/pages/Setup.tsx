@@ -73,8 +73,10 @@ export function SetupPage() {
                   {c.required && !c.present && <Badge tone="recap">Required</Badge>}
                   {!c.required && <Badge>Optional</Badge>}
                   {c.version && <Badge tone="accent">{c.version}</Badge>}
+                  {c.system && <Badge>On this system</Badge>}
                 </div>
                 <p className="mt-1 text-sm text-base-400">{c.purpose}</p>
+                {c.problem && <p className="mt-1 text-xs text-recap">{c.problem}</p>}
                 {c.needs && !components.find((x) => x.name === c.needs)?.present && (
                   <p className="mt-1 text-xs text-base-500">Needs {c.needs} to be useful.</p>
                 )}

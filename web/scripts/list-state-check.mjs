@@ -53,7 +53,8 @@ if (pick) {
 await page.goto(`${BASE}/browse?q=${encodeURIComponent('Chainsaw Man')}`, { waitUntil: 'domcontentloaded' })
 const card = page.locator(`a[href="/anime/${ANIME}"]`).first()
 check(await until(() => card.isVisible()), 'the card is on the browse page')
-await card.hover()
+// Forced: the info panel the hover opens covers the card, which Playwright reads as interception.
+await card.hover({ force: true })
 
 const tag = page.locator(`:below(a[href="/anime/${ANIME}"])`)
 const bookmark = page

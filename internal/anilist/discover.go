@@ -21,8 +21,7 @@ const (
 	SortFavourite = "favourites"
 )
 
-// RisingWindow gives the number of days a sort covers, and whether it is one
-// of the computed windows at all.
+// RisingWindow gives the number of days a sort covers, and whether it is one of the computed windows at all.
 func RisingWindow(sort string) (int, bool) {
 	switch strings.ToLower(sort) {
 	case SortWeek:
@@ -118,8 +117,7 @@ func (c *Client) Discover(ctx context.Context, sort string, page, perPage int) (
 		season, year := NextSeason(time.Now())
 		filters = fmt.Sprintf(", season: %s, seasonYear: %d", season, year)
 	case SortTopRated:
-		// Without a floor the top of the list is obscure titles with three
-		// votes and a perfect score.
+		// Without a floor the top of the list is obscure titles with three votes and a perfect score.
 		filters = ", popularity_greater: 5000"
 	}
 

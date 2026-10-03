@@ -48,8 +48,7 @@ func TestAniListRunWithoutImporterOnlyPushes(t *testing.T) {
 	}
 }
 
-// A rejected token ends the run before the pull: every entry retried would
-// only burn the rate limit.
+// A rejected token ends the run before the pull: every entry retried would only burn the rate limit.
 func TestAniListRunStopsOnUnauthorized(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

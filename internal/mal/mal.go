@@ -65,8 +65,7 @@ func WithAPI(u string) Option       { return func(c *Client) { c.api = u } }
 func WithOAuthBase(u string) Option { return func(c *Client) { c.oauth = u } }
 func WithoutRateLimit() Option      { return func(c *Client) { c.limiter = rate.NewLimiter(rate.Inf, 1) } }
 
-// withBackoff shortens the retry delay so tests can exercise retries without
-// waiting seven seconds for them.
+// withBackoff shortens the retry delay so tests can exercise retries without waiting seven seconds.
 func withBackoff(f func(int) time.Duration) Option { return func(c *Client) { c.backoff = f } }
 func OnToken(f func(Token)) Option                 { return func(c *Client) { c.onToken = f } }
 func WithCredentials(id, secret string) Option {
@@ -100,8 +99,7 @@ func (c *Client) Token() Token {
 	return c.token
 }
 
-// SetCredentials swaps the registered application, for when they are saved in
-// the app long after startup.
+// SetCredentials swaps the registered application, for when they are saved in the app long after startup.
 func (c *Client) SetCredentials(id, secret string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

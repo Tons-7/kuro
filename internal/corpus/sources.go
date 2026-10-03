@@ -32,8 +32,7 @@ const (
 	DeadIDsURL  = "https://github.com/manami-project/anime-offline-database/releases/download/latest/anilist-minified.json.zst"
 	AniDBURL    = "https://anidb.net/api/anime-titles.dat.gz"
 
-	// AniDB rejects requests without a distinct User-Agent and allows one
-	// download per day.
+	// AniDB rejects requests without a distinct User-Agent and allows one download per day.
 	userAgent = "kuro/0.1 (personal media library)"
 )
 

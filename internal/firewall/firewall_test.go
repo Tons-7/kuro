@@ -53,17 +53,24 @@ func TestCheckReadsThisMachine(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	st, err := Check(ctx, 4321, exe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !st.Supported {
-		t.Error("not marked supported on Windows")
-	}
-	for _, n := range st.Networks {
-		if n.Category == "" {
-			t.Errorf("network %+v has no category", n)
+	lan, lanErr := Check(ctx, 4321, exe)
+	peers, peersErr := CheckPeers(ctx, 4240, exe)
+	for name, c := range map[string]struct {
+		st  Status
+		err error
+	}{"lan": {lan, lanErr}, "peers": {peers, peersErr}} {
+		st, err := c.st, c.err
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
+		if !st.Supported {
+			t.Errorf("%s: not marked supported on Windows", name)
+		}
+		for _, n := range st.Networks {
+			if n.Category == "" {
+				t.Errorf("%s: network %+v has no category", name, n)
+			}
+		}
+		t.Logf("%s: %+v", name, st)
 	}
-	t.Logf("%+v", st)
 }

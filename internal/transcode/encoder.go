@@ -9,8 +9,7 @@ import (
 	"time"
 )
 
-// Hardware encoders, fastest first. Only H.264: it is the one codec every
-// browser decodes.
+// Hardware encoders, fastest first. Only H.264: it is the one codec every browser decodes.
 var hardwareEncoders = []string{"h264_nvenc", "h264_qsv", "h264_amf"}
 
 // IsHardwareEncoder reports whether a DetectEncoder result is a GPU encoder, so
@@ -39,6 +38,40 @@ func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string 
 		return codec
 	}
 	return softwareEncoder
+}
+
+// CanEncode reports whether ffmpeg can make the H.264 kuro streams: libx264,
+// or a hardware encoder that works here. Some builds (Fedora's ffmpeg-free)
+// ship without libx264.
+func CanEncode(ctx context.Context, ffmpeg string) bool {
+	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders").Output()
+	if err != nil {
+		return false
+	}
+	available := string(out)
+	if strings.Contains(available, " "+softwareEncoder+" ") {
+		return true
+	}
+	for _, codec := range hardwareEncoders {
+		if strings.Contains(available, codec) && trialEncode(ctx, ffmpeg, codec) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Version is the version ffmpeg or ffprobe reports, or "".
+func Version(ctx context.Context, binary string) string {
+	out, err := exec.CommandContext(ctx, binary, "-hide_banner", "-version").Output()
+	if err != nil {
+		return ""
+	}
+	// "ffmpeg version 7.1-full_build-www.gyan.dev Copyright ..."
+	fields := strings.Fields(string(out))
+	if len(fields) >= 3 && fields[1] == "version" {
+		return fields[2]
+	}
+	return ""
 }
 
 // trialEncode runs a second of 10-bit frames through the encoder with a

@@ -9,8 +9,7 @@ export function youtubeID(url?: string | null): string | undefined {
   return m?.[1]
 }
 
-// The trailer over the page it came from, not a new tab: Escape or the X
-// brings the page straight back.
+// The trailer over the page it came from, not a new tab: Escape or the X brings the page straight back.
 export function TrailerOverlay({ videoId, onClose }: { videoId: string; onClose: () => void }) {
   const close = useCallback(() => onClose(), [onClose])
   const dialog = useRef<HTMLDivElement>(null)

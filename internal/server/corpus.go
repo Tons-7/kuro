@@ -186,10 +186,6 @@ func (s *Server) cleanOrphans(w http.ResponseWriter, r *http.Request) {
 	}
 
 	files, err := s.cache.Orphans(r.Context(), r.Method == http.MethodGet)
-	if errors.Is(err, library.ErrEngineLoading) {
-		send(w, http.StatusConflict, map[string]any{"error": err.Error()})
-		return
-	}
 	if err != nil {
 		s.fail(w, "clean orphans", err)
 		return
@@ -249,8 +245,7 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Related entries are recorded as bare ids, so any never imported would
-	// render as a blank row.
+	// Related entries are recorded as bare ids, so any never imported would render as a blank row.
 	var missing []int
 	for _, season := range fr.Seasons {
 		if season.Romaji == "" {

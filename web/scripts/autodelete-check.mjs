@@ -6,11 +6,12 @@
 //
 // Streams two real episodes. SKIP_BUILD=1 reuses the last build.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync, symlinkSync, existsSync, openSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, existsSync, openSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { chromium } from 'playwright'
+import { linkBin } from './harness-lib.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const webDir = resolve(scriptDir, '..')
@@ -89,11 +90,11 @@ try {
   stage(`scratch instance at ${scratch}`)
   rmSync(scratch, { recursive: true, force: true })
   for (const d of [scratch, root, appdata]) mkdirSync(d, { recursive: true })
-  symlinkSync(join(repo, 'bin'), join(root, 'bin'), process.platform === 'win32' ? 'junction' : 'dir')
+  linkBin(join(repo, 'bin'), join(root, 'bin'))
   writeFileSync(
     join(root, 'config.toml'),
     // Its own engine: the default port is the real app's, and this test deletes downloads.
-    `addr = "127.0.0.1:${PORT}"\n\n[torrent]\napi_addr = "127.0.0.1:3034"\nlisten_port = 4344\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "${NYAA}"\n\n[[indexer]]\ntype = "tokyotosho"\nurl = "${TOKYO}"\n`,
+    `addr = "127.0.0.1:${PORT}"\n\n[torrent]\nlisten_port = 4344\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "${NYAA}"\n\n[[indexer]]\ntype = "tokyotosho"\nurl = "${TOKYO}"\n`,
   )
 
   if (process.env.SKIP_BUILD !== '1') {
@@ -109,11 +110,8 @@ try {
   const logFd = openSync(serverLog, 'w')
   server = spawn(kuroExe, [], {
     cwd: root,
-    // rqbit's session lives in Windows known folders; shared, it loads the real app's torrents.
-    env: {
-      ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, KURO_NO_WINDOW: '1',
-      RQBIT_SESSION_PERSISTENCE_LOCATION: join(scratch, 'rqbit-session'), RQBIT_DHT_PERSISTENCE_DISABLE: 'true',
-    },
+    // APPDATA too: the engine imports rqbit's per-user session when it has none.
+    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, KURO_NO_WINDOW: '1' },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })

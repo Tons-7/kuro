@@ -1,8 +1,8 @@
 // Package proc ties the lifetime of spawned helpers to this process.
 //
-// kuro runs rqbit and an ffmpeg per stream. A clean exit stops them, but a crash
+// kuro runs an ffmpeg per stream and mpv. A clean exit stops them, but a crash
 // or closing the window does not, and on Windows killing a parent leaves its
-// children running — so abrupt exits leak seeding rqbit and resident ffmpeg.
+// children running.
 package proc
 
 import (

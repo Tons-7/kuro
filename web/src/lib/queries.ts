@@ -203,8 +203,7 @@ export function useSetPref() {
     mutationFn: (v: { key: string; value: string; animeId?: number }) =>
       api.post('/api/prefs', v),
     onSuccess: (_res, v) => {
-      // Titles are picked server-side on nearly every list, wherever the
-      // setting was changed from.
+      // Titles are picked server-side on nearly every list, wherever the setting was changed from.
       if (v.key === 'display.titles') {
         void qc.invalidateQueries()
         return
@@ -269,6 +268,10 @@ export interface SetupComponent {
   needs?: string
   /** A package-manager command, for what kuro cannot fetch on this OS. */
   manual?: string
+  /** Found on PATH rather than downloaded by kuro. */
+  system?: boolean
+  /** Why one that is there cannot be used. */
+  problem?: string
 }
 
 export interface SetupProgress {
@@ -305,11 +308,7 @@ export interface SetupState {
   progress: SetupProgress[]
 }
 
-/**
- * Shared so the setup page and the first-run nudge cannot disagree about the
- * shape of one cached answer: whichever asked first would otherwise decide what
- * the other received.
- */
+/** Shared so the setup page and the first-run nudge read one cached answer. */
 export function useSetup(options?: {
   refetchInterval?: UseQueryOptions<SetupState>['refetchInterval']
 }) {

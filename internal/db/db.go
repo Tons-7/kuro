@@ -51,8 +51,7 @@ func Open(path string) (*DB, error) {
 	}
 	readers := max(4, runtime.NumCPU())
 	read.SetMaxOpenConns(readers)
-	// Idle defaults to two, so a burst reopens connections and re-runs every
-	// pragma on each one.
+	// Idle defaults to two, so a burst reopens connections and re-runs every pragma on each one.
 	read.SetMaxIdleConns(readers)
 	if err := read.Ping(); err != nil {
 		write.Close()

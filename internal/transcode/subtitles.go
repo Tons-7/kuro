@@ -37,8 +37,7 @@ type Subtitles struct {
 	busy map[string]*sync.Mutex
 }
 
-// Font extraction sets its working directory to the output folder, so the
-// path must be absolute.
+// Font extraction sets its working directory to the output folder, so the path must be absolute.
 func NewSubtitles(ffmpeg string) *Subtitles {
 	return &Subtitles{
 		ffmpeg: absolute(ffmpeg),
@@ -205,11 +204,9 @@ const (
 	aroundLimit  = 20 * time.Second
 )
 
-// ExtractAround reads the track near the playhead and merges it in. A read
-// from the start stops being useful once the viewer is past the downloaded
-// opening: ffmpeg crawls the gigabytes of holes in between and times out with
-// only the first lines. Seeking goes straight to what is playing, which is
-// downloaded because it is playing.
+// ExtractAround reads the track near the playhead and merges it in. Reading
+// from the start would crawl the undownloaded middle and time out; what is
+// playing is downloaded.
 func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track int, codec string, at float64) (string, error) {
 	path := filepath.Join(dir, fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec)))
 

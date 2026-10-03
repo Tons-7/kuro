@@ -123,10 +123,13 @@ type Prober struct {
 
 func NewProber(ffprobe string) *Prober { return &Prober{ffprobe: ffprobe} }
 
+// A slow swarm can take minutes over the header.
+const probeLimit = 3 * time.Minute
+
 // Probe inspects the source. It reads over HTTP directly from the torrent
 // engine, so only the header is fetched rather than the whole file.
 func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, probeLimit)
 	defer cancel()
 
 	// -v error rather than quiet: diagnostics go to stderr so stdout JSON stays
@@ -153,7 +156,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 			return nil, fmt.Errorf("ffprobe: %w: %s", err, firstLine(reason))
 		}
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("ffprobe: %w: gave up after 60s reading the source", err)
+			return nil, fmt.Errorf("ffprobe: %w: the start of the file didn't arrive within %s", err, probeLimit)
 		}
 		return nil, fmt.Errorf("ffprobe: %w", err)
 	}

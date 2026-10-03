@@ -23,7 +23,7 @@ type playBody struct {
 func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	if s.playback == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{
-			"error": "torrent engine unavailable; check that rqbit is in bin/",
+			"error": "torrent engine unavailable",
 		})
 		return
 	}
@@ -37,8 +37,7 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "animeId is required"})
 		return
 	}
-	// Season 0 lets the finder read it from the title; forcing 1 rejected every
-	// "3rd Season" release.
+	// Season 0 lets the finder read it from the title; forcing 1 rejected every "3rd Season" release.
 	prefs := s.preferences(r.Context(), body.AnimeID)
 	chosen := false
 	switch body.Audio {

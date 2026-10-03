@@ -41,8 +41,7 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	// The store decides what counts as watched, for this and the mpv path
-	// alike, so a client cannot claim it.
+	// The store decides what counts as watched, for this and the mpv path alike, so a client cannot claim it.
 	watched, err := s.store.SavePlayback(ctx, store.PlaybackState{
 		AnimeID:  body.AnimeID,
 		EpKey:    epKey(body.Episode),
@@ -263,8 +262,7 @@ func (s *Server) setScore(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"animeId": body.AnimeID, "score": body.Score})
 }
 
-// setStatus backs the list tags: watching, completed, on hold, dropped,
-// planning, rewatching.
+// setStatus backs the list tags: watching, completed, on hold, dropped, planning, rewatching.
 func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int    `json:"animeId"`
@@ -304,7 +302,7 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Only a show being watched now subscribes to release notifications; following
 	// on any status announced every episode of merely-planned shows.
-	if err := s.store.SetFollow(ctx, store.Follow{AnimeID: body.AnimeID},
+	if err := s.store.SetFollow(ctx, body.AnimeID,
 		body.Status == store.StatusCurrent || body.Status == store.StatusRepeating); err != nil {
 		s.log.Warn("follow on status change", "anime", body.AnimeID, "err", err)
 	}
@@ -313,8 +311,7 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"animeId": body.AnimeID, "status": body.Status})
 }
 
-// dismissResume removes an episode from continue-watching without pretending
-// it was finished.
+// dismissResume removes an episode from continue-watching without pretending it was finished.
 func (s *Server) dismissResume(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"kuro/internal/torrent"
 	"kuro/internal/transcode"
 )
 
@@ -47,6 +48,14 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		source = path
 	} else if !s.engineSource(source) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "unrecognised source"})
+		return
+	}
+
+	if !s.streams.Installed() {
+		send(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "Watching in the browser needs the transcoder, which isn't installed.",
+			"code":  "no-transcoder",
+		})
 		return
 	}
 
@@ -224,9 +233,7 @@ func (s *Server) engineSource(source string) bool {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
-	// The configured address, or the one the engine fell back to.
-	return strings.EqualFold(u.Host, s.cfg.Torrent.APIAddr) ||
-		(s.playback != nil && strings.EqualFold(u.Host, s.playback.EngineAddr()))
+	return s.playback != nil && strings.EqualFold(u.Host, s.playback.EngineAddr())
 }
 
 var localRoute = regexp.MustCompile(`^/api/local/(\d+)/stream$`)
@@ -270,13 +277,26 @@ func (s *Server) readablePath(ctx context.Context, animeID, episode int, fallbac
 		return fallback
 	}
 
-	path := filepath.Join(s.cfg.CacheDir, filepath.FromSlash(rec.FilePath))
-	if _, err := os.Stat(path); err != nil {
+	// A pack's files sit in a folder named after it, a single file in the cache.
+	// The folder first: a lone release may share a pack file's name.
+	path := ""
+	for _, p := range []string{
+		filepath.Join(s.cfg.CacheDir, rec.Name, filepath.FromSlash(rec.FilePath)),
+		filepath.Join(s.cfg.CacheDir, filepath.FromSlash(rec.FilePath)),
+	} {
+		if !torrent.Within(s.cfg.CacheDir, p) {
+			continue
+		}
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			path = p
+			break
+		}
+	}
+	if path == "" {
 		return fallback
 	}
 
-	// rqbit reserves full length up front, so an untouched torrent is a full-size
-	// file of holes; only actually-fetched bytes make it worth reading.
+	// Only fetched bytes make the file worth reading; the rest reads as zeroes.
 	if s.cache != nil && s.cache.Downloaded(ctx, rec.InfoHash) == 0 {
 		return fallback
 	}
@@ -299,10 +319,7 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The init segment is written by whichever pass is running; if none is, one
-	// starts at the resume point. It must not redirect a running pass: the
-	// player asks for init and its first segment together, and steering the
-	// encoder from here killed the pass serving that segment.
+	// See WaitInit: starts a pass at the resume point only if none runs.
 	animeID, episode, _ := parseSessionID(session.ID)
 	path, err := session.WaitInit(r.Context(), s.resumeSegment(r.Context(), animeID, episode), 60*time.Second)
 	if err != nil {
@@ -399,8 +416,7 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "extract subtitle", fmt.Errorf("track %d: %w", index, readErr))
 		return
 	}
-	// The player keeps asking while the track can still grow; this is how it
-	// knows when to stop.
+	// The player keeps asking while the track can still grow; this is how it knows when to stop.
 	w.Header().Set("X-Kuro-Complete", strconv.FormatBool(complete))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -603,11 +619,11 @@ func (s *Server) stillReading(ctx context.Context, animeID, episode int) bool {
 	}
 
 	rec, found, err := s.store.TorrentForEpisode(ctx, animeID, strconv.Itoa(episode))
-	if err != nil || !found || rec.RqbitID == 0 {
+	if err != nil || !found || rec.EngineID == 0 {
 		return false
 	}
 
-	marker := fmt.Sprintf("/torrents/%d/", rec.RqbitID)
+	marker := fmt.Sprintf("/torrents/%d/", rec.EngineID)
 	for _, source := range s.streams.Sources() {
 		if strings.Contains(source, marker) {
 			return true

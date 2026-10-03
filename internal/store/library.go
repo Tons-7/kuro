@@ -83,8 +83,7 @@ type LibraryItem struct {
 	NextEpisode  *int    `json:"nextEpisode"`
 	NextAiringAt *int    `json:"nextAiringAt"`
 
-	// Where playback stopped, so the card can offer "Resume 12:04" instead of
-	// making the user remember.
+	// Where playback stopped, so the card can offer "Resume 12:04" instead of making the user remember.
 	Resume *Resume `json:"resume,omitempty"`
 }
 
@@ -143,14 +142,10 @@ const entryUpdateSet = `
     started_at=excluded.started_at, completed_at=excluded.completed_at,
     remote_updated_at=excluded.remote_updated_at, dirty=0`
 
-// A row marked watched before this anime was on the AniList list is created
-// locally with a synthetic negative id keyed on anime_id (see sync.go). A real
-// import of that anime then arrives with AniList's own id, which a plain
-// ON CONFLICT(id) misses, so the INSERT hits the anime_id UNIQUE constraint and
-// aborts the whole sync. Reconciling on anime_id too lets the local row adopt
-// the real id instead. The merge guard skips a row with an unpushed edit,
-// which under an upsert is a no-op rather than the failing insert it replaces.
-// It also skips a remote row older than our last push's, which would undo it.
+// Upserts on anime_id as well as id: a row created locally has a negative id
+// (see sync.go), and AniList's real id would otherwise hit the anime_id UNIQUE
+// constraint and abort the sync. guard skips rows with an unpushed edit, and
+// remote rows older than our last push.
 func buildUpsertEntry(guard bool) string {
 	where := ""
 	if guard {
@@ -246,8 +241,7 @@ func (s *Store) ImportList(ctx context.Context, anime []Anime, entries []Entry, 
 	return ImportResult{Anime: len(anime), Entries: len(entries), Removed: removed}, nil
 }
 
-// Compared in Go rather than a NOT IN clause, which would hit SQLite's
-// bind-parameter limit on a large list.
+// Compared in Go rather than a NOT IN clause, which would hit SQLite's bind-parameter limit on a large list.
 func dropMissingEntries(ctx context.Context, tx *sql.Tx, keep []Entry) (int, error) {
 	wanted := make(map[int]struct{}, len(keep))
 	for _, e := range keep {
@@ -329,11 +323,9 @@ ORDER BY ` + order + `
 LIMIT ?3 OFFSET ?4`
 }
 
-// Continue watching: episodes started but not finished, most recent first. The
-// filter lives inside the window so the row shows the episode that qualified the
-// show. "Not finished" is position vs threshold (same rule as ResumeAt); the 15s
-// floor matches resumable() so the rail and the resume prompt agree. The
-// threshold is the show's own where it has one, as ResumeAt's is.
+// Continue watching: started, not finished, most recent first. Same rule as
+// ResumeAt and resumable() (15 s floor, the show's own threshold), so the rail
+// and the resume prompt agree.
 const inProgress = `dismissed = 0 AND position_s >= 15
       AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * coalesce(
           (SELECT CAST(value AS REAL) FROM anime_pref
@@ -390,8 +382,6 @@ LIMIT ?2 OFFSET ?3`
 
 const continueCountQuery = continuePicks + `SELECT count(*) FROM picks`
 
-// One extra row is requested so the envelope can report hasMore without a
-// second query.
 // LibraryFilter narrows and orders the list. An empty Sort is the default
 // ordering; an unknown one falls back to it rather than failing.
 type LibraryFilter struct {
@@ -400,6 +390,7 @@ type LibraryFilter struct {
 	Sort   string
 }
 
+// Library fetches one extra row so the page can report hasMore without a second query.
 func (s *Store) Library(ctx context.Context, f LibraryFilter, p Paging) (Page[LibraryItem], error) {
 	like := ""
 	if q := strings.TrimSpace(f.Query); q != "" {
@@ -548,8 +539,7 @@ func nullable(s string) any {
 	return s
 }
 
-// The JSON columns are NOT NULL, so an unset field has to become an empty
-// array rather than the zero string.
+// The JSON columns are NOT NULL, so an unset field has to become an empty array rather than the zero string.
 func orJSON(s string) string {
 	if s == "" {
 		return "[]"

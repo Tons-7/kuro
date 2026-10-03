@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"kuro/internal/corpus"
 	"kuro/internal/db"
 	"kuro/internal/deps"
+	"kuro/internal/engine"
 	"kuro/internal/indexer"
 	"kuro/internal/jobs"
 	"kuro/internal/library"
@@ -31,7 +33,6 @@ import (
 	"kuro/internal/score"
 	"kuro/internal/server"
 	"kuro/internal/store"
-	"kuro/internal/torrent"
 	"kuro/internal/transcode"
 	"kuro/internal/update"
 )
@@ -58,6 +59,28 @@ func interval(st *store.Store, key string, fallback time.Duration) time.Duration
 		return time.Duration(secs) * time.Second
 	}
 	return fallback
+}
+
+func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, error) {
+	upload := cfg.Torrent.UploadLimitBytes
+	if upload == 0 {
+		upload = 4 << 20 // enough to stay unchoked
+	}
+	// Downloads from the rqbit days: kuro's own session for it, else the one
+	// rqbit kept per user before kuro moved it into the cache.
+	legacy := []string{filepath.Join(cfg.CacheDir, library.SessionDirName)}
+	if dir, err := os.UserConfigDir(); err == nil && runtime.GOOS == "windows" {
+		legacy = append(legacy, filepath.Join(dir, "rqbit", "session", "data"))
+	}
+	return engine.New(engine.Options{
+		CacheDir:       cfg.CacheDir,
+		SessionDir:     filepath.Join(cfg.CacheDir, library.EngineSessionDirName),
+		LegacySessions: legacy,
+		ListenPort:     cfg.Torrent.PeerPort(),
+		PeerLimit:      cfg.Torrent.PeerLimit,
+		UploadLimit:    upload,
+		DisableUPnP:    !cfg.Torrent.UPnPEnabled(),
+	}, log)
 }
 
 // debounce runs fn once, wait after the first call of a burst.
@@ -180,7 +203,7 @@ func run(log *slog.Logger) error {
 	log.Info("kuro", "version", update.Version)
 
 	// A clean exit stops helpers, but closing the window or a kill skips that
-	// and leaks rqbit/ffmpeg, so the OS is made responsible instead.
+	// and leaks ffmpeg/mpv, so the OS is made responsible instead.
 	if err := proc.KillChildrenOnExit(); err != nil {
 		log.Warn("helpers may outlive an abrupt exit", "err", err)
 	}
@@ -278,29 +301,21 @@ func run(log *slog.Logger) error {
 	ingester := library.NewIngester(st, corpus.NewFetcher(), al, log)
 
 	importer := library.NewImporter(st, al, log)
+	finder.WithHydrator(importer.Hydrate)
 	malSync := library.NewMALSync(st, malClient, log)
 	sync := library.NewSync(st, al, log).WithMAL(malSync).WithImporter(importer)
 	watcher := library.NewWatcher(st, finder, sources, log)
 	scheduler := jobs.New(log)
 
-	// The torrent engine is optional at startup: everything except playback
-	// still works without it, and saying so beats failing to boot.
-	supervisor := torrent.NewSupervisor(torrent.Options{
-		Binary:      cfg.Tool("rqbit"),
-		CacheDir:    cfg.CacheDir,
-		APIAddr:     cfg.Torrent.APIAddr,
-		UploadLimit: cfg.Torrent.UploadLimitBytes,
-		ListenPort:  cfg.Torrent.ListenPort,
-		PeerLimit:   cfg.Torrent.PeerLimit,
-		DisableUPnP: !cfg.Torrent.UPnPEnabled(),
-		SessionDir:  filepath.Join(cfg.CacheDir, library.SessionDirName),
-	}, log)
-	defer supervisor.Stop()
+	torrentEngine, err := newTorrentEngine(cfg, log)
+	if err != nil {
+		return err
+	}
+	defer torrentEngine.Stop()
 
-	// Wired up whether or not the engine is running: calls through the client
-	// start it, so installing rqbit later needs no restart.
-	torrents := supervisor.Client()
-	if err := supervisor.Ensure(ctx); err != nil {
+	// A failed start (say, the peer port taken) is retried by the next call.
+	torrents := torrentEngine.Client()
+	if err := torrentEngine.Ensure(ctx); err != nil {
 		log.Warn("torrent engine not running; it starts when something needs it", "err", err)
 	}
 
@@ -341,8 +356,8 @@ func run(log *slog.Logger) error {
 		log.Warn("clear stale cache pins", "err", err)
 	}
 
-	// rqbit assigns torrent ids per session, so stored ids point elsewhere
-	// after a crash; realign before a cache sweep deletes the wrong file.
+	// Torrent ids are per session, so stored ids point elsewhere after a
+	// restart; realign before a cache sweep deletes the wrong file.
 	if live, err := torrents.Live(ctx); err != nil {
 		log.Warn("list torrents for reconcile", "err", err)
 	} else if matched, orphaned, err := st.ReconcileTorrents(ctx, live); err != nil {
@@ -423,12 +438,9 @@ func run(log *slog.Logger) error {
 	// Detection above had nothing to ask if ffmpeg was not installed yet, and
 	// software encoding for the rest of the session is not what was chosen.
 	depsManager := deps.New(cfg.BinDir, log)
-	// The old engine ran on through the download; the next call starts the new one.
-	depsManager.OnInstalling(func(name string) {
-		if name == "rqbit" {
-			supervisor.Stop()
-		}
-	})
+	if removed := depsManager.RemoveObsolete(); len(removed) > 0 {
+		log.Info("removed tools kuro no longer uses", "files", removed)
+	}
 	depsManager.OnInstalled(func(name string) {
 		if name != "ffmpeg" {
 			return
@@ -465,10 +477,9 @@ func run(log *slog.Logger) error {
 		}
 	})
 
-	// A killed browser never tells the server it stopped watching, so the reaper
-	// is the only signal left; without it the episode stays pinned as "playing"
-	// and keeps downloading with nobody watching.
-	// Set below; the reaper cannot fire before the server exists.
+	// A killed browser never says it stopped watching; the reaper is the only
+	// signal, or the episode stays pinned and downloading. api is set below,
+	// before the reaper can fire.
 	var api *server.Server
 	streams.OnIdle(func(sessionID string) {
 		// Also the only signal that would ever release the queue's hold.
@@ -540,8 +551,7 @@ func run(log *slog.Logger) error {
 			log.Warn("rebuild match index", "err", err)
 		}
 	})
-	// Saved shows still airing stay current though nobody opens them: each
-	// broadcast moves the next episode on, and in time the status.
+	// Keeps airing shows current even when nobody opens them.
 	scheduler.Add(jobs.Job{
 		Name: "airing-refresh", Every: 15 * time.Minute, OnStart: true,
 		Run: func(ctx context.Context) error { _, err := importer.Refresh(ctx, 150); return err },
@@ -609,7 +619,7 @@ func run(log *slog.Logger) error {
 
 	<-ctx.Done()
 	// Requests still in flight would otherwise meet a closed database and a
-	// killed torrent engine, which the deferred cleanup below does next.
+	// stopped torrent engine, which the deferred cleanup does next.
 	<-drained
 	// Closed before this process ends, so a relaunch finds the profile free.
 	window.Close()

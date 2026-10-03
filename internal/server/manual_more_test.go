@@ -19,8 +19,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// aniRecorder is an AniList fake that answers reads with a fixed body and keeps
-// every mutation's variables.
+// aniRecorder is an AniList fake that answers reads with a fixed body and keeps every mutation's variables.
 type aniRecorder struct {
 	body string
 
@@ -143,7 +142,7 @@ func TestEpisodeSourcesWithoutFinder(t *testing.T) {
 // The downloads list carries the engine's live view: a torrent being
 // re-checked after a launch says so rather than reading as paused.
 func TestDownloadsReportCheckingAndEpisodes(t *testing.T) {
-	rqbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/torrents":
 			io.WriteString(w, `{"torrents":[{"id":1,"info_hash":"PACK","name":"pack"},{"id":2,"info_hash":"SOLO","name":"solo"}]}`)
@@ -153,17 +152,17 @@ func TestDownloadsReportCheckingAndEpisodes(t *testing.T) {
 			io.WriteString(w, `{"state":"paused","finished":false,"progress_bytes":500,"total_bytes":1000}`)
 		}
 	}))
-	t.Cleanup(rqbit.Close)
+	t.Cleanup(eng.Close)
 
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
-		d.Cache = library.NewCache(d.Store, torrent.NewClient(rqbit.URL), t.TempDir(), d.Log)
+		d.Cache = library.NewCache(d.Store, torrent.NewClient(eng.URL), t.TempDir(), d.Log)
 	})
 	ctx := context.Background()
 	seedShow(t, h, 1, 12)
 	for _, r := range []store.TorrentRecord{
-		{InfoHash: "pack", RqbitID: 1, Name: "pack", TotalSize: 1000, AnimeID: 1, EpKey: "5", FileIndex: 1, FilePath: "5.mkv"},
-		{InfoHash: "pack", RqbitID: 1, Name: "pack", TotalSize: 1000, AnimeID: 1, EpKey: "4", FileIndex: 0, FilePath: "4.mkv"},
-		{InfoHash: "solo", RqbitID: 2, Name: "solo", TotalSize: 1000, AnimeID: 1, EpKey: "7", FileIndex: 0, FilePath: "7.mkv"},
+		{InfoHash: "pack", EngineID: 1, Name: "pack", TotalSize: 1000, AnimeID: 1, EpKey: "5", FileIndex: 1, FilePath: "5.mkv"},
+		{InfoHash: "pack", EngineID: 1, Name: "pack", TotalSize: 1000, AnimeID: 1, EpKey: "4", FileIndex: 0, FilePath: "4.mkv"},
+		{InfoHash: "solo", EngineID: 2, Name: "solo", TotalSize: 1000, AnimeID: 1, EpKey: "7", FileIndex: 0, FilePath: "7.mkv"},
 	} {
 		if err := h.store.RecordTorrent(ctx, r); err != nil {
 			t.Fatal(err)

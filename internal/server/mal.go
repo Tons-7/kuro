@@ -76,14 +76,12 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("myanimelist connected", "user", viewer.Name)
 
-	// Seeding what MAL already holds keeps the first sync from replaying the
-	// whole list back at it.
+	// Seeding what MAL already holds keeps the first sync from replaying the whole list back at it.
 	go func() {
 		if s.malSync == nil {
 			return
 		}
-		// The request is over by the time this runs, so its context is not
-		// the one to inherit.
+		// The request is over by the time this runs, so its context is not the one to inherit.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if _, err := s.malSync.Pull(ctx); err != nil {

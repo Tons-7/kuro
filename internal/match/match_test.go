@@ -6,8 +6,7 @@ func frierenIndex(t *testing.T) *Index {
 	t.Helper()
 	ix := NewIndex()
 
-	// The real franchise, which is exactly where AniList's own search picks
-	// the wrong entry.
+	// The real franchise, which is exactly where AniList's own search picks the wrong entry.
 	ix.Add(Media{
 		ID: 154587, Format: "TV", Episodes: 28, Year: 2023, Season: 1,
 		Titles: []string{
@@ -105,8 +104,7 @@ func TestAmbiguousQueryIsFlagged(t *testing.T) {
 	}
 }
 
-// A full, unambiguous title should clear the auto band so playback can start
-// without interrupting the user.
+// A full, unambiguous title should clear the auto band so playback can start without interrupting the user.
 func TestConfidentMatchIsAutomatic(t *testing.T) {
 	ix := frierenIndex(t)
 

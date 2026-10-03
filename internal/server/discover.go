@@ -160,9 +160,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One builder for every grid: this one used to be a copy, and the copy is
-	// what left cards on the home page showing "Add to list" for a show
-	// already on it.
+	// The shared builder, so list status shows on every grid.
 	items := s.decorate(r, result.Media)
 
 	if page <= 0 {

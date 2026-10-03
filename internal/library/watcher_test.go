@@ -71,8 +71,7 @@ func TestSearchTermsLeadWithEpisodeNumber(t *testing.T) {
 	if got[0] != "Sousou no Frieren 10" {
 		t.Errorf("first term = %q, want the episode number included", got[0])
 	}
-	// A tracker search for a Cyrillic or CJK title returns nothing and only
-	// burns a rate-limited request.
+	// A tracker search for a Cyrillic or CJK title returns nothing and only burns a rate-limited request.
 	for _, term := range got {
 		if !mostlyLatin(term) {
 			t.Errorf("non-Latin search term %q", term)
@@ -114,8 +113,7 @@ func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 	}
 }
 
-// The English title is often the romaji, and a duplicate query is a wasted
-// request.
+// The English title is often the romaji, and a duplicate query is a wasted request.
 func TestSearchTermsSkipsRedundantEnglish(t *testing.T) {
 	got := searchTerms([]string{"Dandadan"}, "Dandadan", 4, 0, nil, false)
 
@@ -264,8 +262,7 @@ func TestVerifiesOwnNumberNeedsAPartMarker(t *testing.T) {
 	}
 }
 
-// Both numberings are searched, because which one a group writes is not
-// predictable from the show.
+// Both numberings are searched, because which one a group writes is not predictable from the show.
 func TestSearchTermsIncludeBothNumberings(t *testing.T) {
 	got := searchTerms([]string{"Shingeki no Kyojin: The Final Season Part 2"}, "", 1, 17, nil, false)
 
@@ -283,8 +280,7 @@ func TestSearchTermsIncludeBothNumberings(t *testing.T) {
 	}
 }
 
-// A dub is a handful of releases among hundreds, so it is asked for by name;
-// the sub search is unchanged.
+// A dub is a handful of releases among hundreds, so it is asked for by name; the sub search is unchanged.
 func TestSearchTermsAskForTheDubByName(t *testing.T) {
 	sub := searchTerms([]string{"Jujutsu Kaisen"}, "", 5, 0, nil, false)
 	for _, term := range sub {

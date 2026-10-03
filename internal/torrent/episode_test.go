@@ -38,8 +38,7 @@ func TestPickEpisodeIgnoresSamplesAndSubtitles(t *testing.T) {
 		t.Fatal("a missing episode should report not found")
 	}
 
-	// The sample is an mkv containing no episode number and is far below the
-	// median size.
+	// The sample is an mkv containing no episode number and is far below the median size.
 	got, _, ok := PickEpisode(seasonPack(), 2, 0)
 	if !ok || got.Name != "Show/Show - 02 [1080p].mkv" {
 		t.Fatalf("picked %q", got.Name)
@@ -63,8 +62,7 @@ func TestPickEpisodeSingleFileTorrent(t *testing.T) {
 	}
 }
 
-// A lone file used to be taken on trust, so a feature film played as episode
-// 1202 of a long-running series.
+// A lone file used to be taken on trust, so a feature film played as episode 1202 of a long-running series.
 func TestPickEpisodeRejectsALoneFileThatIsNotTheEpisode(t *testing.T) {
 	film := []File{{
 		Name:   "Detective.Conan.The.Bride.of.Halloween.2022.1080p.BluRay.x264.mkv",
@@ -106,6 +104,14 @@ func TestEpisodeInName(t *testing.T) {
 		"sample":                            0,
 		"cover":                             0,
 		"[Group] Show [1080p][x265][10bit]": 0,
+		// The audio layout after an episode stated outright, Monster's BluRay pack.
+		"Monster.2004.S01E01.Herr.Dr.Tenma.1080p.BluRay.DUAL.FLAC.2.0.x264-Kitsune":  1,
+		"Monster.2004.S01E11.511.Kinderheim.1080p.BluRay.DUAL.FLAC.2.0.x264-Kitsune": 11,
+		"[CBM]_Monster_-_11_-_511_Kinderheim_[6C70C4E4]":                             11,
+		"Show - 07 [1080p WEB-DL DDP5.1]":                                            7,
+		"Show.07.WEB.AAC.2.0":                                                        7,
+		"Show - 21":                                                                  21,
+		"Show - 51 (1080p)":                                                          51,
 	}
 
 	for name, want := range tests {

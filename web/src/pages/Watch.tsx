@@ -17,7 +17,7 @@ import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList, isUnaired } from '../components/EpisodeList'
 import { ReleasePicker } from '../components/ReleasePicker'
 import { StatusMenu } from '../components/StatusMenu'
-import { Badge, Button, ErrorState, Segmented, Spinner, useDocumentTitle } from '../components/ui'
+import { Badge, Button, buttonClass, ErrorState, LinkButton, Segmented, Skeleton, Spinner, useDocumentTitle } from '../components/ui'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
@@ -46,8 +46,7 @@ export function Watch() {
   }, [subLanguagesRaw])
   const external = effective['playback.player'] !== 'browser' && !!effective['playback.player']
 
-  // Write where the shown value came from, or a per-show override keeps
-  // winning and the switch looks stuck.
+  // Write where the shown value came from, or a per-show override keeps winning and the switch looks stuck.
   const overrides = prefs.data?.overrides ?? {}
   const setFlag = (key: string) => (v: boolean) =>
     setPref.mutate({
@@ -101,8 +100,7 @@ export function Watch() {
 
   const playingInMpv = !!play.data && play.data.player !== 'browser'
 
-  // mpv opens the file itself and reports over its own IPC socket, so there is
-  // nothing here to transcode for.
+  // mpv opens the file itself and reports over its own IPC socket, so there is nothing here to transcode for.
   const source = playingInMpv ? undefined : play.data?.streamUrl
   const stream = useQuery({
     enabled: !!source,
@@ -225,11 +223,9 @@ export function Watch() {
   }, [id, ep, qc])
   const clearEnded = useCallback(() => setEndedKey(null), [])
 
-  // The idle reaper took the session while the tab was backgrounded. Replaying
-  // /api/play revives a suspended torrent, then reopening the stream rebuilds
-  // the transcode session under the same playlist URL — no refresh needed.
-  // Throws when the reopen fails, so the player shows it instead of rebuilding
-  // against a session that is not there.
+  // The reaper took the session while the tab was hidden: /api/play revives
+  // the torrent and reopening rebuilds the session under the same URL. Throws
+  // if the reopen fails, so the player shows it.
   const recoverSession = useCallback(async () => {
     await qc.invalidateQueries({ queryKey: ['play', id, ep] }, { throwOnError: true })
     await qc.invalidateQueries({ queryKey: ['stream', id, ep] }, { throwOnError: true })
@@ -303,8 +299,7 @@ export function Watch() {
                   onProgress={reportProgress}
                   onEnded={onEnded}
                   onNext={hasNext ? goNext : undefined}
-                  // Back into the finished episode: the countdown must not
-                  // take the viewer away mid-rewatch.
+                  // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
                   onSessionLost={recoverSession}
                   // Inside the player, or fullscreen hides it while it counts.
@@ -328,6 +323,10 @@ export function Watch() {
                         inPlayer
                         message={(stream.error as Error).message}
                         animeId={id}
+                        needsTranscoder={
+                          stream.error instanceof ApiError &&
+                          (stream.error.body as { code?: string } | undefined)?.code === 'no-transcoder'
+                        }
                         onRetry={() => stream.refetch()}
                         onPick={() => setPicking(true)}
                       />
@@ -381,78 +380,84 @@ export function Watch() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 rounded-lg bg-base-900/60 p-2.5 shadow-card">
-                {play.data?.source && (
-                  <Badge tone={play.data.source === 'local' ? 'accent' : 'neutral'}>
-                    {play.data.source === 'local' ? 'Local file' : 'Torrent'}
-                  </Badge>
-                )}
+              {/* Until settings load every switch would read off, and a click
+                  then would write from the wrong state. */}
+              {!prefs.data ? (
+                <Skeleton className="h-12 w-full rounded-lg" />
+              ) : (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-base-900/60 p-2.5 shadow-card">
+                  {play.data?.source && (
+                    <Badge tone={play.data.source === 'local' ? 'accent' : 'neutral'}>
+                      {play.data.source === 'local' ? 'Local file' : 'Torrent'}
+                    </Badge>
+                  )}
 
-                {/* Three scopes here; each group says which. */}
-                <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">
-                  This show
-                </span>
-                {/* Switching resolves a different release, so it reloads rather
-                    than swapping a track — most releases carry one language. */}
-                <Segmented
-                  size="sm"
-                  value={wantAudio}
-                  onChange={setAudio}
-                  options={[
-                    { value: 'sub', label: 'Sub' },
-                    { value: 'dub', label: 'Dub' },
-                    { value: 'either', label: 'Either' },
-                  ]}
-                />
+                  {/* Three scopes here; each group says which. */}
+                  <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">
+                    This show
+                  </span>
+                  {/* Switching resolves a different release, so it reloads rather
+                      than swapping a track — most releases carry one language. */}
+                  <Segmented
+                    size="sm"
+                    value={wantAudio}
+                    onChange={setAudio}
+                    options={[
+                      { value: 'sub', label: 'Sub' },
+                      { value: 'dub', label: 'Dub' },
+                      { value: 'either', label: 'Either' },
+                    ]}
+                  />
 
-                <Toggle
-                  label="Skip filler"
-                  on={skipFiller}
-                  onChange={(v) =>
-                    setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })
-                  }
-                />
+                  <Toggle
+                    label="Skip filler"
+                    on={skipFiller}
+                    onChange={(v) =>
+                      setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })
+                    }
+                  />
 
-                <span className="ml-1 border-l border-base-800 pl-3 text-[10px] font-semibold tracking-wider text-base-500 uppercase">
-                  Everywhere
-                </span>
-                {/* Flipping a toggle here becomes the new default, which is
-                    what the setting means from then on. */}
-                <Toggle
-                  label="Auto play"
-                  on={flag('playback.autoplay')}
-                  onChange={setFlag('playback.autoplay')}
-                />
-                <Toggle
-                  label="Auto next"
-                  on={flag('playback.autonext')}
-                  onChange={setFlag('playback.autonext')}
-                />
-                <Toggle
-                  label="Skip opening"
-                  on={flag('playback.autoskip_op')}
-                  onChange={setFlag('playback.autoskip_op')}
-                />
-                <Toggle
-                  label="Skip ending"
-                  on={flag('playback.autoskip_ed')}
-                  onChange={setFlag('playback.autoskip_ed')}
-                />
+                  <span className="ml-1 border-l border-base-800 pl-3 text-[10px] font-semibold tracking-wider text-base-500 uppercase">
+                    Everywhere
+                  </span>
+                  {/* Flipping a toggle here becomes the new default, which is
+                      what the setting means from then on. */}
+                  <Toggle
+                    label="Auto play"
+                    on={flag('playback.autoplay')}
+                    onChange={setFlag('playback.autoplay')}
+                  />
+                  <Toggle
+                    label="Auto next"
+                    on={flag('playback.autonext')}
+                    onChange={setFlag('playback.autonext')}
+                  />
+                  <Toggle
+                    label="Skip opening"
+                    on={flag('playback.autoskip_op')}
+                    onChange={setFlag('playback.autoskip_op')}
+                  />
+                  <Toggle
+                    label="Skip ending"
+                    on={flag('playback.autoskip_ed')}
+                    onChange={setFlag('playback.autoskip_ed')}
+                  />
 
-                {!playingInMpv && (
-                  <button
-                    onClick={() => setTuning(true)}
-                    className={cx(
-                      'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
-                      upscaling.enabled
-                        ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-                        : 'bg-base-800 text-base-300 hover:bg-base-700',
-                    )}
-                  >
-                    Anime4K{upscaling.enabled ? ` · ${upscaling.mode}` : ''}
-                  </button>
-                )}
-              </div>
+                  {!playingInMpv && (
+                    <button
+                      onClick={() => setTuning(true)}
+                      className={cx(
+                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                        upscaling.enabled
+                          ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+                          : 'bg-base-800 text-base-300 hover:bg-base-700',
+                      )}
+                    >
+                      Anime4K{upscaling.enabled ? ` · ${upscaling.mode}` : ''}
+                    </button>
+                  )}
+                </div>
+              )}
 
               {download.isError && (
                 <p className="text-xs text-recap">{(download.error as Error).message}</p>
@@ -572,11 +577,17 @@ function Searching() {
     <div className="grid aspect-video place-items-center">
       <div className="text-center">
         <Spinner className="mx-auto size-8" />
-        <p className="mt-3 text-sm text-base-300">Searching for a release…</p>
-        <p className="mt-1 text-xs text-base-500">
+        <p className="mt-3 text-sm text-base-300">
+          {seconds < 15 ? 'Searching for a release…' : 'Getting the start of the episode…'}
+        </p>
+        <p className="mt-1 text-xs text-base-500 tabular-nums">
           {seconds < 6
             ? 'Checking the indexer under each of the show’s titles'
-            : 'Still looking — searches are rate limited'}
+            : seconds < 15
+              ? 'Still looking — searches are rate limited'
+              : seconds < 45
+                ? 'Connecting to people sharing it'
+                : `Slow swarm or connection, still downloading · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`}
         </p>
       </div>
     </div>
@@ -591,6 +602,7 @@ function NoRelease({
   rawAvailable,
   rawTitle,
   inPlayer,
+  needsTranscoder,
   onRetry,
   onPlayRaw,
   onPick,
@@ -601,6 +613,8 @@ function NoRelease({
   rawTitle?: string
   // Covering a player rather than standing in for one.
   inPlayer?: boolean
+  // Retrying can't help; offer Setup instead.
+  needsTranscoder?: boolean
   onRetry: () => void
   onPlayRaw?: () => void
   onPick: () => void
@@ -625,39 +639,26 @@ function NoRelease({
             )}
             <button
               onClick={onPlayRaw}
-              className="mt-2 rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
+              className={cx(buttonClass(), 'mt-2')}
             >
               Watch the raw anyway
             </button>
           </div>
         )}
 
+        {needsTranscoder ? (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <LinkButton to="/setup" variant="primary">Install the transcoder</LinkButton>
+            <LinkButton to="/settings" variant="ghost">Player settings</LinkButton>
+          </div>
+        ) : (
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          <button
-            onClick={onRetry}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
-          >
-            Try again
-          </button>
-          <button
-            onClick={onPick}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
-          >
-            Choose a release
-          </button>
-          <Link
-            to={`/anime/${animeId}`}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700"
-          >
-            Other episodes
-          </Link>
-          <Link
-            to="/settings"
-            className="rounded-md px-3 py-1.5 text-sm text-base-400 hover:text-base-100"
-          >
-            Quality settings
-          </Link>
+          <Button onClick={onRetry}>Try again</Button>
+          <Button onClick={onPick}>Choose a release</Button>
+          <LinkButton to={`/anime/${animeId}`}>Other episodes</LinkButton>
+          <LinkButton to="/settings" variant="ghost">Quality settings</LinkButton>
         </div>
+        )}
       </div>
     </div>
   )
@@ -681,7 +682,7 @@ function MpvPanel({ title, episode, player }: { title: string; episode: number; 
           <button
             onClick={() => stop.mutate()}
             disabled={stop.isPending}
-            className="rounded-md bg-base-800 px-3 py-1.5 text-sm text-base-100 hover:bg-base-700 disabled:opacity-50"
+            className={buttonClass()}
           >
             {stop.isSuccess ? 'Stopped' : 'Stop'}
           </button>

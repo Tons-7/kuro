@@ -40,8 +40,7 @@ func TestRelaunchForwardsTheWindowChoice(t *testing.T) {
 	}
 }
 
-// With the child's output on NUL, a handover that failed took the app away
-// without a word.
+// With the child's output on NUL, a handover that failed took the app away without a word.
 func TestRelaunchKeepsTheOutputItWasStartedWith(t *testing.T) {
 	cmd := relaunchCmd(filepath.Join(t.TempDir(), config.ExeName("kuro")))
 

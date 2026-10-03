@@ -182,22 +182,15 @@ func (s *Server) deleteNotification(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setFollow(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AnimeID  int    `json:"animeId"`
-		Enabled  bool   `json:"enabled"`
-		Quality  string `json:"quality"`
-		Group    string `json:"group"`
-		MaxBytes int64  `json:"maxBytes"`
+		AnimeID int  `json:"animeId"`
+		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.AnimeID == 0 {
 		send(w, http.StatusBadRequest, map[string]any{"error": "animeId is required"})
 		return
 	}
 
-	err := s.store.SetFollow(r.Context(), store.Follow{
-		AnimeID: body.AnimeID, Quality: body.Quality,
-		Group: body.Group, MaxBytes: body.MaxBytes,
-	}, body.Enabled)
-	if err != nil {
+	if err := s.store.SetFollow(r.Context(), body.AnimeID, body.Enabled); err != nil {
 		s.fail(w, "follow", err)
 		return
 	}

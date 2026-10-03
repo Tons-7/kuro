@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import {
@@ -11,7 +11,7 @@ import {
 } from '../lib/api'
 import { clockTime, cx, languageName } from '../lib/format'
 import { PlayIcon } from '../components/PosterCard'
-import { Spinner, useDismiss } from '../components/ui'
+import { buttonClass, Spinner, useDismiss } from '../components/ui'
 import { useAnime4K } from './anime4k'
 import {
   useAutoSkip,
@@ -82,13 +82,22 @@ export function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en'
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
 
-// Volume, mute and speed carry from episode to episode; the element itself
-// starts every page at full volume.
+// Volume, mute, speed and subtitle size carry from episode to episode; the
+// element itself starts every page at full volume.
 const PERSIST_KEY = 'kuro.player'
 interface Persisted {
   volume?: number
   muted?: boolean
   rate?: number
+  subScale?: number
+}
+
+const VOLUME_NOTICE = 'volume'
+const SUB_SCALES = [0.75, 0.9, 1, 1.15, 1.3, 1.5]
+const DELAY_STEP = 0.1
+
+function delayLabel(d: number): string {
+  return d === 0 ? '0.0 s' : `${d > 0 ? '+' : ''}${d.toFixed(1)} s`
 }
 function loadPersisted(): Persisted {
   try {
@@ -165,16 +174,36 @@ export function Player({
   const [muted, setMuted] = useState(false)
   const [rate, setRate] = useState(() => loadPersisted().rate ?? 1)
   const [controlsVisible, setControlsVisible] = useState(true)
-  const [volumeShown, setVolumeShown] = useState(false)
-  const volumeTimer = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(volumeTimer.current), [])
-  // The keys change volume with nothing else on screen; say where it landed.
-  const showVolume = useCallback(() => {
-    setVolumeShown(true)
-    window.clearTimeout(volumeTimer.current)
-    volumeTimer.current = window.setTimeout(() => setVolumeShown(false), 900)
+  // A key changed something with nothing else on screen; say where it landed.
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), [])
+  const showNotice = useCallback((what: string) => {
+    setNotice(what)
+    window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 900)
   }, [])
+  const showVolume = useCallback(() => showNotice(VOLUME_NOTICE), [showNotice])
   const [track, setTrack] = useState<number | null>(null)
+
+  const [subScale, setSubScale] = useState(() => loadPersisted().subScale ?? 1)
+  const changeSubScale = useCallback((s: number) => {
+    setSubScale(s)
+    savePersisted({ subScale: s })
+  }, [])
+  // Per episode: a delay fixes one file's timing.
+  const [subDelay, setSubDelay] = useState(0)
+  useEffect(() => setSubDelay(0), [stream?.id])
+  const subDelayRef = useRef(subDelay)
+  subDelayRef.current = subDelay
+  const shiftSubDelay = useCallback(
+    (by: number) => {
+      const next = Math.round((subDelayRef.current + by) * 10) / 10
+      setSubDelay(next)
+      showNotice(`Subtitle delay ${delayLabel(next)}`)
+    },
+    [showNotice],
+  )
 
   // Restore what the last episode was left at; a new source resets the
   // element's playback rate, so it is reapplied on every load.
@@ -216,8 +245,7 @@ export function Player({
     setAudioTrack(stream?.audioTrack ?? 0)
     setEpoch(0)
     setResumeAt(startAt)
-    // Or the scrubber reads the last episode's length and a skip button for its
-    // ranges sits over the new one.
+    // Or the scrubber reads the last episode's length and a skip button for its ranges sits over the new one.
     setTime(0)
     setDuration(0)
     // Or a new episode sits on a paused frame while it buffers.
@@ -250,8 +278,7 @@ export function Player({
     audioChosen.current = false
   }, [stream?.id])
 
-  // Filled below once hls exists; keepalive and fatal 404 can notice together,
-  // so one reopen at a time.
+  // Filled below once hls exists; keepalive and fatal 404 can notice together, so one reopen at a time.
   const recoverRef = useRef<() => void>(() => {})
   const recovering = useRef(false)
   const recover = useCallback(() => recoverRef.current(), [])
@@ -288,7 +315,8 @@ export function Player({
   // Picture in picture moves the player into a second document, which the
   // subtitle renderer has to be rebuilt for: its canvas belongs to whichever
   // document it was created in.
-  useSubtitles(video, stream, track, fonts, pip.active)
+  const subLook = useMemo(() => ({ scale: subScale, delay: subDelay }), [subScale, subDelay])
+  useSubtitles(video, stream, track, fonts, pip.active, subLook)
   useAutoSkip(video, skips, autoSkip)
 
   const upscaleState = useAnime4K({
@@ -466,8 +494,7 @@ export function Player({
     togglePlay()
   }, [togglePlay])
 
-  // Hide the controls while playing, but never while paused: a paused player
-  // with no controls looks broken.
+  // Hide the controls while playing, but never while paused: a paused player with no controls looks broken.
   const hideTimer = useRef<number | undefined>(undefined)
   const nudge = useCallback(() => {
     setControlsVisible(true)
@@ -477,16 +504,23 @@ export function Player({
     }, 2600)
   }, [video])
 
-  useKeyboard({ video, togglePlay, seekBy, nudge, shell: shell.current, extra: pip.window, showVolume })
+  useKeyboard({
+    video,
+    togglePlay,
+    seekBy,
+    nudge,
+    shell: shell.current,
+    extra: pip.window,
+    showVolume,
+    shiftSubDelay: track === null ? undefined : shiftSubDelay,
+  })
 
-  // How long the picture has been stuck, so a slow swarm can say so rather
-  // than looking like a hang.
+  // How long the picture has been stuck, so a slow swarm can say so rather than looking like a hang.
   const [stalledFor, setStalledFor] = useState(0)
   // Carried over, it declares the next episode too slow before it has loaded.
   useEffect(() => setStalledFor(0), [stream?.id])
 
-  // Numbers for the stall message: a swarm too slow for the bitrate is a
-  // download, not a wait.
+  // Numbers for the stall message: a swarm too slow for the bitrate is a download, not a wait.
   const [health, setHealth] = useState<StreamHealth | null>(null)
   const [queued, setQueued] = useState(false)
   useEffect(() => setQueued(false), [stream?.id])
@@ -592,8 +626,7 @@ export function Player({
           setPlaying(false)
           setControlsVisible(true)
         }}
-        // A new source resets to paused without a pause event; the button
-        // must not keep saying Pause over it.
+        // A new source resets to paused without a pause event; the button must not keep saying Pause over it.
         onEmptied={(e) => setPlaying(!e.currentTarget.paused)}
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}
@@ -613,9 +646,9 @@ export function Player({
         }}
       />
 
-      {volumeShown && (
+      {notice && (
         <div className="pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 rounded-full bg-base-950/75 px-3 py-1 text-sm font-medium text-white tabular-nums backdrop-blur-sm">
-          {muted ? 'Muted' : `Volume ${Math.round(volume * 100)}%`}
+          {notice !== VOLUME_NOTICE ? notice : muted ? 'Muted' : `Volume ${Math.round(volume * 100)}%`}
         </div>
       )}
 
@@ -643,14 +676,14 @@ export function Player({
               (queued ? (
                 <Link
                   to="/downloads"
-                  className="pointer-events-auto mt-3 inline-block rounded-md bg-base-800 px-3 py-1.5 text-xs text-accent-300 hover:bg-base-700"
+                  className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto mt-3')}
                 >
                   Queued — open Downloads
                 </Link>
               ) : (
                 <button
                   onClick={() => void downloadInstead()}
-                  className="pointer-events-auto mt-3 rounded-md bg-base-800 px-3 py-1.5 text-xs text-base-100 hover:bg-base-700"
+                  className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto mt-3')}
                 >
                   Download it instead and watch later
                 </button>
@@ -675,7 +708,7 @@ export function Player({
                 setLostError(null)
                 recover()
               }}
-              className="pointer-events-auto mt-3 rounded-md bg-base-800 px-3 py-1.5 text-xs text-base-100 hover:bg-base-700"
+              className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto mt-3')}
             >
               Try again
             </button>
@@ -784,6 +817,10 @@ export function Player({
                 tracks={stream!.subtitles}
                 value={track}
                 onChange={setTrack}
+                scale={subScale}
+                onScale={changeSubScale}
+                delay={subDelay}
+                onDelay={setSubDelay}
               />
             )}
 
@@ -1044,10 +1081,18 @@ function SubtitlePicker({
   tracks,
   value,
   onChange,
+  scale,
+  onScale,
+  delay,
+  onDelay,
 }: {
   tracks: StreamInfo['subtitles']
   value: number | null
   onChange: (index: number | null) => void
+  scale: number
+  onScale: (scale: number) => void
+  delay: number
+  onDelay: (delay: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
@@ -1082,22 +1127,81 @@ function SubtitlePicker({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 bottom-full z-50 mb-2 max-h-64 w-44 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
+          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60"
         >
-          <MenuRow selected={value === null} onClick={() => { onChange(null); close() }}>
-            Off
-          </MenuRow>
-          {tracks.map((t) => (
-            <MenuRow
-              key={t.index}
-              selected={t.index === value}
-              onClick={() => { onChange(t.index); close() }}
-            >
-              {label(t)}
+          {/* Only the tracks scroll, so size and delay stay in view. */}
+          <div className="max-h-52 overflow-y-auto scrollbar-thin">
+            <MenuRow selected={value === null} onClick={() => { onChange(null); close() }}>
+              Off
             </MenuRow>
-          ))}
+            {tracks.map((t) => (
+              <MenuRow
+                key={t.index}
+                selected={t.index === value}
+                onClick={() => { onChange(t.index); close() }}
+              >
+                {label(t)}
+              </MenuRow>
+            ))}
+          </div>
+          {value !== null && (
+            <div className="mt-1 border-t border-base-700 pt-1">
+              <Stepper
+                label="Size"
+                value={`${Math.round(scale * 100)}%`}
+                onLess={() => onScale(SUB_SCALES[Math.max(0, SUB_SCALES.indexOf(scale) - 1)] ?? 1)}
+                onMore={() => onScale(SUB_SCALES[Math.min(SUB_SCALES.length - 1, SUB_SCALES.indexOf(scale) + 1)] ?? 1)}
+                onReset={() => onScale(1)}
+              />
+              <Stepper
+                label="Delay"
+                value={delayLabel(delay)}
+                onLess={() => onDelay(Math.round((delay - DELAY_STEP) * 10) / 10)}
+                onMore={() => onDelay(Math.round((delay + DELAY_STEP) * 10) / 10)}
+                onReset={() => onDelay(0)}
+              />
+            </div>
+          )}
         </div>
       )}
+    </div>
+  )
+}
+
+/** A − value + row; the value resets it. */
+function Stepper({
+  label,
+  value,
+  onLess,
+  onMore,
+  onReset,
+}: {
+  label: string
+  value: string
+  onLess: () => void
+  onMore: () => void
+  onReset: () => void
+}) {
+  const step = 'grid size-6 place-items-center rounded text-base-200 hover:bg-base-750 hover:text-white'
+  return (
+    <div className="flex items-center gap-1 px-3 py-1 text-sm">
+      <span className="flex-1 text-base-400">{label}</span>
+      <button type="button" role="menuitem" aria-label={`${label} down`} onClick={onLess} className={step}>
+        −
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        aria-label={`Reset ${label.toLowerCase()}`}
+        title="Reset"
+        onClick={onReset}
+        className="w-12 rounded text-center text-xs tabular-nums text-base-200 hover:bg-base-750"
+      >
+        {value}
+      </button>
+      <button type="button" role="menuitem" aria-label={`${label} up`} onClick={onMore} className={step}>
+        +
+      </button>
     </div>
   )
 }
@@ -1238,6 +1342,7 @@ function useKeyboard({
   shell,
   extra,
   showVolume,
+  shiftSubDelay,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
@@ -1247,6 +1352,8 @@ function useKeyboard({
   /** The picture-in-picture window, whose keys never reach this one. */
   extra: Window | null
   showVolume: () => void
+  /** z and x, as in mpv; absent while subtitles are off. */
+  shiftSubDelay?: (by: number) => void
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1294,6 +1401,11 @@ function useKeyboard({
           if (document.fullscreenElement) void document.exitFullscreen()
           else void shell?.requestFullscreen()
           break
+        case 'z':
+        case 'x':
+          if (!shiftSubDelay) return
+          shiftSubDelay(e.key === 'z' ? -DELAY_STEP : DELAY_STEP)
+          break
         default:
           return
       }
@@ -1306,7 +1418,7 @@ function useKeyboard({
       window.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keydown', onKey)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay])
 }
 
 function IconButton({

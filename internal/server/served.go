@@ -7,15 +7,13 @@ import (
 	"kuro/internal/anilist"
 )
 
-// Headers telling the app where a response's AniList data came from: live, or
-// the saved copy (with its age) because AniList could not be reached.
+// Where a response's AniList data came from: live, or a saved copy and its age.
 const (
 	headerLive  = "X-Kuro-Live"
 	headerSaved = "X-Kuro-Saved"
 )
 
-// served lets a page's reads fall back to AniList's last saved answer, and
-// says so in the response. Background work never gets this context.
+// served lets page reads fall back to saved answers and says so in a header.
 func served(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

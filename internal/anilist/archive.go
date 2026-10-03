@@ -9,8 +9,7 @@ import (
 	"time"
 )
 
-// Archive keeps the last answer AniList gave to each read, for when it gives
-// none: a page that errored while AniList was down now shows what it said last.
+// Archive keeps AniList's last answer to each read, served when it is down.
 type Archive interface {
 	LoadAnswer(ctx context.Context, key string) (body []byte, at time.Time, ok bool)
 	SaveAnswer(ctx context.Context, key string, body []byte) error
@@ -29,8 +28,7 @@ func (c *Client) archiver() Archive {
 	return c.archive
 }
 
-// After a failure, reads that have a saved answer skip AniList for this long
-// instead of each waiting out its own retries.
+// After a failure, saved answers are served without retrying for this long.
 const downFor = 30 * time.Second
 
 func (c *Client) markDown() {
@@ -45,8 +43,7 @@ func (c *Client) isDown() bool {
 	return time.Now().Before(c.downUntil)
 }
 
-// Not the token: it changes on every login, which would orphan the archive.
-// Signed in or not is what changes the answer (adult titles).
+// Keyed on signed-in or not (adult titles), not the token, which changes per login.
 func archiveKey(body []byte, authed bool) string {
 	sum := sha256.New()
 	sum.Write(body)
@@ -56,8 +53,7 @@ func archiveKey(body []byte, authed bool) string {
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
-// unreachable is a failure a saved answer can stand in for. A GraphQL
-// rejection is AniList answering, and a cancelled caller wants nothing.
+// unreachable: AniList gave no answer. A GraphQL rejection is an answer.
 func unreachable(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
@@ -76,8 +72,7 @@ func unreachable(ctx context.Context, err error) bool {
 type servedKey struct{}
 
 // Served records where a request's answers came from. Only a context carrying
-// one may be given a saved answer: background work writes what it reads back
-// to the database, and an old answer must never be stored as new.
+// one gets saved answers; background work would store them as new.
 type Served struct {
 	mu    sync.Mutex
 	live  bool
@@ -94,8 +89,7 @@ func servedFrom(ctx context.Context) *Served {
 	return s
 }
 
-// UsedSaved reports whether any answer in this request came from the archive,
-// so its results must not be written back as current.
+// UsedSaved: some answer was a saved one, so nothing may be written back.
 func UsedSaved(ctx context.Context) bool {
 	s := servedFrom(ctx)
 	if s == nil {
@@ -106,13 +100,12 @@ func UsedSaved(ctx context.Context) bool {
 	return !s.saved.IsZero()
 }
 
-// NoteSaved marks a request as answered from saved data kept elsewhere, such as
-// the anime row, when AniList could not be reached.
+// NoteSaved marks a request answered from data saved elsewhere (the anime row).
 func NoteSaved(ctx context.Context, at time.Time) {
 	servedFrom(ctx).noteSaved(at)
 }
 
-// Result says whether AniList answered live and, if not, the age of what stood in.
+// Result: answered live, and the oldest saved answer used.
 func (s *Served) Result() (live bool, saved time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,7 +132,6 @@ func (s *Served) noteSaved(at time.Time) {
 	s.mu.Unlock()
 }
 
-// fromArchive answers from the last saved copy, for a request that allows it.
 func (c *Client) fromArchive(ctx context.Context, key string, out any) bool {
 	served, archive := servedFrom(ctx), c.archiver()
 	if served == nil || archive == nil {

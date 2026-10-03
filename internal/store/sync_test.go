@@ -74,8 +74,7 @@ func TestMarkWatchedOnlyMovesForward(t *testing.T) {
 	}
 }
 
-// AniList applies no such rule server-side, so the client has to complete the
-// entry itself.
+// AniList applies no such rule server-side, so the client has to complete the entry itself.
 func TestMarkWatchedCompletesOnFinalEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

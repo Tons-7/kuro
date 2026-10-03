@@ -28,8 +28,7 @@ func favouriteRow(t *testing.T, st *Store, id int) (favourite, synced, dirty int
 	return
 }
 
-// The push reads the row, sends it, then marks it. A click in between must not
-// be stamped as sent.
+// The push reads the row, sends it, then marks it. A click in between must not be stamped as sent.
 func TestFavouriteChangedDuringPushStaysDirty(t *testing.T) {
 	st := favouriteStore(t)
 	ctx := context.Background()

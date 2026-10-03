@@ -231,8 +231,7 @@ func TestScanWithoutConfiguredRootsIsANoOp(t *testing.T) {
 	}
 }
 
-// A root that does not exist is reported, not fatal: one bad path must not
-// stop the others being scanned.
+// A root that does not exist is reported, not fatal: one bad path must not stop the others being scanned.
 func TestUnreadableRootIsReportedNotFatal(t *testing.T) {
 	s, st := newScanner(t)
 	good := t.TempDir()

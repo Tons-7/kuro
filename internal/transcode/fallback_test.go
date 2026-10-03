@@ -42,8 +42,7 @@ func fakeFFmpeg(real, refuse string, args []string) int {
 	return 0
 }
 
-// fakeBinary points the package at the test binary as ffmpeg, refusing one
-// encoder.
+// fakeBinary points the package at the test binary as ffmpeg, refusing one encoder.
 func fakeBinary(t *testing.T, ffmpeg, refuse string) string {
 	t.Helper()
 	t.Setenv("KURO_FAKE_FFMPEG", absolute(ffmpeg))
@@ -121,8 +120,7 @@ func TestSoftwareFailureIsNotRetried(t *testing.T) {
 		t.Error("a session that already fell back must not loop")
 	}
 
-	// Once a segment exists the encoder worked; whatever killed it was not the
-	// encoder.
+	// Once a segment exists the encoder worked; whatever killed it was not the encoder.
 	s = &Session{Plan: Plan{VideoCodec: "h264_nvenc"}, dir: t.TempDir()}
 	os.WriteFile(s.SegmentPath(3), []byte("x"), 0o644)
 	if s.canFallBack(3, initFail) {

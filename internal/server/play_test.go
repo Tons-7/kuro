@@ -18,7 +18,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// Enough of rqbit for one play.
+// Enough of the engine for one play.
 func fakeEngine(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()

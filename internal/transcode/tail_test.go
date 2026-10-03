@@ -66,8 +66,7 @@ func TestTrailingSegmentIsWrittenWhenThePassEndsShort(t *testing.T) {
 		t.Fatalf("segments = %d, want 5", s.Segments)
 	}
 
-	// Play through in order, as a player does; the first pass runs out of
-	// keyframes before segment 4.
+	// Play through in order, as a player does; the first pass runs out of keyframes before segment 4.
 	for n := 0; n < s.Segments; n++ {
 		if _, err := s.WaitSegment(ctx, n, 60*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)

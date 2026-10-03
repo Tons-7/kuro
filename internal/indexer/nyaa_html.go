@@ -146,8 +146,7 @@ func parseRow(row *html.Node) (Torrent, bool) {
 		t.Downloads = atoi(text(cells[7]))
 	}
 
-	// Nyaa colours rows rather than labelling them: trusted is green, remake
-	// is red.
+	// Nyaa colours rows rather than labelling them: trusted is green, remake is red.
 	switch class := attr(row, "class"); {
 	case strings.Contains(class, "success"):
 		t.Trusted = true

@@ -143,7 +143,11 @@ func TestInspectCancelledByTheCallerIsNotHeldAgainstTheMagnet(t *testing.T) {
 // A season batch holds a dozen episodes; only the requested one may be written
 // to disk, or the cache budget is meaningless.
 func TestAddRestrictsToOneFile(t *testing.T) {
-	c, rec := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+	var added url.Values
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/torrents" {
+			added = r.URL.Query()
+		}
 		io.WriteString(w, inspectJSON)
 	})
 
@@ -152,7 +156,7 @@ func TestAddRestrictsToOneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	re := rec.query.Get("only_files_regex")
+	re := added.Get("only_files_regex")
 	if re == "" {
 		t.Fatal("no file restriction sent")
 	}
@@ -191,7 +195,7 @@ func TestPrewarmFetchesHeadAndTail(t *testing.T) {
 	if len(ranges) != 2 {
 		t.Fatalf("made %d ranged requests, want a head and a tail: %v", len(ranges), ranges)
 	}
-	// Order matters: the last request leaves rqbit's priority window behind
+	// Order matters: the last request leaves the engine's priority window behind
 	// it, and playback starts at the head.
 	if ranges[0] != "bytes=-1048576" {
 		t.Errorf("first range = %q; the tail holds the seek index and must come first", ranges[0])
@@ -201,8 +205,8 @@ func TestPrewarmFetchesHeadAndTail(t *testing.T) {
 	}
 }
 
-// Streaming before rqbit reports "live" fails with an opaque 500, so callers
-// must be made to wait rather than discover it at playback time.
+// Streaming before the engine reports "live" fails, so callers must be made
+// to wait rather than discover it at playback time.
 func TestWaitLive(t *testing.T) {
 	t.Run("returns once live", func(t *testing.T) {
 		var calls int
@@ -353,7 +357,7 @@ func TestLifecycleEndpoints(t *testing.T) {
 	}
 }
 
-// Startup quiets whatever rqbit resumed, except what the caller asks to keep:
+// Startup quiets whatever the engine resumed, except what the caller asks to keep:
 // an episode somebody started stays downloading when the setting says so.
 func TestPauseUnfinishedKeepsWhatIsAskedFor(t *testing.T) {
 	var paused []string
@@ -393,8 +397,8 @@ func TestPauseUnfinishedKeepsWhatIsAskedFor(t *testing.T) {
 	}
 }
 
-// After a launch rqbit re-hashes finished files and reports them as
-// unfinished with progress climbing from zero. Pausing one then froze a
+// While hashing data on disk the engine reports it as unfinished, progress
+// climbing from zero. Pausing one then froze a
 // downloaded episode at "12%" until someone pressed resume.
 func TestPauseUnfinishedLeavesCheckingTorrentsAlone(t *testing.T) {
 	var paused []string
@@ -473,8 +477,7 @@ func TestAwaitGivesUpOnAStalledSwarm(t *testing.T) {
 	}
 }
 
-// Pausing from the downloads list is a decision, not a failure, so the queue
-// can tell the two apart.
+// Pausing from the downloads list is a decision, not a failure, so the queue can tell the two apart.
 func TestAwaitReportsAPause(t *testing.T) {
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"state":"paused","progress_bytes":100,"total_bytes":300}`)
@@ -535,8 +538,8 @@ func TestPrewarmHeadReadsOnlyTheStart(t *testing.T) {
 	}
 }
 
-// After a restart rqbit re-checks part-downloaded files and refuses to serve a
-// byte until it finishes, so a deadline sized for a slow swarm must not expire on it.
+// While the engine hashes data on disk it serves nothing, so a deadline sized
+// for a slow swarm must not expire on it.
 func TestWaitLiveWaitsOutAFileCheck(t *testing.T) {
 	var polls int
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {

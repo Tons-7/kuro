@@ -16,10 +16,7 @@ export function toast(message: string, tone: Toast['tone'] = 'error') {
   for (const l of listeners) l(t)
 }
 
-/**
- * Where an action's failure is said when its own screen has no place for it:
- * most buttons used to fail with nothing on screen at all.
- */
+/** Shows an action's failure when its own screen has no place for it. */
 export function Toaster() {
   const [toasts, setToasts] = useState<Toast[]>([])
 

@@ -146,9 +146,6 @@ func (s *Store) RecordNotified(ctx context.Context, infoHash string, animeID, ep
 
 type Follow struct {
 	AnimeID  int
-	Quality  string
-	Group    string
-	MaxBytes int64
 	Titles   []string
 	Episodes int
 	Progress int
@@ -188,16 +185,13 @@ func (s *Store) EpisodeAired(ctx context.Context, animeID, episode int) (bool, i
 }
 
 // Watched shows are those followed plus those set to auto-download (separate
-// choices). Grouped by anime, not UNIONed: a show that is both matches twice
-// with differing filter columns, which would search every indexer twice per poll.
+// choices). Grouped by anime: a show that is both would otherwise be searched
+// on every indexer twice per poll.
 const followQuery = `
-	SELECT anime_id, max(quality), max(group_filter), max(max_bytes),
-	       max(episode_count), max(progress),
+	SELECT anime_id, max(episode_count), max(progress),
 	       max(next_episode), max(next_airing_at)
 	FROM (
-		SELECT f.anime_id AS anime_id, coalesce(f.quality,'') AS quality,
-		       coalesce(f.group_filter,'') AS group_filter,
-		       coalesce(f.max_bytes,0) AS max_bytes,
+		SELECT f.anime_id AS anime_id,
 		       coalesce(a.episode_count,0) AS episode_count,
 		       coalesce(e.progress,0) AS progress,
 		       coalesce(a.next_episode,0) AS next_episode,
@@ -213,7 +207,7 @@ const followQuery = `
 
 		UNION ALL
 
-		SELECT p.anime_id, '', '', 0,
+		SELECT p.anime_id,
 		       coalesce(a.episode_count,0), coalesce(e.progress,0),
 		       coalesce(a.next_episode,0), coalesce(a.next_airing_at,0)
 		FROM anime_pref p
@@ -234,8 +228,7 @@ func (s *Store) Follows(ctx context.Context) ([]Follow, error) {
 	var out []Follow
 	for rows.Next() {
 		var f Follow
-		if err := rows.Scan(&f.AnimeID, &f.Quality, &f.Group, &f.MaxBytes,
-			&f.Episodes, &f.Progress, &f.NextEpisode, &f.NextAiringAt); err != nil {
+		if err := rows.Scan(&f.AnimeID, &f.Episodes, &f.Progress, &f.NextEpisode, &f.NextAiringAt); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -250,21 +243,17 @@ func (s *Store) Follows(ctx context.Context) ([]Follow, error) {
 	return out, nil
 }
 
-func (s *Store) SetFollow(ctx context.Context, f Follow, on bool) error {
+func (s *Store) SetFollow(ctx context.Context, animeID int, on bool) error {
 	if !on {
-		return s.Unfollow(ctx, f.AnimeID)
+		return s.Unfollow(ctx, animeID)
 	}
-	if err := s.EnsureAnime(ctx, f.AnimeID); err != nil {
+	if err := s.EnsureAnime(ctx, animeID); err != nil {
 		return err
 	}
 	_, err := s.w.ExecContext(ctx, `
-		INSERT INTO follow (anime_id, quality, group_filter, max_bytes, created_at)
-		VALUES (?,?,?,?,?)
-		ON CONFLICT(anime_id) DO UPDATE SET
-		    quality=excluded.quality, group_filter=excluded.group_filter,
-		    max_bytes=excluded.max_bytes`,
-		f.AnimeID, nullable(f.Quality), nullable(f.Group),
-		nullableInt64(f.MaxBytes), time.Now().Unix())
+		INSERT INTO follow (anime_id, created_at) VALUES (?,?)
+		ON CONFLICT(anime_id) DO NOTHING`,
+		animeID, time.Now().Unix())
 	return err
 }
 

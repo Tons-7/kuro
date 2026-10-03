@@ -63,8 +63,7 @@ func TestFolderSettingsResolveAgainstTheExe(t *testing.T) {
 	}
 }
 
-// A setting uncommented where it sits in the template must take effect, not
-// land in the table above it.
+// A setting uncommented where it sits in the template must take effect, not land in the table above it.
 func TestTemplateSettingsAreNotInsideATable(t *testing.T) {
 	dir := inTempDir(t)
 	body := strings.NewReplacer(
@@ -207,8 +206,7 @@ func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	}
 }
 
-// Sites are the user's to name: a fresh config has none, a written one keeps
-// its order.
+// Sites are the user's to name: a fresh config has none, a written one keeps its order.
 func TestLoadReadsIndexersInOrder(t *testing.T) {
 	dir := inTempDir(t)
 	if cfg, err := Load(); err != nil || len(cfg.Indexers) != 0 {

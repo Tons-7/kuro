@@ -152,8 +152,7 @@ func (e *Enricher) Episodes(ctx context.Context, animeID int) (int, error) {
 // few sites use the Japanese counter instead.
 var episodeLabel = regexp.MustCompile(`(?i)(?:episode|ep\.?|第)\s*0*(\d+)`)
 
-// fillStills covers the gap between an episode airing and TheTVDB having a
-// frame from it.
+// fillStills covers the gap between an episode airing and TheTVDB having a frame from it.
 func (e *Enricher) fillStills(ctx context.Context, animeID int) {
 	if e.ani == nil {
 		return
@@ -328,8 +327,7 @@ func (e *Enricher) Skips(ctx context.Context, animeID, episode int, durationSeco
 	if err != nil || malID == 0 {
 		return err
 	}
-	// AniSkip matches on episode length to within ~15s, so a guess is worse
-	// than none.
+	// AniSkip matches on episode length to within ~15s, so a guess is worse than none.
 	if durationSeconds <= 0 {
 		return nil
 	}
@@ -373,8 +371,7 @@ func (e *Enricher) SeaDex(ctx context.Context, force bool) (int, error) {
 	return n, e.store.MarkSource(ctx, "seadex", n)
 }
 
-// Fillers loads one dataset covering every show, so it refreshes on a timer
-// rather than per anime.
+// Fillers loads one dataset covering every show, so it refreshes on a timer rather than per anime.
 func (e *Enricher) Fillers(ctx context.Context, force bool) (int, error) {
 	if !force {
 		at, err := e.store.SourceRefreshedAt(ctx, "filler")

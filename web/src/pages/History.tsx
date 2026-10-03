@@ -64,8 +64,7 @@ export function History() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // Removing the last entry of a later page would strand the viewer on an
-  // empty "nothing watched".
+  // Removing the last entry of a later page would strand the viewer on an empty "nothing watched".
   useEffect(() => {
     if (data && data.items.length === 0 && page > 1) {
       setParams({ page: String(Math.max(1, Math.ceil(data.total / 40))) }, { replace: true })
