@@ -508,10 +508,21 @@ export function coverageFrom(ass: string, from: number): number {
 }
 
 const FILL_SOON = 5_000
+// The shortest gap between asks when new video keeps arriving.
+const FILL_FRESH = 1_000
 const FILL_EVERY = 15_000
 const FILL_QUIET = 45_000
 // How far past the playhead the track should reach before polling can relax.
 const FILL_AHEAD = 120
+
+/** Where the buffered video around the playhead ends. */
+function bufferedEnd(video: HTMLVideoElement): number {
+  const at = video.currentTime
+  for (let i = 0; i < video.buffered.length; i++) {
+    if (video.buffered.start(i) <= at + 0.5 && video.buffered.end(i) >= at) return video.buffered.end(i)
+  }
+  return at
+}
 
 // Polls touch the session, so on a paused or hidden tab they would keep it
 // from idling out and hold the download queue. They wait here.
@@ -541,22 +552,35 @@ async function keepFilling(
   let cues = 0
   let loaded = ''
   let quiet = 0
+  // How far the video was buffered at the last ask: the encoder writes a segment's lines with it.
+  let askedUpTo = 0
 
   for (let attempt = 0; !cancelled(); attempt++) {
     // Poll sooner while the region just ahead of the playhead is not yet
     // covered, whatever a far-off tail cue suggests.
     const near = coverageFrom(loaded, video.currentTime) - video.currentTime < FILL_AHEAD
     const wait = near ? (quiet >= 6 ? FILL_EVERY : FILL_SOON) : quiet >= 3 ? FILL_QUIET : FILL_EVERY
-    // A seek lands somewhere with no lines yet; ask then, not on the timer.
+    const began = Date.now()
+    // A seek lands somewhere with no lines yet, and new video brings new lines; ask then, not on the timer.
     await new Promise<void>((r) => {
+      let soon = 0
       const done = () => {
         clearTimeout(timer)
+        clearTimeout(soon)
         video.removeEventListener('seeked', done)
+        video.removeEventListener('progress', grew)
         r()
+      }
+      const grew = () => {
+        if (soon || bufferedEnd(video) < askedUpTo + 1) return
+        soon = window.setTimeout(done, Math.max(0, FILL_FRESH - (Date.now() - began)))
       }
       const timer = setTimeout(done, wait)
       video.addEventListener('seeked', done, { once: true })
+      video.addEventListener('progress', grew)
+      grew()
     })
+    askedUpTo = bufferedEnd(video)
     await untilWatching(video, cancelled)
     if (cancelled()) return
 

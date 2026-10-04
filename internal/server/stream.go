@@ -386,22 +386,40 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	local := s.readable(r.Context(), session)
 	complete := s.sourceComplete(r.Context(), session)
 
-	path, err := s.subtitles.Extract(r.Context(), local, dir, index, codec, complete)
+	at, _ := strconv.ParseFloat(r.URL.Query().Get("at"), 64)
 
-	// The on-disk file is fast but holey while downloading, and ffmpeg stops at the
-	// first gap; fall back to the slow in-order engine read only if nothing came.
-	if (err != nil || s.subtitles.Cues(dir, index, codec) == 0) && local != session.Source {
-		if p, retry := s.subtitles.Extract(r.Context(), session.Source, dir, index, codec, false); retry == nil {
-			path, err = p, nil
+	// While downloading, the encoder writes the lines beside the picture; the slow reads below fill what it cannot.
+	liveStart, live := session.LiveSubtitles()
+	live = live && !complete
+	var path string
+	have := false
+	if live {
+		path, err = s.subtitles.MergeLive(dir, index, codec)
+		have = err == nil && s.subtitles.Cues(dir, index, codec) > 0
+	}
+
+	if !have {
+		path, err = s.subtitles.Extract(r.Context(), local, dir, index, codec, complete)
+
+		// The on-disk file is fast but holey while downloading, and ffmpeg stops at the
+		// first gap; fall back to the slow in-order engine read only if nothing came.
+		if (err != nil || s.subtitles.Cues(dir, index, codec) == 0) && local != session.Source {
+			if p, retry := s.subtitles.Extract(r.Context(), session.Source, dir, index, codec, false); retry == nil {
+				path, err = p, nil
+			}
 		}
 	}
-	// Past the downloaded opening, the read above only reaches the first lines;
-	// what is playing is read directly, since it is downloaded.
-	if at, _ := strconv.ParseFloat(r.URL.Query().Get("at"), 64); at > 0 && !complete {
+	// A pass begun mid-episode lacks the line already on screen there; what is playing is read directly.
+	if at > 0 && !complete && !(live && transcode.LiveCovers(liveStart, at)) {
 		if p, aroundErr := s.subtitles.ExtractAround(r.Context(), local, dir, index, codec, at); aroundErr == nil {
 			path, err = p, nil
 		} else {
 			s.log.Debug("subtitle around playhead", "session", session.ID, "at", at, "err", aroundErr)
+		}
+	}
+	if live && !have {
+		if p, mergeErr := s.subtitles.MergeLive(dir, index, codec); mergeErr == nil && s.subtitles.Cues(dir, index, codec) > 0 {
+			path, err = p, nil
 		}
 	}
 	if err != nil {

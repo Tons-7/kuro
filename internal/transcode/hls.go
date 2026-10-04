@@ -74,6 +74,8 @@ type Session struct {
 	refs int
 	// A software failure is reported, not retried.
 	fellBack bool
+	// Passes also write subtitle lines; off once that output has killed one.
+	liveSubs bool
 }
 
 // run is one encoder process: what it was started from and when it has gone,
@@ -231,6 +233,7 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 		headFrom:   -1,
 		touched:    time.Now(),
 		refs:       1,
+		liveSubs:   true,
 	}
 
 	m.mu.Lock()
@@ -856,6 +859,16 @@ func (s *Session) await(r *run) {
 	retry := s.canFallBack(r.from, detail)
 	// A crash mid-segment leaves a short file that would be served as whole.
 	s.dropTail(r.from)
+	// The picture matters more than the lines arriving with it; they are read separately instead.
+	if s.liveSubs && liveSubsFailed(detail) && !s.closed {
+		s.liveSubs = false
+		s.log.Warn("subtitle output broke the encoder; continuing without it", "session", s.ID)
+		if next, lerr := s.launch(r.from); lerr == nil {
+			s.run, s.headFrom, s.headTo = next, r.from, r.from-1
+			go s.await(next)
+		}
+		return
+	}
 	if !retry || s.closed {
 		return
 	}

@@ -341,6 +341,8 @@ export interface SetupComponent {
   purpose: string
   size: string
   required?: boolean
+  /** Shown in place of "Optional" where that would mislead. */
+  role?: string
   present: boolean
   version?: string
   /** Newest published version, once looked up. */

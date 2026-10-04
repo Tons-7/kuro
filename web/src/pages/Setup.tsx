@@ -71,7 +71,7 @@ export function SetupPage() {
                   <span className="text-sm font-medium text-base-100">{c.label}</span>
                   <span className="text-xs text-base-500">{c.size}</span>
                   {c.required && !c.present && <Badge tone="recap">Required</Badge>}
-                  {!c.required && <Badge>Optional</Badge>}
+                  {!c.required && <Badge>{c.role ?? 'Optional'}</Badge>}
                   {c.version && <Badge tone="accent">{c.version}</Badge>}
                   {c.system && <Badge>On this system</Badge>}
                 </div>

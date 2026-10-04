@@ -26,8 +26,10 @@ type Component struct {
 	Purpose  string `json:"purpose"`
 	Size     string `json:"size"`
 	Required bool   `json:"required"`
-	Present  bool   `json:"present"`
-	Version  string `json:"version,omitempty"`
+	// Role replaces the "Optional" badge where that would mislead.
+	Role    string `json:"role,omitempty"`
+	Present bool   `json:"present"`
+	Version string `json:"version,omitempty"`
 	// Latest is what is published, when known; newer than Version means an update is on offer.
 	Latest string `json:"latest,omitempty"`
 	Needs  string `json:"needs,omitempty"`
@@ -56,10 +58,12 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			Name: "ffmpeg", Label: "Transcoder",
-			Purpose: "Converts releases the browser cannot play. Needed to watch " +
-				"in a browser, on a phone or on a TV.",
+			Purpose: "ffmpeg and ffprobe. Prepares every episode for the built-in player: in a " +
+				"browser, on a phone or on a TV. Not needed if you only play in mpv or VLC.",
 			Size:    "420 MB",
+			Role:    "Needed for the built-in player",
 			Present: s.hasBinary("ffmpeg") && s.hasBinary("ffprobe"),
+			Problem: s.halfTranscoder(),
 			Version: versions["ffmpeg"],
 		},
 		{
@@ -318,6 +322,18 @@ func (s *Server) hasBinary(name string) bool {
 	}
 	_, err = exec.LookPath(config.ExeName(name))
 	return err == nil
+}
+
+// halfTranscoder explains a row that reads "not installed" to someone who has one of the pair.
+func (s *Server) halfTranscoder() string {
+	ffmpeg, ffprobe := s.hasBinary("ffmpeg"), s.hasBinary("ffprobe")
+	switch {
+	case ffmpeg && !ffprobe:
+		return "ffmpeg is on this system but ffprobe is not; kuro needs both. Install fetches a matching pair."
+	case ffprobe && !ffmpeg:
+		return "ffprobe is on this system but ffmpeg is not; kuro needs both. Install fetches a matching pair."
+	}
+	return ""
 }
 
 func (s *Server) hasShaders() bool {
