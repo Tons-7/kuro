@@ -216,6 +216,7 @@ func (e *Enricher) flagsAsync(animeID int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		e.flags(ctx, animeID, malID)
+		e.listing(ctx, animeID, malID)
 
 		// Outside flags: that stops once it has been run for a show, while a
 		// currently-airing series grows new unclassified episodes every week.
@@ -253,6 +254,35 @@ func (e *Enricher) flags(ctx context.Context, animeID, malID int) {
 	}
 	if recaps > 0 {
 		e.log.Info("recap episodes found", "anime", animeID, "count", recaps)
+	}
+}
+
+// listing names the episodes of a show the episode source has nothing for, from MyAnimeList's list.
+// Finished shows only: that list lags an airing one, and a named row ends the count-based padding.
+func (e *Enricher) listing(ctx context.Context, animeID, malID int) {
+	if !e.store.Finished(ctx, animeID) || !e.store.EpisodesBare(ctx, animeID) || e.store.ListingTried(ctx, animeID) {
+		return
+	}
+
+	found, err := e.meta.Listing(ctx, malID)
+	if err != nil && !errors.Is(err, metadata.ErrNotListed) {
+		e.log.Warn("episode listing", "anime", animeID, "err", err)
+		return
+	}
+	// A list shorter than the show would hide the rest: a named row ends the padding to the count.
+	if total, _ := e.store.EpisodeCount(ctx, animeID); len(found.Episodes) < total {
+		found.Episodes = nil
+	}
+	saved, err := e.store.FillEpisodes(ctx, animeID, found.Episodes)
+	if err != nil {
+		e.log.Warn("save episode listing", "anime", animeID, "err", err)
+		return
+	}
+	if err := e.store.MarkListingTried(ctx, animeID, saved); err != nil {
+		e.log.Warn("mark episode listing", "err", err)
+	}
+	if saved > 0 {
+		e.log.Info("episodes named from the MyAnimeList listing", "anime", animeID, "count", saved)
 	}
 }
 

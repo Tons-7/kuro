@@ -258,6 +258,7 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 			ID:          m.ID,
 			English:     m.Title.English,
 			Cover:       m.CoverImage.Large,
+			CoverLarge:  m.CoverImage.ExtraLarge,
 			Thumb:       m.CoverImage.Medium,
 			Banner:      m.BannerImage,
 			Color:       m.CoverImage.Color,

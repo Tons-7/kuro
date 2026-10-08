@@ -1,6 +1,10 @@
 package score
 
-import "testing"
+import (
+	"testing"
+
+	"kuro/internal/film"
+)
 
 func rejectionRules(c Candidate, prefs Preferences) []string {
 	out := []string{}
@@ -81,5 +85,61 @@ func TestAcceptedReleaseHasNoRejections(t *testing.T) {
 
 	if !got.AutoPick || len(got.Rejections) != 0 {
 		t.Fatalf("blocked %q, rejections %v", got.Blocked, got.Rejections)
+	}
+}
+
+// Patch files and subtitle packs are listed under the show's name; a title ending in a video's name is not one.
+func TestNonVideoReleasesAreRefused(t *testing.T) {
+	prefs := DefaultPreferences()
+	for _, title := range []string{
+		"(project-gxs)_Kara_no_Kyoukai_-_06_-_Oblivion_Recording_v2_(10bit_BD_1080p)_(ANE).gxs",
+		"[Group] Show - 01 [1080p] subtitles.zip",
+		"Show OST.flac",
+	} {
+		if r := Rank([]Candidate{candidate(title, 20, 1<<30)}, prefs)[0]; r.AutoPick || r.Blocked != "not a video file" {
+			t.Errorf("%q: autoPick %v, blocked %q", title, r.AutoPick, r.Blocked)
+		}
+	}
+	for _, title := range []string{
+		"[UTW]_Kara_no_Kyoukai_-_Mirai_Fukuin_[BD][h264-1080p_FLAC][76F03FE0].mkv",
+		"[Group] Show - 01 [1080p]",
+		"[Group] Show v2.0 - 01 [1080p]",
+	} {
+		if r := Rank([]Candidate{candidate(title, 20, 1<<30)}, prefs)[0]; r.Blocked == "not a video file" {
+			t.Errorf("%q was refused as not a video", title)
+		}
+	}
+}
+
+// One film of a series inside a batch of all of them costs its share, not the whole batch.
+func TestFilmBatchIsSizedAsOneFilm(t *testing.T) {
+	key := film.New(film.Entry{Titles: []string{"Series: One"}}, []film.Entry{{Titles: []string{"Series: Two"}}, {Titles: []string{"Series: Three"}}})
+	batch := candidate("[Group] Series (All Movies) [1080p]", 20, 30<<30)
+	batch.Film, batch.Release.Batch = &key, true
+	if got := batch.EpisodeBytes(); got != 10<<30 {
+		t.Errorf("a third of 30 GB = %d", got)
+	}
+	single := candidate("[Group] Series - One [1080p]", 20, 4<<30)
+	single.Film = &key
+	if got := single.EpisodeBytes(); got != 4<<30 {
+		t.Errorf("the film's own release = %d, want its full size", got)
+	}
+}
+
+// In a film series a one-seeder single release is the last resort, behind a healthy batch.
+func TestThinFilmReleaseRanksBehindAHealthyBatch(t *testing.T) {
+	key := film.New(film.Entry{Titles: []string{"Series: One"}}, []film.Entry{{Titles: []string{"Series: Two"}}})
+	single := candidate("[Group] Series - One [1080p]", 1, 1<<30)
+	single.Film, single.Confirmed = &key, true
+	batch := candidate("[Group] Series (All Movies) [1080p]", 40, 4<<30)
+	batch.Film, batch.Confirmed, batch.Release.Batch = &key, true, true
+
+	if got := Rank([]Candidate{single, batch}, DefaultPreferences()); got[0].Torrent.Seeders != 40 {
+		t.Errorf("the one-seeder release ranked first: %s", got[0].Torrent.Title)
+	}
+	// Outside a film series a single episode still beats a pack, however thin.
+	single.Film, batch.Film = nil, nil
+	if got := Rank([]Candidate{single, batch}, DefaultPreferences()); got[0].Torrent.Seeders != 1 {
+		t.Errorf("a pack ranked above the single episode: %s", got[0].Torrent.Title)
 	}
 }

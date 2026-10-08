@@ -31,6 +31,8 @@ const (
 var (
 	discImage  = regexp.MustCompile(`(?i)\b(bdmv|dvdiso|bdiso|iso|disc\s*\d*|avc\s+dts-hd)\b`)
 	sampleFile = regexp.MustCompile(`(?i)\bsample\b`)
+	// A title ending in a file extension names one file; these are not ones a player opens.
+	notVideo = regexp.MustCompile(`(?i)\.(gxs|xdelta|zip|rar|7z|ass|ssa|srt|sub|idx|mka|flac|mp3|ogg|pdf|txt|nfo|exe|iso)$`)
 )
 
 var specs = []spec{
@@ -39,6 +41,15 @@ var specs = []spec{
 		reject: func(c Candidate, _ Preferences) string {
 			if c.WrongShow {
 				return "names a different show"
+			}
+			return ""
+		},
+	},
+	{
+		name: "wrong film", tier: tierWrongThing,
+		reject: func(c Candidate, _ Preferences) string {
+			if c.WrongFilm {
+				return "a different film of the series"
 			}
 			return ""
 		},
@@ -60,6 +71,16 @@ var specs = []spec{
 		reject: func(c Candidate, _ Preferences) string {
 			if discImage.MatchString(c.Torrent.Title) {
 				return "disc image rather than an episode file"
+			}
+			return ""
+		},
+	},
+	{
+		// Patches, subtitle packs and soundtracks are filed beside the show under its name.
+		name: "not a video", tier: tierUnplayable,
+		reject: func(c Candidate, _ Preferences) string {
+			if notVideo.MatchString(strings.TrimSpace(c.Torrent.Title)) {
+				return "not a video file"
 			}
 			return ""
 		},

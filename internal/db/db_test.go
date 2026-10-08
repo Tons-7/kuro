@@ -208,3 +208,44 @@ func TestCloseReleasesBothHandles(t *testing.T) {
 		t.Error("read handle still open")
 	}
 }
+
+// Migration 31 removes the episodes a one-part film took from release names, and nothing a film really has.
+func TestStrayFilmEpisodesAreRemoved(t *testing.T) {
+	conn := open(t)
+	if err := conn.MigrateTo(30); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO anime (id, title_romaji, format, episode_count, synced_at) VALUES
+			(1, 'Film', 'MOVIE', 1, 0), (2, 'Show', 'TV', 12, 0), (3, 'Long film', 'MOVIE', 3, 0)`,
+		`INSERT INTO episode (anime_id, ep_key, number, title_en) VALUES
+			(1, '1', 1, NULL), (1, '2', 2, NULL), (1, '8', 8, NULL), (1, '5', 5, NULL), (1, '3', 3, 'Named'),
+			(2, '2', 2, NULL), (3, '2', 2, NULL)`,
+		`INSERT INTO playback (anime_id, ep_key, last_played_at) VALUES (1, '5', 0)`,
+	} {
+		if _, err := conn.W.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := conn.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := conn.R.Query(`SELECT anime_id || ':' || ep_key FROM episode ORDER BY anime_id, number`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var kept []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, k)
+	}
+	// Kept: the film itself, a titled row, one with watch history, and other entries' episodes.
+	if got, want := strings.Join(kept, " "), "1:1 1:3 1:5 2:2 3:2"; got != want {
+		t.Errorf("kept %q, want %q", got, want)
+	}
+}

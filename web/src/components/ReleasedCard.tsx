@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { ScheduleItem } from '../lib/api'
-import { relativeTime } from '../lib/format'
+import { posterSet, relativeTime } from '../lib/format'
 import { HoverInfo } from './HoverInfo'
 import { PlayIcon, toCard } from './PosterCard'
 import { Badge } from './ui'
@@ -36,6 +36,7 @@ export function ReleasedCard({ item, tags }: { item: ScheduleItem; tags?: boolea
             {item.cover && (
               <img
                 src={item.cover}
+                srcSet={posterSet(item.cover, item.coverLarge)}
                 alt=""
                 loading="lazy"
                 className="size-full object-cover object-center transition-transform duration-300 group-hover/released:scale-105"

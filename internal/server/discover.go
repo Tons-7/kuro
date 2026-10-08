@@ -16,8 +16,9 @@ type discoverItem struct {
 	Title   string  `json:"title"`
 	Romaji  string  `json:"romaji"`
 	English *string `json:"english,omitempty"`
-	// Three sizes: a row thumbnail loading the full cover cost tens of MB.
+	// Sized per use: a row thumbnail loading the full cover cost tens of MB. CoverLarge is for dense screens.
 	Cover      *string `json:"cover,omitempty"`
+	CoverLarge *string `json:"coverLarge,omitempty"`
 	Thumb      *string `json:"thumb,omitempty"`
 	Banner     *string `json:"banner,omitempty"`
 	Color      *string `json:"color,omitempty"`

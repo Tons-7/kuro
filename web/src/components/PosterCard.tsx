@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { DiscoverItem, LibraryItem } from '../lib/api'
-import { cx, tint } from '../lib/format'
+import { cx, posterSet, tint } from '../lib/format'
 import { Badge, ProgressBar } from './ui'
 import { HoverInfo } from './HoverInfo'
 import { StatusMenu } from './StatusMenu'
@@ -9,6 +9,7 @@ export interface CardAnime {
   id: number
   title: string
   cover?: string | null
+  coverLarge?: string | null
   color?: string | null
   episodes?: number | null
   /** Episodes aired, where no total has been announced. */
@@ -49,6 +50,7 @@ export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
     id: item.id,
     title: item.title,
     cover: item.cover ?? null,
+    coverLarge: discover.coverLarge ?? null,
     color: (discover.color ?? library.color) ?? null,
     episodes: item.episodes ?? null,
     // Out so far while airing: "10/13", or "10" for a run with no total yet.
@@ -119,6 +121,7 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
           {anime.cover ? (
             <img
               src={anime.cover}
+              srcSet={posterSet(anime.cover, anime.coverLarge)}
               alt=""
               loading="lazy"
               decoding="async"

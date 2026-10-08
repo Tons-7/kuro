@@ -484,6 +484,12 @@ type jikanResponse struct {
 		MalID  int  `json:"mal_id"`
 		Filler bool `json:"filler"`
 		Recap  bool `json:"recap"`
+		// Tenrai adds the length in seconds and a synopsis; Jikan's list has neither.
+		Title    string  `json:"title"`
+		TitleJA  string  `json:"title_japanese"`
+		Aired    *string `json:"aired"`
+		Seconds  float64 `json:"duration"`
+		Synopsis string  `json:"synopsis"`
 	} `json:"data"`
 	Pagination struct {
 		LastPage    int  `json:"last_visible_page"`
@@ -498,8 +504,23 @@ type jikanResponse struct {
 var ErrNotListed = errors.New("episode flags: episodes not listed yet")
 
 func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
+	listing, err := c.Listing(ctx, malID)
+	return listing.Flags, err
+}
+
+// Listing is a show's episodes as MyAnimeList lists them: titles and dates, and which are filler or recap.
+type Listing struct {
+	Episodes []Episode
+	Flags    []EpisodeFlags
+}
+
+// placeholder is the title MyAnimeList gives an episode nobody has named.
+var placeholder = regexp.MustCompile(`(?i)^episode\s*\d+$`)
+
+func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
+	var out Listing
 	if malID == 0 {
-		return nil, nil
+		return out, nil
 	}
 
 	// Tenrai first (maintained and answering; Jikan often 504s), Jikan as
@@ -523,7 +544,6 @@ func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 		return res, nil
 	}
 
-	var out []EpisodeFlags
 	for page := 1; page <= 20; page++ {
 		var res jikanResponse
 		var err error
@@ -540,7 +560,7 @@ func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 				}
 			}
 			if err == nil && len(res.Data) == 0 {
-				return nil, ErrNotListed
+				return out, ErrNotListed
 			}
 		}
 		if err != nil {
@@ -556,8 +576,16 @@ func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 				number = (page-1)*100 + i + 1
 			}
 			if ep.Filler || ep.Recap {
-				out = append(out, EpisodeFlags{Episode: number, Filler: ep.Filler, Recap: ep.Recap})
+				out.Flags = append(out.Flags, EpisodeFlags{Episode: number, Filler: ep.Filler, Recap: ep.Recap})
 			}
+			listed := Episode{Number: number, TitleJA: ep.TitleJA, Overview: ep.Synopsis, Runtime: int(ep.Seconds) / 60}
+			if !placeholder.MatchString(strings.TrimSpace(ep.Title)) {
+				listed.TitleEN = ep.Title
+			}
+			if ep.Aired != nil {
+				listed.AirDate = parseDate(*ep.Aired)
+			}
+			out.Episodes = append(out.Episodes, listed)
 		}
 
 		if !res.Pagination.HasNextPage {

@@ -328,6 +328,7 @@ func run(log *slog.Logger) error {
 	}
 	prefetcher := library.NewPrefetcher(st, finder, torrents, log)
 	relations := library.NewRelations(st, al, log)
+	finder.WithFranchise(relations.Ensure)
 
 	playback := library.NewPlayback(st, finder, torrents, mpv, cfg.CacheDir, log).
 		WithSync(sync).

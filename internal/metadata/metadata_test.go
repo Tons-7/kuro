@@ -235,6 +235,32 @@ func TestFlagsReadsRecap(t *testing.T) {
 	}
 }
 
+// The same crawl names the episodes; a field in an unexpected shape must not cost the flags.
+func TestListingReadsTitlesAndDates(t *testing.T) {
+	c := testClient(t, "tenrai", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[
+		  {"mal_id":1,"title":"Ilse's Notebook","title_japanese":"イルゼの手帳","aired":"2013-12-09T00:00:00+00:00","duration":1398.5,"synopsis":"A scout writes.","recap":true},
+		  {"mal_id":2,"title":"Episode 2","title_japanese":null,"aired":null,"duration":null,"synopsis":null}
+		],"pagination":{"last_visible_page":1,"has_next_page":false}}`)
+	})
+
+	got, err := c.Listing(context.Background(), 20)
+	if err != nil || len(got.Episodes) != 2 || len(got.Flags) != 1 {
+		t.Fatalf("listing = %+v, err %v", got, err)
+	}
+	first := got.Episodes[0]
+	if first.Number != 1 || first.TitleEN != "Ilse's Notebook" || first.TitleJA != "イルゼの手帳" || first.Overview != "A scout writes." {
+		t.Errorf("episode 1 = %+v", first)
+	}
+	if first.Runtime != 23 || first.AirDate != 1386547200 {
+		t.Errorf("runtime %d, air date %d", first.Runtime, first.AirDate)
+	}
+	// "Episode 2" is the placeholder for an episode nobody named.
+	if second := got.Episodes[1]; second.Number != 2 || second.TitleEN != "" || second.AirDate != 0 {
+		t.Errorf("episode 2 = %+v", second)
+	}
+}
+
 func TestFlagsWithoutMalID(t *testing.T) {
 	c := New()
 	if got, err := c.Flags(context.Background(), 0); got != nil || err != nil {

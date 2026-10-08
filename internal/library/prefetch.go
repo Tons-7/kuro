@@ -177,7 +177,19 @@ func (p *Prefetcher) PrepareTarget(animeID, episode, season int, prefs score.Pre
 	if !p.prepareWanted() {
 		return
 	}
+	p.resolveAsync(animeID, episode, season, prefs)
+}
 
+// Ahead resolves a queued episode while the one before it downloads, so it starts without a search.
+// Not behind the playback switch: this is the queue's own work, and it downloads nothing.
+func (p *Prefetcher) Ahead(animeID, episode, season int, prefs score.Preferences) {
+	if p == nil || p.torrent == nil || animeID == 0 || episode <= 0 {
+		return
+	}
+	p.resolveAsync(animeID, episode, season, prefs)
+}
+
+func (p *Prefetcher) resolveAsync(animeID, episode, season int, prefs score.Preferences) {
 	key := prepareKey(animeID, episode)
 
 	p.mu.Lock()
@@ -455,67 +467,97 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 		return 0, false, nil
 	}
 
-	found, err := p.finder.Find(ctx, Request{
-		AnimeID: animeID, Episode: episode, Season: season, Prefs: prefs,
-	})
-	if err != nil {
-		return 0, false, err
-	}
-	if found.Best == nil {
-		return 0, false, fmt.Errorf("no release found")
-	}
-
-	// Walk the ranked list: the first pick's swarm may be dead.
+	// Walk a ranked list: the first pick's swarm may be dead.
 	var best score.Result
 	var inspected, added *torrent.Torrent
 	var file torrent.File
 	var index int
-	var tried int
 	lastErr := fmt.Errorf("no release found")
-	for _, cand := range found.Results {
-		if !cand.AutoPick || tried >= fetchAttempts {
-			continue
-		}
-		if !keep && usage.Budget > 0 && usage.Bytes+cand.EpisodeBytes() > usage.Budget {
-			return 0, false, fmt.Errorf("would exceed cache budget")
-		}
-		tried++
+	// A release resolved ahead that then would not start; the search must not hand it back.
+	var stale string
+	addFirst := func(results []score.Result) error {
+		tried := 0
+		for _, cand := range results {
+			if !cand.AutoPick || tried >= fetchAttempts || cand.Torrent.InfoHash == stale {
+				continue
+			}
+			if !keep && usage.Budget > 0 && usage.Bytes+cand.EpisodeBytes() > usage.Budget {
+				return fmt.Errorf("would exceed cache budget")
+			}
+			tried++
 
-		ins, err := p.torrent.Inspect(ctx, cand.Torrent.Magnet())
+			ins, err := p.torrent.Inspect(ctx, cand.Torrent.Magnet())
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			f, i, ok := pickFile(ins.Details.Files, cand)
+			if !ok {
+				lastErr = fmt.Errorf("episode not in torrent")
+				continue
+			}
+			a, err := p.torrent.Add(ctx, cand.Torrent.Magnet(), f)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			best, inspected, file, index, added = cand, ins, f, i, a
+			return nil
+		}
+		return nil
+	}
+
+	start := func() error {
+		p.claim(best.Torrent.InfoHash)
+		err := p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
+		if err == nil {
+			// The stream client waits as long as its context.
+			warm, cancel := context.WithTimeout(ctx, prefetchWarmCap)
+			err = p.torrent.Prewarm(warm, added.ID, index, 2<<20)
+			cancel()
+		}
 		if err != nil {
-			lastErr = err
-			continue
+			// Cancelled or dead half way: stopped, not left fetching unrecorded.
+			if perr := p.torrent.Pause(context.WithoutCancel(ctx), added.ID); perr != nil {
+				p.log.Warn("stop abandoned download", "torrent", added.ID, "err", perr)
+			}
 		}
-		f, i, ok := torrent.PickEpisode(ins.Details.Files, cand.Numbers...)
-		if !ok {
-			lastErr = fmt.Errorf("episode not in torrent")
-			continue
+		return err
+	}
+
+	// Resolved while the episode before it downloaded: tried first, and the search is the fallback.
+	p.AwaitPrepare(ctx, animeID, episode)
+	if rel, ok := p.TakePrepared(animeID, episode); ok {
+		if err := addFirst([]score.Result{rel}); err != nil {
+			return 0, false, err
 		}
-		a, err := p.torrent.Add(ctx, cand.Torrent.Magnet(), f)
-		if err != nil {
-			lastErr = err
-			continue
+		if added != nil {
+			err := start()
+			if err != nil && ctx.Err() != nil {
+				return 0, false, err
+			}
+			if err != nil {
+				p.log.Info("release resolved ahead did not start, searching", "anime", animeID, "episode", episode)
+				stale, added, lastErr = rel.Torrent.InfoHash, nil, err
+			}
 		}
-		best, inspected, file, index, added = cand, ins, f, i, a
-		break
 	}
 	if added == nil {
-		return 0, false, lastErr
-	}
-	p.claim(best.Torrent.InfoHash)
-	err = p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
-	if err == nil {
-		// The stream client waits as long as its context.
-		warm, cancel := context.WithTimeout(ctx, prefetchWarmCap)
-		err = p.torrent.Prewarm(warm, added.ID, index, 2<<20)
-		cancel()
-	}
-	if err != nil {
-		// Cancelled or dead half way: stopped, not left fetching unrecorded.
-		if perr := p.torrent.Pause(context.WithoutCancel(ctx), added.ID); perr != nil {
-			p.log.Warn("stop abandoned download", "torrent", added.ID, "err", perr)
+		found, err := p.finder.Find(ctx, Request{
+			AnimeID: animeID, Episode: episode, Season: season, Prefs: prefs,
+		})
+		if err != nil {
+			return 0, false, err
 		}
-		return 0, false, err
+		if err := addFirst(found.Results); err != nil {
+			return 0, false, err
+		}
+		if added == nil {
+			return 0, false, lastErr
+		}
+		if err := start(); err != nil {
+			return 0, false, err
+		}
 	}
 
 	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{

@@ -674,7 +674,7 @@ func (p *Playback) tryCandidate(
 
 	// Only the requested file is downloaded from a season pack, so it has to be
 	// identified before adding, by whichever numbers this release may use.
-	file, fileIndex, ok := torrent.PickEpisode(added.Details.Files, release.Numbers...)
+	file, fileIndex, ok := pickFile(added.Details.Files, release)
 	if !ok {
 		p.log.Warn("episode missing from release", "title", added.Details.Name)
 		return fail(fmt.Errorf("episode %d not found inside %q", req.Episode, added.Details.Name))

@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"kuro/internal/film"
 	"kuro/internal/indexer"
 	"kuro/internal/parse"
 	"kuro/internal/score"
@@ -37,6 +38,14 @@ type Finder struct {
 	// hydrate fetches a show the catalogue lacks: a fresh install has no titles
 	// until its first corpus build. Nil skips it.
 	hydrate func(ctx context.Context, ids []int) (int, error)
+	// franchise learns the show's relations: cours and films are told apart by their siblings. Nil skips it.
+	franchise func(ctx context.Context, animeID int) error
+}
+
+// WithFranchise has every search learn the show's relations first, not only the ones playback starts.
+func (f *Finder) WithFranchise(ensure func(ctx context.Context, animeID int) error) *Finder {
+	f.franchise = ensure
+	return f
 }
 
 // WithHydrator lets Find fetch a show it has no titles for, instead of failing.
@@ -107,9 +116,23 @@ type Candidates struct {
 	Best    *score.Result  `json:"best,omitempty"`
 }
 
+// learnRelations is bounded: a throttled AniList must not hold up every search.
+func (f *Finder) learnRelations(ctx context.Context, animeID int) {
+	if f.franchise == nil {
+		return
+	}
+	bounded, cancel := context.WithTimeout(ctx, relationsDeadline)
+	defer cancel()
+	if err := f.franchise(bounded, animeID); err != nil {
+		f.log.Warn("franchise for matching", "anime", animeID, "err", err)
+	}
+}
+
 // Find searches each of the show's own titles, then keeps only releases that
 // verify as the requested episode of the requested season.
 func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
+	f.learnRelations(ctx, req.AnimeID)
+
 	titles, err := f.store.SearchTitles(ctx, req.AnimeID)
 	if err != nil {
 		return Candidates{}, err
@@ -132,7 +155,13 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	english, _ := f.store.EnglishTitle(ctx, req.AnimeID)
 	req = f.numbering(ctx, req, titles, english)
 	req.Prefs.HardwareTranscode = f.hwTranscode.Load()
-	queries := searchTerms(titles, english, req.Episode, req.Alias.Tvdb, groups, req.Prefs.Audio == "dub")
+
+	// One film of a film series: its well-kept copies are batches named after the series.
+	var series *filmSeries
+	if req.Episode <= 1 {
+		series = f.filmSeries(ctx, req.AnimeID)
+	}
+	queries := searchTerms(titles, english, req.Episode, req.Alias.Tvdb, groups, req.Prefs.Audio == "dub", series.queries()...)
 
 	// Several seconds per request, and the variants are independent: run
 	// sequentially they put half a minute between pressing play and anything.
@@ -183,14 +212,29 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 			seen[t.InfoHash] = struct{}{}
 
 			rel := parse.Parse(t.Title)
-			if !verifies(rel, req) {
-				continue
-			}
 			c := score.Candidate{
 				Torrent: t, Release: rel, TotalEpisodes: total, RuntimeMinutes: runtime,
-				Confirmed: confirms(rel, req), Numbers: numbersFor(rel, req),
 				// Kept, not dropped: the picker shows what was found and why not.
 				WrongShow: !identity.matches(rel, t.Title),
+			}
+			if series != nil {
+				// Every film is "episode 1", so the number verifies nothing; the name does.
+				c.Film = &series.key
+				switch series.key.Match(t.Title) {
+				case film.Ours:
+					c.Confirmed = series.key.Named(t.Title)
+				case film.Other:
+					c.WrongFilm = true
+				default:
+					// The series by name only: a batch, whose file list says whether the film is in it.
+					c.Release.Batch = true
+					c.Confirmed = wholeSeries.MatchString(t.Title)
+				}
+			} else {
+				if !verifies(rel, req) {
+					continue
+				}
+				c.Confirmed, c.Numbers = confirms(rel, req), numbersFor(rel, req)
 			}
 			if info, ok := bestByHash[strings.ToLower(t.InfoHash)]; ok {
 				c.SeaDexBest, c.SeaDexGroup = info.IsBest, true
@@ -288,6 +332,11 @@ func countResults(batches []searchBatch) int {
 // EpisodeNumbers reports which episodes releases exist for. It is the only
 // evidence for a show no metadata source has catalogued.
 func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error) {
+	// One film of a series is one part; the numbers in its releases count films, as "Movies 1 - 8" does.
+	f.learnRelations(ctx, animeID)
+	if f.filmSeries(ctx, animeID) != nil {
+		return nil, nil
+	}
 	found, err := f.Find(ctx, Request{AnimeID: animeID})
 	if err != nil {
 		return nil, err
@@ -831,7 +880,7 @@ func cleanQuery(title string) string {
 	return strings.TrimSpace(strings.Trim(out, "-– "))
 }
 
-func searchTerms(titles []string, english string, episode, tvdb int, bestGroups []string, dub bool) []string {
+func searchTerms(titles []string, english string, episode, tvdb int, bestGroups []string, dub bool, series ...string) []string {
 	var latin []string
 	seen := map[string]struct{}{}
 
@@ -907,6 +956,15 @@ func searchTerms(titles []string, english string, episode, tvdb int, bestGroups 
 			}
 			push(fmt.Sprintf("%s %02d", base, episode))
 		}
+	}
+	// Before the film's own titles, which are many: the series name is what its batches are filed under.
+	for _, name := range series {
+		key := strings.ToLower(name)
+		if _, dup := seen[key]; dup || key == "" {
+			continue
+		}
+		seen[key] = struct{}{}
+		push(name)
 	}
 	for _, t := range latin {
 		push(t)

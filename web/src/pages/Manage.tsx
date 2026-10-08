@@ -263,6 +263,13 @@ function setKept(qc: ReturnType<typeof useQueryClient>, infoHash: string, kept: 
 export function Downloads() {
   const qc = useQueryClient()
   const [confirmClear, setConfirmClear] = useState(false)
+  const [openShows, setOpenShows] = useState<ReadonlySet<number>>(new Set())
+  const toggleShow = (id: number) =>
+    setOpenShows((open) => {
+      const next = new Set(open)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
 
   const { data, isPending, isError, error, refetch } = useDownloads()
   const queue = useDownloadQueue()
@@ -300,11 +307,15 @@ export function Downloads() {
 
   const remove = useMutation({
     meta: { inline: true },
-    mutationFn: (hash: string) => api.del(`/api/downloads/${hash}`),
-    onSuccess: done,
-    onSettled: () => setConfirmRemove(null),
+    mutationFn: (hashes: string[]) => Promise.all(hashes.map((h) => api.del(`/api/downloads/${h}`))),
+    // Settled, not succeeded: some of a show's files may be gone even when one delete failed.
+    onSettled: () => {
+      setConfirmRemove(null)
+      done()
+    },
   })
   // Deleting takes the files; rows also shift as downloads finish, so the ✕ asks before it acts.
+  // Holds a download's hash, or a show's key when the whole group is being deleted.
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
   const pause = useMutation({
@@ -377,8 +388,20 @@ export function Downloads() {
     ...(finished.length > 0
       ? [{ group: 'On disk', meta: `${bytes(cachedBytes)} cached · ${bytes(keptBytes)} downloaded` }]
       : []),
-    ...finished.map((d) => ({ d })),
+    ...byShow(finished).map((x) => ('items' in x ? { show: x } : { d: x })),
   ]
+
+  const actions: RowActions = {
+    // Paused by the queue, not by hand: its section already says it is waiting its turn.
+    queueHeld: (d) => d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)),
+    confirming: confirmRemove,
+    confirm: setConfirmRemove,
+    removing: remove.isPending,
+    toggling: pause.isPending || resume.isPending,
+    keep: (d) => keep.mutate(d),
+    remove: (hashes) => remove.mutate(hashes),
+    pauseResume: (d) => (d.paused ? resume : pause).mutate(d.infoHash),
+  }
 
   return (
     <div className="space-y-4">
@@ -446,141 +469,17 @@ export function Downloads() {
                   onRemove={() => dequeue.mutate(r.q)}
                 />
               )
-            const d = r.d
-            return (
-            <li key={d.infoHash} className="border-t border-white/[0.05] p-3 first:border-t-0">
-              <div className="flex items-start gap-3">
-                {/* A gutter the posters line up against, numbered while waiting. */}
-                <span className="w-4 shrink-0 pt-4 text-right text-xs tabular-nums text-base-500">
-                  {r.position ?? ''}
-                </span>
-                {d.cover && (
-                  <Link to={`/anime/${d.animeId}`} className="shrink-0">
-                    <img
-                      src={d.cover}
-                      alt=""
-                      loading="lazy"
-                      className="h-14 w-10 rounded object-cover shadow-card"
-                    />
-                  </Link>
-                )}
-                <div className="min-w-0 flex-1">
-                  {/* The show first: a release filename does not say what you
-                      downloaded, which is the question this page answers. */}
-                  <p className="truncate text-sm font-medium text-base-100">
-                    {d.title ?? d.name}
-                    {d.episodes.length > 0 && (
-                      <span className="ml-1.5 font-normal text-base-400">
-                        episode{d.episodes.length > 1 ? 's' : ''} {d.episode}
-                      </span>
-                    )}
-                  </p>
-                  {d.title && (
-                    <p className="truncate text-xs text-base-600" title={d.name}>
-                      {d.name}
-                    </p>
-                  )}
-                  {/* One line, left to right: how far, how big, how fast, how
-                      long. Speed and peers separate slow from stalled. */}
-                  <p className="mt-0.5 text-xs text-base-400">
-                    {d.percent < 100 && (
-                      <span className="font-medium text-base-100">{Math.round(d.percent)}% · </span>
-                    )}
-                    {d.percent < 100 ? `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}` : bytes(d.bytesOnDisk)}
-                    {!d.paused && d.percent < 100 && d.mbps ? ` · ${d.mbps.toFixed(1)} Mbps` : ''}
-                    {!d.paused && d.percent < 100 && d.peers ? ` · ${d.peers} peers` : ''}
-                    {!d.paused && d.percent < 100 && d.mbps
-                      ? ` · ${timeLeft(d.totalBytes - d.bytesOnDisk, d.mbps)}`
-                      : ''}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {d.pinned && <Badge tone="accent">Playing</Badge>}
-                  {d.checking && <Badge>Checking file…</Badge>}
-                  {/* Paused by hand, not by the queue: the group already says
-                      a row is waiting its turn. */}
-                  {d.paused && d.percent < 100 && !d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)) && (
-                    <Badge tone="warning">Paused</Badge>
-                  )}
-                  {/* Cached is what watching leaves behind and the sweep may
-                      take; Downloaded was asked for and stays. */}
-                  {d.percent >= 100 && (
-                    <Badge tone={d.kept ? 'success' : 'neutral'}>{d.kept ? 'Downloaded' : 'Cached'}</Badge>
-                  )}
-
-                  {/* Pausing keeps the file; removing does not. Finished ones
-                      have nothing left to pause. */}
-                  {d.percent < 100 && !d.checking && (
-                    <button
-                      onClick={() =>
-                        (d.paused ? resume : pause).mutate(d.infoHash)
-                      }
-                      disabled={pause.isPending || resume.isPending}
-                      aria-label={d.paused ? 'Resume download' : 'Pause download'}
-                      title={d.paused ? 'Resume' : 'Pause'}
-                      className="grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
-                    >
-                      {d.paused ? <PlayGlyph /> : <PauseGlyph />}
-                    </button>
-                  )}
-
-                  {/* Labelled by state: an action label next to the badge read
-                      as the state and looked wrong. */}
-                  <button
-                    onClick={() => keep.mutate(d)}
-                    aria-pressed={d.kept}
-                    title={
-                      d.kept
-                        ? `Kept: never evicted, outside the cache budget. Click to let the cache evict ${
-                            d.episodes.length > 1 ? `all ${d.episodes.length} episodes` : 'it'
-                          } again.`
-                        : `Keep${
-                            d.episodes.length > 1 ? ` all ${d.episodes.length} episodes` : ''
-                          }: never evicted, not counted in the cache budget.`
-                    }
-                    className={cx(
-                      'rounded-md px-2 py-1 text-xs transition-colors',
-                      d.kept
-                        ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-                        : 'text-base-400 hover:bg-base-800 hover:text-white',
-                    )}
-                  >
-                    {d.kept ? '✓ Kept' : 'Keep'}
-                  </button>
-
-                  {!d.pinned && confirmRemove === d.infoHash ? (
-                    <span className="flex items-center gap-1 text-xs">
-                      <button
-                        onClick={() => remove.mutate(d.infoHash)}
-                        disabled={remove.isPending}
-                        className="rounded-md bg-recap/80 px-2 py-1 font-medium text-white hover:bg-recap"
-                      >
-                        Delete {bytes(d.bytesOnDisk)}
-                      </button>
-                      <button
-                        onClick={() => setConfirmRemove(null)}
-                        className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800"
-                      >
-                        Cancel
-                      </button>
-                    </span>
-                  ) : !d.pinned && (
-                    <button
-                      onClick={() => setConfirmRemove(d.infoHash)}
-                      disabled={remove.isPending}
-                      aria-label={`Delete ${d.title ?? d.name}`}
-                      title="Remove and delete the file"
-                      className="grid size-7 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              </div>
-              {d.percent < 100 && <ProgressBar value={d.percent} className="mt-2" />}
-              {d.episodes.length > 1 && <PackEpisodes hash={d.infoHash} />}
-            </li>
-            )
+            if ('show' in r)
+              return (
+                <ShowRows
+                  key={`show-${r.show.animeId}`}
+                  show={r.show}
+                  open={openShows.has(r.show.animeId)}
+                  onToggle={() => toggleShow(r.show.animeId)}
+                  actions={actions}
+                />
+              )
+            return <DownloadRow key={r.d.infoHash} d={r.d} position={r.position} actions={actions} />
           })}
         </ul>
       )}
@@ -592,6 +491,289 @@ type Row =
   | { group: string; meta?: string }
   | { d: Download; position?: number }
   | { q: Queued; position?: number }
+  | { show: Show }
+
+/** One show's finished downloads, listed together. */
+interface Show {
+  animeId: number
+  title?: string
+  cover?: string
+  items: Download[]
+}
+
+// Grouped by catalogue entry, not by name: a later season is its own entry, so it gets its own group.
+// A show with a single download stays a plain row.
+function byShow(finished: Download[]): (Download | Show)[] {
+  const shows = new Map<number, Download[]>()
+  for (const d of finished) {
+    if (d.animeId) shows.set(d.animeId, [...(shows.get(d.animeId) ?? []), d])
+  }
+  const placed = new Set<number>()
+  return finished.flatMap((d): (Download | Show)[] => {
+    const items = d.animeId ? shows.get(d.animeId)! : [d]
+    if (!d.animeId || items.length < 2) return [d]
+    if (placed.has(d.animeId)) return []
+    placed.add(d.animeId)
+    // A special's key ("S1") is not a number; it sorts first.
+    const first = (x: Download) => Number(x.episodes[0]) || 0
+    return [{ animeId: d.animeId, title: d.title, cover: d.cover, items: [...items].sort((a, b) => first(a) - first(b)) }]
+  })
+}
+
+interface RowActions {
+  queueHeld: (d: Download) => boolean
+  /** What the delete confirmation is open for: a download's hash or a show's key. */
+  confirming: string | null
+  confirm: (key: string | null) => void
+  removing: boolean
+  toggling: boolean
+  keep: (d: Download) => void
+  remove: (hashes: string[]) => void
+  pauseResume: (d: Download) => void
+}
+
+function ConfirmDelete({ size, actions, onDelete }: { size: number; actions: RowActions; onDelete: () => void }) {
+  return (
+    <span className="flex items-center gap-1 text-xs">
+      <button
+        onClick={onDelete}
+        disabled={actions.removing}
+        className="rounded-md bg-recap/80 px-2 py-1 font-medium text-white hover:bg-recap"
+      >
+        Delete {bytes(size)}
+      </button>
+      <button
+        onClick={() => actions.confirm(null)}
+        className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800"
+      >
+        Cancel
+      </button>
+    </span>
+  )
+}
+
+const keepButton = (kept: boolean) =>
+  cx(
+    'rounded-md px-2 py-1 text-xs transition-colors',
+    kept
+      ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+      : 'text-base-400 hover:bg-base-800 hover:text-white',
+  )
+
+const deleteButton =
+  'grid size-7 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap'
+
+// A show's downloads behind one line: collapsed it answers "what do I have", opened it lists the episodes.
+function ShowRows({
+  show,
+  open,
+  onToggle,
+  actions,
+}: {
+  show: Show
+  open: boolean
+  onToggle: () => void
+  actions: RowActions
+}) {
+  const key = `show-${show.animeId}`
+  const episodes = show.items.reduce((n, d) => n + Math.max(d.episodes.length, 1), 0)
+  const size = show.items.reduce((n, d) => n + d.bytesOnDisk, 0)
+  const kept = show.items.filter((d) => d.kept).length
+  const allKept = kept === show.items.length
+  // Never the one playing now.
+  const removable = show.items.filter((d) => !d.pinned)
+
+  return (
+    <>
+      <li className="flex items-center gap-3 border-t border-white/[0.05] p-3 first:border-t-0">
+        <button
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={`${open ? 'Hide' : 'Show'} downloads of ${show.title ?? `Anime ${show.animeId}`}`}
+          className="grid size-7 shrink-0 place-items-center rounded-md text-base-500 hover:bg-base-800 hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" className={cx('size-4 transition-transform', open && 'rotate-90')} aria-hidden>
+            <path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        {show.cover && (
+          <Link to={`/anime/${show.animeId}`} className="shrink-0">
+            <img src={show.cover} alt="" loading="lazy" className="h-14 w-10 rounded object-cover shadow-card" />
+          </Link>
+        )}
+        <button onClick={onToggle} className="min-w-0 flex-1 text-left">
+          <p className="truncate text-sm font-medium text-base-100">{show.title ?? `Anime ${show.animeId}`}</p>
+          <p className="mt-0.5 text-xs text-base-400">
+            {episodes} episodes · {bytes(size)}
+          </p>
+        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {show.items.some((d) => d.pinned) && <Badge tone="accent">Playing</Badge>}
+          <Badge tone={allKept ? 'success' : 'neutral'}>
+            {allKept ? 'Downloaded' : kept === 0 ? 'Cached' : `${kept} of ${show.items.length} kept`}
+          </Badge>
+          <button
+            onClick={() => show.items.filter((d) => d.kept === allKept).forEach(actions.keep)}
+            aria-pressed={allKept}
+            title={allKept ? 'Let the cache evict these again' : 'Keep every episode: never evicted, outside the cache budget'}
+            className={keepButton(allKept)}
+          >
+            {allKept ? '✓ Kept' : 'Keep all'}
+          </button>
+          {actions.confirming === key ? (
+            <ConfirmDelete
+              size={removable.reduce((n, d) => n + d.bytesOnDisk, 0)}
+              actions={actions}
+              onDelete={() => actions.remove(removable.map((d) => d.infoHash))}
+            />
+          ) : (
+            removable.length > 0 && (
+              <button
+                onClick={() => actions.confirm(key)}
+                disabled={actions.removing}
+                aria-label={`Delete every download of ${show.title ?? `Anime ${show.animeId}`}`}
+                title="Remove and delete all of these files"
+                className={deleteButton}
+              >
+                ✕
+              </button>
+            )
+          )}
+        </div>
+      </li>
+      {open && show.items.map((d) => <DownloadRow key={d.infoHash} d={d} actions={actions} nested />)}
+    </>
+  )
+}
+
+function DownloadRow({
+  d,
+  position,
+  actions,
+  nested = false,
+}: {
+  d: Download
+  position?: number
+  actions: RowActions
+  /** Inside its show's group, which already carries the cover and the title. */
+  nested?: boolean
+}) {
+  const unfinished = d.percent < 100
+  // What follows "episode": "s 1, 2" for a pack.
+  const numbers = d.episodes.length > 0 && `${d.episodes.length > 1 ? 's' : ''} ${d.episode}`
+
+  return (
+    <li className={cx('border-t border-white/[0.05] p-3 first:border-t-0', nested && 'bg-base-950/30')}>
+      <div className="flex items-start gap-3">
+        {/* The place in line while waiting, the episode inside a group. */}
+        <Gutter>{position ?? (nested ? d.episodes[0] : undefined)}</Gutter>
+        {d.cover && !nested && (
+          <Link to={`/anime/${d.animeId}`} className="shrink-0">
+            <img src={d.cover} alt="" loading="lazy" className="h-14 w-10 rounded object-cover shadow-card" />
+          </Link>
+        )}
+        <div className="min-w-0 flex-1">
+          {/* The show first: a release filename does not say what you
+              downloaded, which is the question this page answers. */}
+          {nested ? (
+            <p className="truncate text-sm font-medium text-base-100">{numbers ? `Episode${numbers}` : d.name}</p>
+          ) : (
+            <p className="truncate text-sm font-medium text-base-100">
+              {d.title ?? d.name}
+              {numbers && <span className="ml-1.5 font-normal text-base-400">episode{numbers}</span>}
+            </p>
+          )}
+          {d.title && (numbers || !nested) && (
+            <p className="truncate text-xs text-base-600" title={d.name}>
+              {d.name}
+            </p>
+          )}
+          {/* One line, left to right: how far, how big, how fast, how
+              long. Speed and peers separate slow from stalled. */}
+          <p className="mt-0.5 text-xs text-base-400">
+            {unfinished && <span className="font-medium text-base-100">{Math.round(d.percent)}% · </span>}
+            {unfinished ? `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}` : bytes(d.bytesOnDisk)}
+            {!d.paused && unfinished && d.mbps ? ` · ${d.mbps.toFixed(1)} Mbps` : ''}
+            {!d.paused && unfinished && d.peers ? ` · ${d.peers} peers` : ''}
+            {!d.paused && unfinished && d.mbps ? ` · ${timeLeft(d.totalBytes - d.bytesOnDisk, d.mbps)}` : ''}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {d.pinned && <Badge tone="accent">Playing</Badge>}
+          {d.checking && <Badge>Checking file…</Badge>}
+          {d.paused && unfinished && !actions.queueHeld(d) && <Badge tone="warning">Paused</Badge>}
+          {/* Cached is what watching leaves behind and the sweep may
+              take; Downloaded was asked for and stays. */}
+          {!unfinished && <Badge tone={d.kept ? 'success' : 'neutral'}>{d.kept ? 'Downloaded' : 'Cached'}</Badge>}
+
+          {/* Pausing keeps the file; removing does not. Finished ones
+              have nothing left to pause. */}
+          {unfinished && !d.checking && (
+            <button
+              onClick={() => actions.pauseResume(d)}
+              disabled={actions.toggling}
+              aria-label={d.paused ? 'Resume download' : 'Pause download'}
+              title={d.paused ? 'Resume' : 'Pause'}
+              className="grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+            >
+              {d.paused ? <PlayGlyph /> : <PauseGlyph />}
+            </button>
+          )}
+
+          {/* Labelled by state: an action label next to the badge read
+              as the state and looked wrong. */}
+          <button
+            onClick={() => actions.keep(d)}
+            aria-pressed={d.kept}
+            title={
+              d.kept
+                ? `Kept: never evicted, outside the cache budget. Click to let the cache evict ${
+                    d.episodes.length > 1 ? `all ${d.episodes.length} episodes` : 'it'
+                  } again.`
+                : `Keep${
+                    d.episodes.length > 1 ? ` all ${d.episodes.length} episodes` : ''
+                  }: never evicted, not counted in the cache budget.`
+            }
+            className={keepButton(d.kept)}
+          >
+            {d.kept ? '✓ Kept' : 'Keep'}
+          </button>
+
+          {!d.pinned &&
+            (actions.confirming === d.infoHash ? (
+              <ConfirmDelete size={d.bytesOnDisk} actions={actions} onDelete={() => actions.remove([d.infoHash])} />
+            ) : (
+              <button
+                onClick={() => actions.confirm(d.infoHash)}
+                disabled={actions.removing}
+                aria-label={`Delete ${d.title ?? d.name}`}
+                title="Remove and delete the file"
+                className={deleteButton}
+              >
+                ✕
+              </button>
+            ))}
+        </div>
+      </div>
+      {unfinished && <ProgressBar value={d.percent} className="mt-2" />}
+      {d.episodes.length > 1 && <PackEpisodes hash={d.infoHash} />}
+    </li>
+  )
+}
+
+// The column every row starts with, so posters and titles line up: a square holding a number, or nothing.
+function Gutter({ children }: { children?: React.ReactNode }) {
+  return (
+    <span
+      className={cx(
+        'grid h-7 min-w-7 shrink-0 place-items-center self-center rounded-md px-1 text-xs tabular-nums text-base-400',
+        children != null && 'bg-white/[0.05]',
+      )}
+    >
+      {children}
+    </span>
+  )
+}
 
 function Group({ label, meta }: { label: string; meta?: string }) {
   return (
@@ -618,7 +800,7 @@ function QueueRow({
 }) {
   return (
     <li className="group flex items-center gap-3 border-t border-white/[0.05] p-3 first:border-t-0">
-      <span className="w-4 shrink-0 text-right text-xs tabular-nums text-base-500">{position ?? ''}</span>
+      <Gutter>{position}</Gutter>
       {q.cover ? (
         <img src={q.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
       ) : (

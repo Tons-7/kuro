@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kuro/internal/film"
 	"kuro/internal/indexer"
 	"kuro/internal/parse"
 )
@@ -160,6 +161,11 @@ type Candidate struct {
 	// asked for first. A release that names no cour counts from the first one,
 	// so for a later cour only the numbers carried across cours are listed.
 	Numbers []int `json:"-"`
+
+	// Film is set for one film of a film series: its file is found by name, not by an episode number.
+	Film *film.Key `json:"-"`
+	// The release names another film of the same series.
+	WrongFilm bool
 }
 
 // The limit is set for an episode of this length; longer runtimes scale it.
@@ -181,6 +187,13 @@ func (c Candidate) SizeLimit(prefs Preferences) int64 {
 // EpisodeBytes is what will actually be downloaded. Only the requested file is
 // fetched from a pack, so a pack's total size overstates the cost for older shows.
 func (c Candidate) EpisodeBytes() int64 {
+	// A batch of a film series holds every film; one of them is its share.
+	if c.Film != nil {
+		if c.Release.Batch && c.Film.Count > 1 {
+			return c.Torrent.Size / int64(c.Film.Count)
+		}
+		return c.Torrent.Size
+	}
 	if !c.Release.Batch && c.Release.Episode > 0 {
 		return c.Torrent.Size
 	}
@@ -272,6 +285,10 @@ func better(a, b Result) bool {
 	if a.AutoPick && empty(a) != empty(b) {
 		return !empty(a)
 	}
+	// An old film's single release is often one seeder; its series batch is the copy people keep.
+	if a.AutoPick && a.Film != nil && b.Film != nil && thin(a) != thin(b) {
+		return !thin(a)
+	}
 	if a.AutoPick && a.Release.Batch != b.Release.Batch {
 		return !a.Release.Batch
 	}
@@ -290,6 +307,9 @@ func better(a, b Result) bool {
 	}
 	return a.Score > b.Score
 }
+
+// thin: counted at a handful of seeders, which streams badly. An unknown count isn't thin.
+func thin(r Result) bool { return r.Torrent.SeedersKnown && r.Torrent.Seeders < thinSwarm }
 
 // empty: counted at zero seeders. An unknown count isn't empty.
 func empty(r Result) bool { return r.Torrent.SeedersKnown && r.Torrent.Seeders == 0 }

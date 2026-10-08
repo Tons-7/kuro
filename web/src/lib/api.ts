@@ -158,6 +158,8 @@ export interface DiscoverItem {
   english?: string
   /** Poster sized for a card. Use thumb in list rows and banner for the hero. */
   cover?: string
+  /** The same poster at twice the size, for dense screens and large placements. */
+  coverLarge?: string
   thumb?: string
   banner?: string
   color?: string
@@ -194,6 +196,7 @@ export interface ScheduleItem {
   romaji: string
   english?: string
   cover?: string
+  coverLarge?: string
   thumb?: string
   colour?: string
   format?: string

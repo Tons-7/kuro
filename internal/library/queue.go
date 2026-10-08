@@ -305,6 +305,11 @@ func (d *Downloader) step(parent context.Context) bool {
 	d.log.Info("downloading queued episode",
 		"anime", next.AnimeID, "episode", next.Episode)
 
+	// One ahead only: its release is found while this one downloads, so it starts at once.
+	if after, ok, err := d.store.PeekQueued(parent); err == nil && ok {
+		d.prefetch.Ahead(after.AnimeID, after.Episode, after.Season, d.prefs(parent, after.AnimeID))
+	}
+
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
 

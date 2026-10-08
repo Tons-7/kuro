@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"html"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -289,14 +291,66 @@ func (s *Store) Episodes(ctx context.Context, animeID int) ([]EpisodeRow, error)
 	}
 
 	if len(out) == 0 {
-		return s.plannedEpisodes(ctx, animeID)
+		planned, err := s.plannedEpisodes(ctx, animeID)
+		return s.asItself(ctx, animeID, planned), err
 	}
 
 	out = s.padToCount(ctx, animeID, out)
 	for i := range out {
 		out[i].Display = out[i].Number
 	}
-	return out, nil
+	return s.asItself(ctx, animeID, out), nil
+}
+
+var (
+	lineBreak = regexp.MustCompile(`(?i)<br\s*/?>`)
+	markup    = regexp.MustCompile(`<[^>]*>`)
+)
+
+// plain is a catalogue description without its markup, on one line.
+func plain(description string) string {
+	text := markup.ReplaceAllString(lineBreak.ReplaceAllString(description, " "), "")
+	return strings.Join(strings.Fields(html.UnescapeString(text)), " ")
+}
+
+// asItself fills a one-part entry's only episode from the entry: no source keeps episode data for a film.
+func (s *Store) asItself(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
+	if len(out) != 1 {
+		return out
+	}
+	var format, description, art *string
+	var count, minutes *int
+	var status string
+	if err := s.r.QueryRowContext(ctx, `
+		SELECT format, episode_count, description, coalesce(banner_url, cover_url), duration, coalesce(status, '')
+		FROM anime WHERE id = ?`, animeID).Scan(&format, &count, &description, &art, &minutes, &status); err != nil {
+		return out
+	}
+	if count == nil || *count != 1 {
+		return out
+	}
+
+	row := &out[0]
+	// Described either way, but a film still to come stays marked as expected.
+	if status != "NOT_YET_RELEASED" {
+		row.Planned = false
+	}
+	if row.TitleEN == nil && row.TitleJA == nil && format != nil && *format == "MOVIE" {
+		title := "Complete Movie"
+		row.TitleEN = &title
+	}
+	if (row.Overview == nil || *row.Overview == "") && description != nil {
+		if text := plain(*description); text != "" {
+			row.Overview = &text
+		}
+	}
+	if row.Still == nil || *row.Still == "" {
+		row.Still = art
+	}
+	if row.Runtime == nil {
+		row.Runtime = minutes
+	}
+	return out
 }
 
 // padToCount fills in the episodes the catalogue says exist but nothing has
@@ -669,6 +723,74 @@ func (s *Store) SaveDerivedEpisodes(ctx context.Context, animeID int, numbers []
 		saved++
 	}
 	return saved, tx.Commit()
+}
+
+// FillEpisodes records a second source's episodes into the gaps only: nothing recorded is replaced or removed.
+func (s *Store) FillEpisodes(ctx context.Context, animeID int, eps []metadata.Episode) (int, error) {
+	if len(eps) == 0 {
+		return 0, nil
+	}
+	if err := s.EnsureAnime(ctx, animeID); err != nil {
+		return 0, err
+	}
+
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO episode (anime_id, ep_key, number, is_special, title_en, title_ja, overview, air_date, runtime)
+		VALUES (?,?,?,0,?,?,?,?,?)
+		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
+		    title_en=coalesce(episode.title_en, excluded.title_en),
+		    title_ja=coalesce(episode.title_ja, excluded.title_ja),
+		    overview=coalesce(episode.overview, excluded.overview),
+		    air_date=coalesce(episode.air_date, excluded.air_date),
+		    runtime=coalesce(episode.runtime, excluded.runtime)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	var saved int
+	for _, e := range eps {
+		if e.Number <= 0 || e.Number > 5000 {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, animeID, strconv.Itoa(e.Number), e.Number,
+			nullable(e.TitleEN), nullable(e.TitleJA), nullable(e.Overview),
+			nullableInt64(e.AirDate), nullableInt(e.Runtime)); err != nil {
+			return 0, err
+		}
+		saved++
+	}
+	return saved, tx.Commit()
+}
+
+// EpisodesBare reports a show no source has described: no episode has a title or an air date.
+func (s *Store) EpisodesBare(ctx context.Context, animeID int) bool {
+	var described int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT count(*) FROM episode
+		WHERE anime_id = ? AND (title_en IS NOT NULL OR title_ja IS NOT NULL OR air_date IS NOT NULL)`,
+		animeID).Scan(&described)
+	return err == nil && described == 0
+}
+
+// ListingTried reports that the second source was asked about this show within the month.
+func (s *Store) ListingTried(ctx context.Context, animeID int) bool {
+	at, err := s.SourceRefreshedAt(ctx, listingKey(animeID))
+	return err == nil && !at.IsZero() && time.Since(at) < 30*24*time.Hour
+}
+
+func (s *Store) MarkListingTried(ctx context.Context, animeID, count int) error {
+	return s.MarkSource(ctx, listingKey(animeID), count)
+}
+
+func listingKey(animeID int) string {
+	return "listing:" + strconv.Itoa(animeID)
 }
 
 // EpisodesDerived reports that releases have already been searched for this

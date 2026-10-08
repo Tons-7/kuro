@@ -54,6 +54,11 @@ export function airTime(unix: number): string {
   })
 }
 
+/** A dense screen takes the larger poster; an ordinary one keeps the small file. */
+export function posterSet(cover?: string | null, large?: string | null): string | undefined {
+  return cover && large && large !== cover ? `${cover} 1x, ${large} 2x` : undefined
+}
+
 /** AniList gives each anime a dominant cover colour; it makes a good accent. */
 export function tint(color?: string | null, alpha = 1): string | undefined {
   if (!color || !/^#[0-9a-f]{6}$/i.test(color)) return undefined

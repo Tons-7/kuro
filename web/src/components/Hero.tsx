@@ -79,22 +79,40 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
             i === index ? 'opacity-100' : 'pointer-events-none opacity-0',
           )}
         >
-          {fetched.includes(i) && (
-            <img
-              // The banner is 1900x400; a poster is 230 wide and looks blurred
-              // the moment it is stretched across the strip.
-              src={anime.banner ?? anime.cover}
-              alt=""
-              decoding="async"
-              // A slow drift keeps the strip alive; reduced motion stops it.
-              className={cx(
-                'size-full object-cover object-center transition-transform duration-[9000ms] ease-linear',
-                i === index ? 'scale-105' : 'scale-100',
-              )}
-            />
-          )}
+          {fetched.includes(i) &&
+            (anime.banner ? (
+              <img
+                src={anime.banner}
+                alt=""
+                decoding="async"
+                // A slow drift keeps the strip alive; reduced motion stops it.
+                className={cx(
+                  'size-full object-cover object-center transition-transform duration-[9000ms] ease-linear',
+                  i === index ? 'scale-105' : 'scale-100',
+                )}
+              />
+            ) : (
+              // No banner: stretched across a wide strip a poster is a smear, so there it becomes the
+              // backdrop. A narrow strip is about a poster's width, and shows it as it is.
+              <img
+                src={anime.coverLarge ?? anime.cover}
+                alt=""
+                decoding="async"
+                className="size-full object-cover lg:scale-125 lg:opacity-60 lg:blur-2xl"
+              />
+            ))}
           <div className="absolute inset-0 bg-gradient-to-r from-base-950 via-base-950/75 to-transparent" />
           <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/10 to-transparent" />
+          {/* And the poster itself, sharp, where the banner's subject would have been. */}
+          {fetched.includes(i) && !anime.banner && (
+            <img
+              src={anime.coverLarge ?? anime.cover}
+              alt=""
+              decoding="async"
+              // Smaller on a mid-width strip, where a tall poster would sit over the title.
+              className="absolute top-1/2 right-[6%] aspect-[2/3] h-[60%] -translate-y-1/2 rounded-xl object-cover shadow-lift ring-1 ring-white/10 max-lg:hidden xl:right-[12%] xl:h-[76%]"
+            />
+          )}
           {/* The show's own colour, low in the corner. */}
           <div
             className="absolute inset-0"

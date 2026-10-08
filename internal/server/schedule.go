@@ -37,20 +37,21 @@ func (s *Server) runJob(w http.ResponseWriter, r *http.Request) {
 }
 
 type scheduleItem struct {
-	AnimeID  int     `json:"animeId"`
-	Episode  int     `json:"episode"`
-	AiringAt int     `json:"airingAt"`
-	Title    string  `json:"title"`
-	Romaji   string  `json:"romaji"`
-	English  *string `json:"english,omitempty"`
-	Cover    *string `json:"cover,omitempty"`
-	Thumb    *string `json:"thumb,omitempty"`
-	Colour   *string `json:"colour,omitempty"`
-	Format   *string `json:"format,omitempty"`
-	OnList   bool    `json:"onList"`
-	Progress int     `json:"progress"`
-	Behind   int     `json:"behind"`
-	Watched  bool    `json:"watched"`
+	AnimeID    int     `json:"animeId"`
+	Episode    int     `json:"episode"`
+	AiringAt   int     `json:"airingAt"`
+	Title      string  `json:"title"`
+	Romaji     string  `json:"romaji"`
+	English    *string `json:"english,omitempty"`
+	Cover      *string `json:"cover,omitempty"`
+	CoverLarge *string `json:"coverLarge,omitempty"`
+	Thumb      *string `json:"thumb,omitempty"`
+	Colour     *string `json:"colour,omitempty"`
+	Format     *string `json:"format,omitempty"`
+	OnList     bool    `json:"onList"`
+	Progress   int     `json:"progress"`
+	Behind     int     `json:"behind"`
+	Watched    bool    `json:"watched"`
 
 	// A late-night broadcast falls on a different date in Japan than it does
 	// for the viewer, and fansub sites quote the Japanese one.
@@ -169,17 +170,18 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		}
 
 		item := scheduleItem{
-			AnimeID:  e.MediaID,
-			Episode:  e.Episode,
-			AiringAt: e.AiringAt,
-			English:  e.Media.Title.English,
-			Cover:    e.Media.CoverImage.Large,
-			Thumb:    e.Media.CoverImage.Medium,
-			Colour:   e.Media.CoverImage.Color,
-			Format:   e.Media.Format,
-			OnList:   listed,
-			Progress: progress,
-			Show:     &shows[n],
+			AnimeID:    e.MediaID,
+			Episode:    e.Episode,
+			AiringAt:   e.AiringAt,
+			English:    e.Media.Title.English,
+			Cover:      e.Media.CoverImage.Large,
+			CoverLarge: e.Media.CoverImage.ExtraLarge,
+			Thumb:      e.Media.CoverImage.Medium,
+			Colour:     e.Media.CoverImage.Color,
+			Format:     e.Media.Format,
+			OnList:     listed,
+			Progress:   progress,
+			Show:       &shows[n],
 		}
 		if e.Media.Title.Romaji != nil {
 			item.Romaji = *e.Media.Title.Romaji

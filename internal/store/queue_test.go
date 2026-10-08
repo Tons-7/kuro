@@ -243,3 +243,25 @@ func TestDequeueRemovesAFailedEntry(t *testing.T) {
 		t.Errorf("got %+v, want the failed entry gone", items)
 	}
 }
+
+// Looking at what is next must not claim it: the queue resolves one ahead while another downloads.
+func TestPeekQueuedLeavesTheEpisodeInLine(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 100, "FINISHED", 12)
+	if _, ok, err := s.PeekQueued(ctx); ok || err != nil {
+		t.Fatalf("an empty queue: ok %v, err %v", ok, err)
+	}
+	if _, err := s.Enqueue(ctx, 100, 1, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, _, _ := s.NextQueued(ctx)
+	after, ok, err := s.PeekQueued(ctx)
+	if err != nil || !ok || first.Episode != 1 || after.Episode != 2 {
+		t.Fatalf("claimed %d, then saw %d (ok %v, err %v)", first.Episode, after.Episode, ok, err)
+	}
+	if claimed, ok, _ := s.NextQueued(ctx); !ok || claimed.Episode != 2 {
+		t.Errorf("after a look, the next claim was %+v", claimed)
+	}
+}

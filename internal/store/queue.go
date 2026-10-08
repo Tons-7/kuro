@@ -88,6 +88,20 @@ func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	return q, true, nil
 }
 
+// PeekQueued is the pending episode NextQueued would claim, left unclaimed.
+func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
+	q := QueuedDownload{State: "pending"}
+	err := s.r.QueryRowContext(ctx, `
+		SELECT anime_id, ep_key, episode, season FROM download_queue
+		WHERE state = 'pending'
+		ORDER BY queued_at, episode
+		LIMIT 1`).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueuedDownload{}, false, nil
+	}
+	return q, err == nil, err
+}
+
 // FinishQueued records the outcome. A failure is kept rather than deleted: a
 // row that vanishes silently is indistinguishable from one that worked.
 func (s *Store) FinishQueued(ctx context.Context, animeID int, epKey string, cause error) error {
