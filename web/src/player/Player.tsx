@@ -12,6 +12,7 @@ import {
 } from '../lib/api'
 import { clockTime, cx, languageName } from '../lib/format'
 import { refreshDownloads } from '../lib/queries'
+import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
 import { buttonClass, Spinner, useDismiss } from '../components/ui'
 import { useAnime4K, type UpscaleTier } from './anime4k'
@@ -510,6 +511,8 @@ export function Player({
     }, 2600)
   }, [video])
 
+  const activeSkip = skips.find((r) => time >= r.start && time < r.end)
+
   useKeyboard({
     video,
     togglePlay,
@@ -519,6 +522,7 @@ export function Player({
     extra: pip.window,
     showVolume,
     shiftSubDelay: track === null ? undefined : shiftSubDelay,
+    skipTo: activeSkip?.end,
   })
 
   // How long the picture has been stuck, so a slow swarm can say so rather than looking like a hang.
@@ -574,8 +578,6 @@ export function Player({
     const id = window.setInterval(() => setStalledFor((s) => s + 1), 1000)
     return () => window.clearInterval(id)
   }, [waiting, stream])
-
-  const activeSkip = skips.find((r) => time >= r.start && time < r.end)
 
   // Floating in its own window, the player fills it; fullscreen is handled in
   // CSS, which a second document's stylesheets still carry but `:fullscreen`
@@ -740,6 +742,7 @@ export function Player({
           className="absolute right-4 bottom-24 rounded-md bg-base-950/85 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/20 backdrop-blur-sm transition-transform hover:scale-105"
         >
           Skip {activeSkip.kind.includes('ed') ? 'ending' : 'opening'}
+          <kbd className="ml-2 font-sans text-xs text-white/50 max-sm:hidden">S</kbd>
         </button>
       )}
 
@@ -763,17 +766,17 @@ export function Player({
         />
 
         <div className="mt-2 flex items-center gap-2 text-white">
-          <IconButton label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
+          <IconButton label={playing ? 'Pause' : 'Play'} hint="K" onClick={togglePlay}>
             {playing ? <PauseIcon /> : <PlayIcon />}
           </IconButton>
 
           {/* On a phone the bar had no room for all of it: double tap seeks,
               the hardware buttons set volume, speed stays in reach on desktop. */}
           <span className={cx('contents', !pip.active && 'max-sm:hidden')}>
-          <IconButton label="Back 10 seconds" onClick={() => seekBy(-10)}>
+          <IconButton label="Back 10 seconds" hint="J" onClick={() => seekBy(-10)}>
             <SeekIcon back />
           </IconButton>
-          <IconButton label="Forward 10 seconds" onClick={() => seekBy(10)}>
+          <IconButton label="Forward 10 seconds" hint="L" onClick={() => seekBy(10)}>
             <SeekIcon />
           </IconButton>
           </span>
@@ -841,6 +844,16 @@ export function Player({
               </button>
             ) : (
               <>
+                {/* Not on a phone: no keys there, and no room in the bar. */}
+                <span className="contents max-sm:hidden">
+                  <IconButton
+                    label="Keyboard shortcuts"
+                    hint="?"
+                    onClick={() => window.dispatchEvent(new Event(SHOW_SHORTCUTS))}
+                  >
+                    <KeyboardIcon />
+                  </IconButton>
+                </span>
                 {pip.supported && (
                   <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
                     <PiPIcon />
@@ -848,6 +861,7 @@ export function Player({
                 )}
                 <IconButton
                   label="Fullscreen"
+                  hint="F"
                   onClick={() => {
                     if (document.fullscreenElement) void document.exitFullscreen()
                     else void shell.current?.requestFullscreen()
@@ -1063,7 +1077,7 @@ function Volume({
 }) {
   return (
     <div className="group/vol flex items-center">
-      <IconButton label={muted ? 'Unmute' : 'Mute'} onClick={onToggle}>
+      <IconButton label={muted ? 'Unmute' : 'Mute'} hint="M" onClick={onToggle}>
         {muted || volume === 0 ? <MutedIcon /> : <VolumeIcon />}
       </IconButton>
       <input
@@ -1350,6 +1364,7 @@ function useKeyboard({
   extra,
   showVolume,
   shiftSubDelay,
+  skipTo,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
@@ -1361,6 +1376,8 @@ function useKeyboard({
   showVolume: () => void
   /** z and x, as in mpv; absent while subtitles are off. */
   shiftSubDelay?: (by: number) => void
+  /** Where the opening or ending on screen ends; absent when there is none to skip. */
+  skipTo?: number
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1413,6 +1430,11 @@ function useKeyboard({
           if (!shiftSubDelay) return
           shiftSubDelay(e.key === 'z' ? -DELAY_STEP : DELAY_STEP)
           break
+        case 's':
+          // The same as the button, so only while it shows.
+          if (skipTo === undefined || !video) return
+          video.currentTime = skipTo
+          break
         default:
           return
       }
@@ -1425,15 +1447,18 @@ function useKeyboard({
       window.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keydown', onKey)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo])
 }
 
 function IconButton({
   label,
+  hint,
   onClick,
   children,
 }: {
   label: string
+  /** The key that does the same, named in the tooltip: hovering a button is how its key gets learned. */
+  hint?: string
   onClick: () => void
   children: React.ReactNode
 }) {
@@ -1442,7 +1467,7 @@ function IconButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      title={label}
+      title={hint ? `${label} (${hint})` : label}
       className="grid size-9 place-items-center rounded-md text-white/90 transition-colors hover:bg-white/15 hover:text-white"
     >
       {children}
@@ -1498,6 +1523,15 @@ function MutedIcon() {
     <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
       <path d="M4 9v6h3.5L12 19V5L7.5 9H4Z" fill="currentColor" />
       <path d="m16 9.5 5 5M21 9.5l-5 5" {...stroke} />
+    </svg>
+  )
+}
+
+function KeyboardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+      <rect x="3" y="6" width="18" height="12" rx="2" {...stroke} />
+      <path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" {...stroke} strokeLinecap="round" />
     </svg>
   )
 }

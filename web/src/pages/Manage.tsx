@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type DownloadFile, type Page } from '../lib/api'
+import { sortDownloads } from '../lib/downloads'
 import { bytes, cx, relativeTime } from '../lib/format'
 import {
   refreshDownloads,
@@ -359,19 +360,7 @@ export function Downloads() {
   // Clear never takes a kept download or one playing now.
   const removable = items.filter((d) => !d.pinned && !d.kept).length
 
-  // A queue entry and its torrent are one download; the torrent wins.
-  const started = new Set(items.flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
-  const active = items.filter((d) => d.percent < 100 && !d.paused)
-  const held = items.filter((d) => d.percent < 100 && d.paused)
-  const finished = items.filter((d) => d.percent >= 100)
-  const waitingQueue = queued.filter(
-    (q) => q.state === 'pending' && !started.has(`${q.animeId}-${q.epKey}`),
-  )
-  // Claimed but its release not found yet: no torrent to show, still underway.
-  const searching = queued.filter(
-    (q) => q.state === 'active' && !started.has(`${q.animeId}-${q.epKey}`),
-  )
-  const failed = queued.filter((q) => q.state === 'failed')
+  const { active, held, finished, searching, waitingQueue, failed } = sortDownloads(items, queued)
   const waiting = held.length + waitingQueue.length
   const keptBytes = finished.reduce((n, d) => n + (d.kept ? d.bytesOnDisk : 0), 0)
   const cachedBytes = finished.reduce((n, d) => n + (d.kept ? 0 : d.bytesOnDisk), 0)

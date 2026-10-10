@@ -89,6 +89,50 @@ func TestDownloadSearchesWhenTheResolvedReleaseIsDead(t *testing.T) {
 	}
 }
 
+// A prefetch refused for space must not cost play the release it had ready for that episode.
+func TestPrefetchRefusedForSpaceKeepsTheResolvedRelease(t *testing.T) {
+	engine := newFakeEngine()
+	p, _, st := aheadPrefetcher(t, engine, release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900))
+	ctx := context.Background()
+	prefs := score.DefaultPreferences()
+	if err := p.prepare(ctx, 1, 1, 1, prefs); err != nil {
+		t.Fatal(err)
+	}
+	// Under the budget now, over it with the episode.
+	if err := st.SetSetting(ctx, "cache.budget_bytes", "1024"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, started, err := p.fetch(ctx, 1, 1, 1, prefs, false); err == nil || started {
+		t.Fatalf("a prefetch over the budget went ahead: started=%v err=%v", started, err)
+	}
+	if _, ok := p.TakePrepared(1, 1); !ok {
+		t.Error("the refused prefetch used up the release play was going to start with")
+	}
+}
+
+// With a cache to ask, a prefetch that does not fit asks for room for that show and goes ahead.
+func TestPrefetchAsksTheCacheForRoom(t *testing.T) {
+	engine := newFakeEngine()
+	p, _, st := aheadPrefetcher(t, engine, release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900))
+	ctx := context.Background()
+	if err := st.SetSetting(ctx, "cache.budget_bytes", "1024"); err != nil {
+		t.Fatal(err)
+	}
+	var askedFor, askedBytes int64
+	p.WithRoom(func(_ context.Context, need int64, animeID int) bool {
+		askedFor, askedBytes = int64(animeID), need
+		return true
+	})
+
+	if _, started, err := p.fetch(ctx, 1, 1, 1, score.DefaultPreferences(), false); err != nil || !started {
+		t.Fatalf("prefetch with room made: started=%v err=%v", started, err)
+	}
+	if askedFor != 1 || askedBytes != 1<<30 {
+		t.Errorf("asked for %d bytes for show %d, want the episode's size for show 1", askedBytes, askedFor)
+	}
+}
+
 // Ahead resolves in the background whatever the playback switch says, and never touches the engine.
 func TestAheadResolvesWithoutDownloading(t *testing.T) {
 	engine := newFakeEngine()

@@ -15,7 +15,10 @@ import { usePrefs, useSetPref, useSetup } from '../lib/queries'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Unpaired } from './Unpaired'
 import { AccessRequests } from './AccessRequests'
+import { DownloadsPanel } from './DownloadsPanel'
+import { SHOW_SHORTCUTS } from './keys'
 import { NotificationPanel } from './NotificationPanel'
+import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
 import { useDebounced, useDismiss } from './ui'
 
@@ -124,8 +127,13 @@ function Header() {
         <span className="contents max-sm:hidden">
           <TitleLanguage />
         </span>
+        {/* Not on a phone: no keyboard to glance with, and Downloads is in the profile menu. */}
+        <span className="contents max-sm:hidden">
+          <DownloadsPanel />
+        </span>
         <NotificationPanel />
         <ProfileMenu />
+        <Shortcuts />
       </div>
 
       {/* On a phone the links don't fit beside search, pushing everything to
@@ -475,6 +483,18 @@ function ProfileMenu() {
               {item.label}
             </Link>
           ))}
+          {/* Not on a phone, which has no keys to press. */}
+          <button
+            role="menuitem"
+            onClick={() => {
+              close()
+              window.dispatchEvent(new Event(SHOW_SHORTCUTS))
+            }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 transition-colors hover:bg-base-800 hover:text-white max-sm:hidden"
+          >
+            <kbd className="grid size-4 place-items-center font-sans text-xs text-base-500">?</kbd>
+            Keyboard shortcuts
+          </button>
         </div>
       )}
     </div>

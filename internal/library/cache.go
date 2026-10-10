@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,16 +114,32 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 	if usage.Budget <= 0 || usage.Bytes <= usage.Budget {
 		return rep, nil
 	}
+	c.evictDownTo(ctx, &rep, usage.Budget, evictionOrder(usage.Entries, c.stalled()), torrentBytes(usage.Entries))
 
-	// Eviction takes the whole torrent, so count each hash once.
+	if rep.Evicted > 0 {
+		c.log.Info("cache swept",
+			"evicted", rep.Evicted,
+			"freedMB", rep.Freed>>20,
+			"usedMB", rep.After>>20,
+			"budgetMB", usage.Budget>>20)
+	}
+	return rep, nil
+}
+
+// torrentBytes is what evicting each torrent frees: eviction takes all of its files.
+func torrentBytes(entries []store.CacheEntry) map[string]int64 {
 	freed := map[string]int64{}
-	for _, e := range usage.Entries {
+	for _, e := range entries {
 		freed[e.InfoHash] += e.Bytes
 	}
+	return freed
+}
 
+// evictDownTo evicts in the given order until usage is at or under the target.
+func (c *Cache) evictDownTo(ctx context.Context, rep *SweepReport, target int64, order []store.CacheEntry, freed map[string]int64) {
 	gone := map[string]bool{}
-	for _, e := range evictionOrder(usage.Entries, c.stalled()) {
-		if rep.After <= usage.Budget {
+	for _, e := range order {
+		if rep.After <= target {
 			break
 		}
 		if gone[e.InfoHash] {
@@ -137,15 +154,61 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 		rep.Freed += freed[e.InfoHash]
 		rep.After -= freed[e.InfoHash]
 	}
+}
 
-	if rep.Evicted > 0 {
-		c.log.Info("cache swept",
-			"evicted", rep.Evicted,
-			"freedMB", rep.Freed>>20,
-			"usedMB", rep.After>>20,
-			"budgetMB", usage.Budget>>20)
+// MakeRoom evicts until `need` more bytes fit the budget, for the next episode of a show being watched:
+// that is worth more than an old cached one. Never one of that show's unwatched episodes, which are what
+// the room is for, and nothing at all unless what can go is enough.
+func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
+	c.sweeping.Lock()
+	defer c.sweeping.Unlock()
+
+	usage, err := c.store.CacheUsage(ctx)
+	if err != nil {
+		return false
 	}
-	return rep, nil
+	target := usage.Budget - need
+	if usage.Budget <= 0 || usage.Bytes <= target {
+		return true
+	}
+	watched, err := c.store.WatchedEpisodes(ctx, animeID)
+	if err != nil {
+		return false
+	}
+
+	// A torrent holding one unwatched episode of this show is spared whole.
+	spared := map[string]bool{}
+	for _, e := range usage.Entries {
+		if e.AnimeID == nil || *e.AnimeID != animeID {
+			continue
+		}
+		if n, err := strconv.Atoi(e.EpKey); err != nil || !watched[n] {
+			spared[e.InfoHash] = true
+		}
+	}
+	freed := torrentBytes(usage.Entries)
+	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled()), func(e store.CacheEntry) bool {
+		return spared[e.InfoHash]
+	})
+	var available int64
+	counted := map[string]bool{}
+	for _, e := range order {
+		if !counted[e.InfoHash] {
+			counted[e.InfoHash] = true
+			available += freed[e.InfoHash]
+		}
+	}
+	if usage.Bytes-available > target {
+		return false
+	}
+
+	rep := SweepReport{Before: usage.Bytes, After: usage.Bytes, Budget: usage.Budget}
+	c.evictDownTo(ctx, &rep, target, order, freed)
+	if rep.Evicted > 0 {
+		c.log.Info("cache made room for the next episode",
+			"anime", animeID, "evicted", rep.Evicted, "freedMB", rep.Freed>>20, "usedMB", rep.After>>20)
+	}
+	return rep.After <= target
 }
 
 // A pin or a keep covers its whole torrent: eviction deletes every file of it.

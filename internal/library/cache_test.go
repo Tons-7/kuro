@@ -449,3 +449,68 @@ func TestAutoDeleteSparesABatchWithAnUnwatchedEpisode(t *testing.T) {
 		t.Fatalf("removed %d once both are watched", n)
 	}
 }
+
+// spare is a cached episode nothing is playing: one gigabyte the budget counts.
+func spare(t *testing.T, s *store.Store, hash string, index, animeID, ep int) {
+	t.Helper()
+	episode(t, s, hash, index, animeID, ep)
+	if err := s.PinCache(context.Background(), hash, index, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A full cache makes room for the next episode of the show being watched from what is older: another
+// show's episode, or one of this show's already watched. Never this show's unwatched ones.
+func TestMakeRoomEvictsOlderEpisodesNotTheOnesAhead(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+	spare(t, st, "other", 1, 9, 1)
+	spare(t, st, "seen", 2, 7, 1)
+	spare(t, st, "ahead", 3, 7, 3)
+	if _, err := st.MarkWatched(ctx, 7, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Three gigabytes held, a budget of three: one more does not fit.
+	if err := st.SetSetting(ctx, "cache.budget_bytes", fmt.Sprint(3<<30)); err != nil {
+		t.Fatal(err)
+	}
+
+	if !c.MakeRoom(ctx, 2<<30, 7) {
+		t.Fatal("two older episodes could go, yet no room was made")
+	}
+	if left := hashes(t, st); left["other"] || left["seen"] || !left["ahead"] {
+		t.Fatalf("left = %v, want only the unwatched episode ahead", left)
+	}
+}
+
+// Evicting everything and still not fitting would be loss for nothing.
+func TestMakeRoomEvictsNothingWhenItCannotBeEnough(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+	spare(t, st, "other", 1, 9, 1)
+	spare(t, st, "ahead", 2, 7, 3)
+	if err := st.SetSetting(ctx, "cache.budget_bytes", fmt.Sprint(2<<30)); err != nil {
+		t.Fatal(err)
+	}
+
+	if c.MakeRoom(ctx, 2<<30, 7) {
+		t.Fatal("reported room that the one spare episode cannot give")
+	}
+	if left := hashes(t, st); !left["other"] || !left["ahead"] {
+		t.Fatalf("left = %v, want nothing evicted", left)
+	}
+}
+
+// Room already there costs nothing.
+func TestMakeRoomLeavesACacheWithSpaceAlone(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+	spare(t, st, "other", 1, 9, 1)
+	if err := st.SetSetting(ctx, "cache.budget_bytes", fmt.Sprint(5<<30)); err != nil {
+		t.Fatal(err)
+	}
+
+	if !c.MakeRoom(ctx, 1<<30, 7) || !hashes(t, st)["other"] {
+		t.Fatal("a cache with space evicted, or refused")
+	}
+}

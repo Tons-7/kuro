@@ -43,6 +43,14 @@ type Prefetcher struct {
 	prepared map[string]preparedRelease
 	// Torrents this process started or resumed, which the startup quiet leaves be.
 	claimed map[string]bool
+	// room asks the cache to fit that many more bytes for a show's next episode. Nil: a full cache refuses.
+	room func(ctx context.Context, need int64, animeID int) bool
+}
+
+// WithRoom lets a prefetch into a full cache evict older episodes instead of being refused.
+func (p *Prefetcher) WithRoom(room func(ctx context.Context, need int64, animeID int) bool) *Prefetcher {
+	p.room = room
+	return p
 }
 
 func (p *Prefetcher) claim(hash string) {
@@ -98,7 +106,7 @@ func (p *Prefetcher) ahead() int {
 	return min(max(global.Int("cache.prefetch_count"), 1), 2)
 }
 
-// Opt-in: it shares the line with the episode playing. Failure is silent.
+// Opt-in: it shares the line with the episode playing. A failure is logged, never shown.
 // The second episode waits for the first to land rather than halve the line.
 func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences) {
 	if p == nil || p.torrent == nil || animeID == 0 || episode <= 0 {
@@ -139,7 +147,8 @@ func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences)
 			at = next
 			id, started, err := p.fetch(ctx, animeID, next, season, prefs, false)
 			if err != nil {
-				p.log.Debug("prefetch skipped", "anime", animeID, "episode", next, "err", err)
+				// Said aloud: "it stopped downloading the next one" has to be answerable from the log.
+				p.log.Info("next episode not downloaded ahead", "anime", animeID, "episode", next, "err", err)
 				return
 			}
 			if started && i < count-1 {
@@ -457,7 +466,8 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 		if usage, err = p.store.CacheUsage(ctx); err != nil {
 			return 0, false, err
 		}
-		if usage.Budget > 0 && usage.Bytes >= usage.Budget {
+		// With room to ask for, the release's size decides below.
+		if p.room == nil && usage.Budget > 0 && usage.Bytes >= usage.Budget {
 			return 0, false, fmt.Errorf("cache at budget")
 		}
 	}
@@ -482,7 +492,13 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 				continue
 			}
 			if !keep && usage.Budget > 0 && usage.Bytes+cand.EpisodeBytes() > usage.Budget {
-				return fmt.Errorf("would exceed cache budget")
+				if p.room == nil || !p.room(ctx, cand.EpisodeBytes(), animeID) {
+					return fmt.Errorf("would exceed cache budget")
+				}
+				// Room was made; later candidates are measured against what is left.
+				if after, err := p.store.CacheUsage(ctx); err == nil {
+					usage = after
+				}
 			}
 			tried++
 
@@ -529,6 +545,8 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 	p.AwaitPrepare(ctx, animeID, episode)
 	if rel, ok := p.TakePrepared(animeID, episode); ok {
 		if err := addFirst([]score.Result{rel}); err != nil {
+			// Refused for space, not for being bad: play still wants it when the episode starts.
+			p.storePrepared(animeID, episode, rel)
 			return 0, false, err
 		}
 		if added != nil {

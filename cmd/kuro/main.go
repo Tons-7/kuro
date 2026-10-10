@@ -370,6 +370,7 @@ func run(log *slog.Logger) error {
 	}
 	cache := library.NewCache(st, torrents, cfg.CacheDir, log)
 	playback.WithCache(cache)
+	prefetcher.WithRoom(cache.MakeRoom)
 	scheduler.Add(jobs.Job{
 		Name: "cache-sweep", Every: 2 * time.Minute,
 		Run: func(ctx context.Context) error { _, err := cache.Sweep(ctx); return err },
