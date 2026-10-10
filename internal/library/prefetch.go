@@ -538,6 +538,8 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 			}
 			if err != nil {
 				p.log.Info("release resolved ahead did not start, searching", "anime", animeID, "episode", episode)
+				// Replaced, not retried: left paused it would sit in the downloads list under no show.
+				discardUnclaimed(context.WithoutCancel(ctx), p.store, p.torrent, p.log, added.ID, rel.Torrent.InfoHash)
 				stale, added, lastErr = rel.Torrent.InfoHash, nil, err
 			}
 		}

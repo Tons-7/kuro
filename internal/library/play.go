@@ -835,15 +835,24 @@ func (p *Playback) resumeYielded(ctx context.Context) {
 
 // An abandoned candidate keeps its disk space until it is removed.
 func (p *Playback) discard(ctx context.Context, id int, hash string) {
-	// A download on record is someone's, whatever this call assumed.
-	if p.store.HasTorrent(ctx, hash) {
+	discardUnclaimed(ctx, p.store, p.torrent, p.log, id, hash)
+}
+
+// discardUnclaimed removes a release that was tried and dropped, unless it is on record for an episode:
+// that one is someone's download, whatever the caller assumed.
+func discardUnclaimed(ctx context.Context, st *store.Store, tc *torrent.Client, log *slog.Logger, id int, hash string) {
+	if st.TorrentClaimed(ctx, hash) {
 		return
 	}
-	if err := p.torrent.Delete(ctx, id); err != nil {
-		p.log.Warn("remove abandoned release", "torrent", id, "err", err)
+	if err := tc.Delete(ctx, id); err != nil {
+		log.Warn("remove abandoned release", "torrent", id, "err", err)
 		return
 	}
-	p.log.Info("abandoned release removed", "torrent", id)
+	// The cache sweep may have adopted it while it was being tried; that record goes with it.
+	if err := st.DropTorrentCache(ctx, strings.ToLower(hash)); err != nil {
+		log.Warn("forget abandoned release", "torrent", id, "err", err)
+	}
+	log.Info("abandoned release removed", "torrent", id)
 }
 
 // candidates orders the releases worth attempting, best first.

@@ -55,6 +55,17 @@ func (s *Store) HasTorrent(ctx context.Context, infoHash string) bool {
 	return err == nil && n > 0
 }
 
+// TorrentClaimed reports a download someone recorded, not merely one the sweep adopted from the engine:
+// adoption leaves only the whole-torrent placeholder, tied to no episode.
+func (s *Store) TorrentClaimed(ctx context.Context, infoHash string) bool {
+	var n int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT count(*) FROM torrent_file
+		WHERE lower(info_hash) = lower(?) AND (file_index <> ? OR anime_id IS NOT NULL)`,
+		infoHash, WholeTorrent).Scan(&n)
+	return err == nil && n > 0
+}
+
 // TorrentNames lists the top-level names on disk of every download on record.
 func (s *Store) TorrentNames(ctx context.Context) ([]string, error) {
 	rows, err := s.r.QueryContext(ctx, `

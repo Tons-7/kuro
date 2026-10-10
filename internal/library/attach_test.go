@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -303,6 +304,67 @@ func TestAttachRemovesReleasesThatNeverDeliver(t *testing.T) {
 	}
 	if engine.wasDeleted(goodHash) {
 		t.Error("the release that worked was deleted")
+	}
+}
+
+// The cache sweep adopts whatever the engine holds, a release still being tried included. That bare
+// record is not a download anyone asked for, so the release is still removed when it does not deliver.
+func TestAttachRemovesAReleaseAdoptedWhileItWasTried(t *testing.T) {
+	engine := newFakeEngine(deadHash)
+	p := newPlayback(t, engine, []indexer.Torrent{
+		release(deadHash, "[Dead] Sousou no Frieren - 01 [1080p].mkv", 900),
+		release(goodHash, "[Live] Sousou no Frieren - 01 [1080p].mkv", 50),
+	})
+	ctx := context.Background()
+
+	// The sweep, landing between the add and the verdict.
+	swept := make(chan struct{})
+	go func() {
+		defer close(swept)
+		for range 2000 {
+			engine.mu.Lock()
+			added := slices.Contains(engine.added, deadHash)
+			engine.mu.Unlock()
+			if added {
+				if err := p.store.TrackTorrent(ctx, deadHash, 1, "[Dead] Sousou no Frieren - 01 [1080p].mkv"); err != nil {
+					t.Error(err)
+				}
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	if _, _, _, _, _, err := p.attach(ctx, PlayRequest{
+		AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences(),
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	<-swept
+
+	if !engine.wasDeleted(deadHash) {
+		t.Error("the adopted release that delivered nothing was left downloading")
+	}
+	if p.store.HasTorrent(ctx, deadHash) {
+		t.Error("its record outlived it, so the downloads list still shows it")
+	}
+}
+
+// A release on record for an episode is someone's download, and stays whatever this attempt thought.
+func TestDiscardKeepsADownloadOnRecordForAnEpisode(t *testing.T) {
+	engine := newFakeEngine()
+	p := newPlayback(t, engine, nil)
+	ctx := context.Background()
+	engine.ids[7] = goodHash
+	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
+		InfoHash: goodHash, EngineID: 7, Name: "held", AnimeID: 1, EpKey: "1", FilePath: "held.mkv", TotalSize: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.discard(ctx, 7, goodHash)
+	if engine.wasDeleted(goodHash) || !p.store.HasTorrent(ctx, goodHash) {
+		t.Error("a download recorded for an episode was removed")
 	}
 }
 
