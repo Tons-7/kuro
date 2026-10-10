@@ -182,10 +182,23 @@ func (s *Server) downloadQueue(w http.ResponseWriter, r *http.Request) {
 			waiting[q.AnimeID]++
 		}
 	}
-	send(w, http.StatusOK, map[string]any{"items": items, "waiting": waiting})
+	send(w, http.StatusOK, map[string]any{"items": items, "waiting": waiting, "paused": s.downloader.Paused()})
 }
 
-// prioritiseQueued moves a waiting episode to the front of the queue.
+// pauseQueue stops every download until resumeQueue: pausing one row only lets the next in line start.
+func (s *Server) pauseQueue(w http.ResponseWriter, r *http.Request) { s.setQueuePaused(w, r, true) }
+
+func (s *Server) resumeQueue(w http.ResponseWriter, r *http.Request) { s.setQueuePaused(w, r, false) }
+
+func (s *Server) setQueuePaused(w http.ResponseWriter, r *http.Request, paused bool) {
+	if err := s.downloader.SetPaused(r.Context(), paused); err != nil {
+		s.fail(w, "pause download queue", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"paused": paused})
+}
+
+// prioritiseQueued starts a waiting episode now, ahead of the one downloading.
 func (s *Server) prioritiseQueued(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int    `json:"animeId"`
@@ -196,7 +209,7 @@ func (s *Server) prioritiseQueued(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	moved, err := s.store.Prioritise(r.Context(), body.AnimeID, body.EpKey)
+	moved, err := s.downloader.Now(r.Context(), body.AnimeID, body.EpKey)
 	if err != nil {
 		s.fail(w, "prioritise download", err)
 		return

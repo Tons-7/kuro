@@ -396,6 +396,12 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	if live {
 		path, err = s.subtitles.MergeLive(dir, index, codec)
 		have = err == nil && s.subtitles.Cues(dir, index, codec) > 0
+		// No line yet, but they are being written: served empty now, and the player asks again as video arrives.
+		if !have {
+			if p, ok := s.subtitles.AwaitLive(r.Context(), dir, index, codec); ok {
+				path, err, have = p, nil, true
+			}
+		}
 	}
 
 	if !have {

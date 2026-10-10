@@ -33,6 +33,73 @@ type Downloader struct {
 	// Stream sessions currently watching. A queued download shares the on-screen
 	// episode's connection, so on a slow line the queue waits.
 	watching map[string]struct{}
+	// Paused as a whole from the downloads list: nothing starts until it is resumed. Kept across restarts.
+	paused bool
+}
+
+// pausedSetting remembers a paused queue, so a restart does not start downloading again by itself.
+const pausedSetting = "downloads.paused"
+
+// Paused reports a queue the user stopped as a whole.
+func (d *Downloader) Paused() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.paused
+}
+
+// SetPaused stops or restarts the whole queue. Pausing sends the episode in flight back to wait its turn.
+func (d *Downloader) SetPaused(ctx context.Context, paused bool) error {
+	if d == nil {
+		return nil
+	}
+	if err := d.store.SetSetting(ctx, pausedSetting, fmt.Sprint(paused)); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.paused = paused
+	current := d.current
+	d.mu.Unlock()
+
+	if paused && current != nil {
+		d.log.Info("download queue paused")
+		current.stop()
+	}
+	if !paused {
+		d.Wake()
+	}
+	return nil
+}
+
+// restorePaused picks up a pause from before a restart.
+func (d *Downloader) restorePaused(ctx context.Context) {
+	if v, err := d.store.Setting(ctx, pausedSetting); err == nil && v == "true" {
+		d.mu.Lock()
+		d.paused = true
+		d.mu.Unlock()
+		d.log.Info("download queue is paused; resume it from Downloads")
+	}
+}
+
+// Now puts a waiting episode first and starts it at once: the one in flight goes back to wait behind it.
+// Asking for a download is asking for the queue to run, so a paused queue resumes.
+func (d *Downloader) Now(ctx context.Context, animeID int, epKey string) (bool, error) {
+	if d == nil {
+		return false, nil
+	}
+	moved, err := d.store.Prioritise(ctx, animeID, epKey)
+	if err != nil || !moved {
+		return moved, err
+	}
+	d.mu.Lock()
+	current := d.current
+	d.mu.Unlock()
+	if current != nil && (current.animeID != animeID || current.epKey != epKey) {
+		current.stop()
+	}
+	return true, d.SetPaused(ctx, false)
 }
 
 // inFlight is what the worker is downloading, so cancelling can reach it — the
@@ -120,7 +187,7 @@ func (d *Downloader) held() bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return len(d.watching) > 0
+	return d.paused || len(d.watching) > 0
 }
 
 // Wake tells the worker there is something to do.
@@ -223,6 +290,7 @@ func (d *Downloader) Run(ctx context.Context) {
 	if err := d.store.ResetActive(ctx); err != nil {
 		d.log.Warn("reset download queue", "err", err)
 	}
+	d.restorePaused(ctx)
 
 	for {
 		worked := !d.held() && d.step(ctx)

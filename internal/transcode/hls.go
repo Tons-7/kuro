@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,8 +75,10 @@ type Session struct {
 	refs int
 	// A software failure is reported, not retried.
 	fellBack bool
-	// Passes also write subtitle lines; off once that output has killed one.
+	// A process beside each pass writes subtitle lines as they are read.
 	liveSubs bool
+	// The last pass to end on its own: its subtitle process may still be finishing.
+	finished *run
 }
 
 // run is one encoder process: what it was started from and when it has gone,
@@ -88,6 +91,10 @@ type run struct {
 	// Files older than this past a gap are an earlier pass's, kept for an
 	// instant seek but no proof of this pass's progress.
 	began time.Time
+	// The process writing subtitle lines beside this pass, if any: whether it was told to stop, and is running.
+	subs        *exec.Cmd
+	subsStopped atomic.Bool
+	subsAlive   atomic.Bool
 }
 
 // wrote reports whether segment n is this pass's own output.
@@ -807,6 +814,7 @@ func (s *Session) startLocked(from int) error {
 	if s.closed {
 		s.mu.Unlock()
 		r.cmd.Process.Kill()
+		r.stopSubtitles()
 		return errSessionClosed
 	}
 	s.run, s.headFrom, s.headTo, s.touched = r, from, from-1, time.Now()
@@ -828,6 +836,7 @@ func (s *Session) launch(from int) (*run, error) {
 		return nil, fmt.Errorf("start ffmpeg: %w", err)
 	}
 	s.log.Debug("encoder started", "session", s.ID, "encoder", s.Plan.VideoCodec, "fromSegment", from)
+	s.startSubtitles(r)
 	return r, nil
 }
 
@@ -843,32 +852,26 @@ func (s *Session) await(r *run) {
 	defer s.mu.Unlock()
 	if s.run != r {
 		// Stopped or replaced: whatever it printed on the way out was asked for.
+		r.stopSubtitles()
 		return
 	}
 	s.run = nil
 
 	if err == nil {
+		// Its subtitle process may be a few lines behind; stop ends it if the session goes first.
+		s.finished = r
 		if detail != "" {
 			s.log.Warn("encoder output", "session", s.ID, "detail", detail)
 		}
 		return
 	}
+	r.stopSubtitles()
 	s.log.Warn("encoder failed", "session", s.ID, "encoder", s.Plan.VideoCodec,
 		"fromSegment", r.from, "err", err, "detail", detail)
 
 	retry := s.canFallBack(r.from, detail)
 	// A crash mid-segment leaves a short file that would be served as whole.
 	s.dropTail(r.from)
-	// The picture matters more than the lines arriving with it; they are read separately instead.
-	if s.liveSubs && liveSubsFailed(detail) && !s.closed {
-		s.liveSubs = false
-		s.log.Warn("subtitle output broke the encoder; continuing without it", "session", s.ID)
-		if next, lerr := s.launch(r.from); lerr == nil {
-			s.run, s.headFrom, s.headTo = next, r.from, r.from-1
-			go s.await(next)
-		}
-		return
-	}
 	if !retry || s.closed {
 		return
 	}
@@ -948,12 +951,17 @@ func (s *Session) stop() (head int, killed bool) {
 	s.mu.Lock()
 	r := s.run
 	s.run = nil
+	if done := s.finished; done != nil {
+		done.stopSubtitles()
+		s.finished = nil
+	}
 	s.mu.Unlock()
 
 	if r == nil {
 		return 0, false
 	}
 	r.cmd.Process.Kill()
+	r.stopSubtitles()
 	select {
 	case <-r.exited:
 	case <-time.After(3 * time.Second):

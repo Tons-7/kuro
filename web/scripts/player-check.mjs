@@ -82,15 +82,22 @@ page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 
 page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-const downloadedBadge = page.getByText('Downloaded', { exact: true })
-const cachedBadge = page.getByText('Cached', { exact: true })
+// Both rows are one show's, so they sit in its group; the badges counted are the episodes', not the group's.
+const group = page.getByRole('button', { name: /^Show downloads of / })
+await group.first().waitFor({ timeout: 15_000 }).catch(() => {})
+check((await group.count()) === 1, 'the two downloads of one show are grouped')
+await group.first().click()
+// Episode rows sit inside the show's card, itself a list item.
+const episodeRows = page.locator('li li').filter({ hasText: /Episode \d/ })
+const downloadedBadge = episodeRows.getByText('Downloaded', { exact: true })
+const cachedBadge = episodeRows.getByText('Cached', { exact: true })
 await downloadedBadge.first().waitFor({ timeout: 15_000 }).catch(() => {})
 check((await downloadedBadge.count()) === 1, 'a kept download shows as Downloaded')
 check((await cachedBadge.count()) === 1, 'a watched episode shows as Cached')
 await page.screenshot({ path: `${shots}/downloads-tiers.png` })
 
 // Keep moves the cached one over; the budget no longer sees it.
-await page.locator('li', { has: cachedBadge }).getByRole('button', { name: 'Keep', exact: true }).click()
+await episodeRows.filter({ hasText: 'Cached' }).getByRole('button', { name: 'Keep', exact: true }).click()
 let keptBoth = false
 for (let i = 0; i < 20 && !keptBoth; i++) {
   await sleep(250)

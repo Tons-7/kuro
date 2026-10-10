@@ -187,7 +187,8 @@ export interface Queued {
 export function useDownloadQueue() {
   return useQuery({
     queryKey: ['download-queue'],
-    queryFn: () => api.get<{ items: Queued[]; waiting: Record<string, number> }>('/api/download/queue'),
+    queryFn: () =>
+      api.get<{ items: Queued[]; waiting: Record<string, number>; paused?: boolean }>('/api/download/queue'),
     staleTime: 0,
     refetchInterval: (q) => ((q.state.data?.items ?? []).length ? 5000 : 15_000),
   })

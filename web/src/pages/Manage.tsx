@@ -300,9 +300,16 @@ export function Downloads() {
     onSuccess: done,
   })
 
-  const next = useMutation({
+  const now = useMutation({
     mutationFn: (q: Queued) =>
-      api.post('/api/download/queue/next', { animeId: q.animeId, epKey: q.epKey }),
+      api.post('/api/download/queue/now', { animeId: q.animeId, epKey: q.epKey }),
+    onSuccess: done,
+  })
+
+  // The whole queue: pausing one row only lets the next in line start.
+  const queuePaused = queue.data?.paused ?? false
+  const pauseAll = useMutation({
+    mutationFn: (paused: boolean) => api.post(`/api/download/queue/${paused ? 'pause' : 'resume'}`),
     onSuccess: done,
   })
 
@@ -408,29 +415,59 @@ export function Downloads() {
             : undefined
         }
         actions={
-          removable > 0 &&
-          (confirmClear ? (
-            <>
-              <span className="self-center text-xs text-base-400">
-                Cached episodes only; downloaded ones stay.
-              </span>
-              <Button onClick={() => clear.mutate('completed')}>Finished</Button>
-              <Button variant="danger" onClick={() => clear.mutate('all')}>
-                All, unfinished too
+          <>
+            {/* Only with something to pause, or already paused: otherwise the button does nothing visible. */}
+            {!confirmClear && (queuePaused || active.length + searching.length + waiting > 0) && (
+              <Button
+                onClick={() => pauseAll.mutate(!queuePaused)}
+                disabled={pauseAll.isPending}
+                title={
+                  queuePaused
+                    ? 'Start downloading again, one at a time'
+                    : 'Stop every download. Pausing a single one lets the next in line start.'
+                }
+              >
+                {queuePaused ? 'Resume downloads' : 'Pause all'}
               </Button>
-              <Button variant="ghost" onClick={() => setConfirmClear(false)}>
-                Cancel
-              </Button>
-            </>
-          ) : (
-            <Button onClick={() => setConfirmClear(true)}>Clear…</Button>
-          ))
+            )}
+            {removable > 0 &&
+              (confirmClear ? (
+                <>
+                  <span className="self-center text-xs text-base-400">
+                    Cached episodes only; downloaded ones stay.
+                  </span>
+                  <Button onClick={() => clear.mutate('completed')}>Finished</Button>
+                  <Button variant="danger" onClick={() => clear.mutate('all')}>
+                    All, unfinished too
+                  </Button>
+                  <Button variant="ghost" onClick={() => setConfirmClear(false)}>
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button onClick={() => setConfirmClear(true)}>Clear…</Button>
+              ))}
+          </>
         }
       />
 
       {(remove.isError || clear.isError || keep.isError) && (
         <p className="text-xs text-recap">
           {((remove.error ?? clear.error ?? keep.error) as Error)?.message}
+        </p>
+      )}
+
+      {/* Said outright: a paused queue otherwise looks like downloads that will not start. */}
+      {queuePaused && (
+        <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
+          Downloads are paused. Nothing starts until you resume.
+          <button
+            onClick={() => pauseAll.mutate(false)}
+            disabled={pauseAll.isPending}
+            className="rounded-md bg-accent-500/15 px-2.5 py-1 text-xs font-medium text-accent-300 hover:bg-accent-500/25"
+          >
+            Resume
+          </button>
         </p>
       )}
 
@@ -444,7 +481,7 @@ export function Downloads() {
           action={<LinkButton to="/recent">Find something to watch</LinkButton>}
         />
       ) : (
-        <ul className="surface overflow-hidden">
+        <ul className="space-y-2">
           {rows.map((r) => {
             if ('group' in r) return <Group key={r.group} label={r.group} meta={r.meta} />
             if ('q' in r)
@@ -453,7 +490,7 @@ export function Downloads() {
                   key={`q-${r.q.animeId}-${r.q.epKey}`}
                   q={r.q}
                   position={r.position}
-                  onNext={() => next.mutate(r.q)}
+                  onNow={() => now.mutate(r.q)}
                   onRetry={() => requeue.mutate(r.q)}
                   onRemove={() => dequeue.mutate(r.q)}
                 />
@@ -552,6 +589,9 @@ const keepButton = (kept: boolean) =>
 const deleteButton =
   'grid size-7 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap'
 
+// Each download is its own card: rows sharing one surface ran into each other.
+const card = 'rounded-lg border border-white/[0.08] bg-base-900/60'
+
 // A show's downloads behind one line: collapsed it answers "what do I have", opened it lists the episodes.
 function ShowRows({
   show,
@@ -573,8 +613,9 @@ function ShowRows({
   const removable = show.items.filter((d) => !d.pinned)
 
   return (
-    <>
-      <li className="flex items-center gap-3 border-t border-white/[0.05] p-3 first:border-t-0">
+    // One card for the show; its episodes open inside it, so they read as its own.
+    <li className={cx(card, 'overflow-hidden')}>
+      <div className="flex items-center gap-3 p-3">
         <button
           onClick={onToggle}
           aria-expanded={open}
@@ -629,9 +670,15 @@ function ShowRows({
             )
           )}
         </div>
-      </li>
-      {open && show.items.map((d) => <DownloadRow key={d.infoHash} d={d} actions={actions} nested />)}
-    </>
+      </div>
+      {open && (
+        <ul>
+          {show.items.map((d) => (
+            <DownloadRow key={d.infoHash} d={d} actions={actions} nested />
+          ))}
+        </ul>
+      )}
+    </li>
   )
 }
 
@@ -652,7 +699,7 @@ function DownloadRow({
   const numbers = d.episodes.length > 0 && `${d.episodes.length > 1 ? 's' : ''} ${d.episode}`
 
   return (
-    <li className={cx('border-t border-white/[0.05] p-3 first:border-t-0', nested && 'bg-base-950/30')}>
+    <li className={cx('p-3', nested ? 'border-t border-white/[0.06] bg-base-950/30' : card)}>
       <div className="flex items-start gap-3">
         {/* The place in line while waiting, the episode inside a group. */}
         <Gutter>{position ?? (nested ? d.episodes[0] : undefined)}</Gutter>
@@ -702,7 +749,7 @@ function DownloadRow({
               onClick={() => actions.pauseResume(d)}
               disabled={actions.toggling}
               aria-label={d.paused ? 'Resume download' : 'Pause download'}
-              title={d.paused ? 'Resume' : 'Pause'}
+              title={d.paused ? 'Resume this one' : 'Pause this one. The next in line starts; "Pause all" stops everything.'}
               className="grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
             >
               {d.paused ? <PlayGlyph /> : <PauseGlyph />}
@@ -766,7 +813,7 @@ function Gutter({ children }: { children?: React.ReactNode }) {
 
 function Group({ label, meta }: { label: string; meta?: string }) {
   return (
-    <li className="flex items-baseline justify-between gap-3 border-t border-white/[0.05] bg-base-950/40 px-3 py-1.5 first:border-t-0">
+    <li className="flex items-baseline justify-between gap-3 px-1 pt-3 first:pt-0">
       <span className="text-[11px] font-semibold tracking-wider text-base-400 uppercase">{label}</span>
       {meta && <span className="text-[11px] text-base-600">{meta}</span>}
     </li>
@@ -777,18 +824,18 @@ function Group({ label, meta }: { label: string; meta?: string }) {
 function QueueRow({
   q,
   position,
-  onNext,
+  onNow,
   onRetry,
   onRemove,
 }: {
   q: Queued
   position?: number
-  onNext: () => void
+  onNow: () => void
   onRetry: () => void
   onRemove: () => void
 }) {
   return (
-    <li className="group flex items-center gap-3 border-t border-white/[0.05] p-3 first:border-t-0">
+    <li className={cx(card, 'group flex items-center gap-3 p-3')}>
       <Gutter>{position}</Gutter>
       {q.cover ? (
         <img src={q.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
@@ -815,11 +862,11 @@ function QueueRow({
           </button>
         ) : (
           <button
-            onClick={onNext}
-            title="Download this one as soon as the current download finishes"
+            onClick={onNow}
+            title="Start this one now. The one downloading goes back to wait behind it."
             className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
           >
-            Download next
+            Download now
           </button>
         )}
         <button

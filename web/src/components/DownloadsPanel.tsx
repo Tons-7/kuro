@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from '../lib/api'
 import { copyText, downloadLabel, downloadProgress, downloadsReport, sortDownloads } from '../lib/downloads'
 import { cx } from '../lib/format'
-import { useDownloadQueue, useDownloads, type Download, type Queued } from '../lib/queries'
+import { refreshDownloads, useDownloadQueue, useDownloads, type Download, type Queued } from '../lib/queries'
 import { ProgressBar, useDismiss } from './ui'
 import { plainKey, usePortalHome } from './keys'
 
@@ -32,6 +34,14 @@ export function DownloadsPanel() {
   const sections = sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [])
   const { active, held, finished, searching, waitingQueue, failed } = sections
   const busy = active.length + searching.length
+
+  // The one control here: it stops and starts everything, and cannot lose a download.
+  const qc = useQueryClient()
+  const paused = queue.data?.paused ?? false
+  const pauseAll = useMutation({
+    mutationFn: (pause: boolean) => api.post(`/api/download/queue/${pause ? 'pause' : 'resume'}`),
+    onSuccess: () => refreshDownloads(qc),
+  })
 
   const copy = async () => {
     setCopied(await copyText(downloadsReport(sections), home))
@@ -72,14 +82,29 @@ export function DownloadsPanel() {
             className="fixed z-50 w-96 max-w-[calc(100vw-1rem)] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 shadow-panel"
           >
             <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
-              <p className="text-sm font-medium text-base-100">Downloads</p>
-              <button
-                onClick={copy}
-                title="Copy this list as text, to paste into a report"
-                className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white"
-              >
-                {copied ? 'Copied' : 'Copy details'}
-              </button>
+              <p className="text-sm font-medium text-base-100">
+                Downloads
+                {paused && <span className="ml-1.5 rounded bg-amber-400/15 px-1.5 text-[11px] text-amber-300">Paused</span>}
+              </p>
+              <div className="flex items-center gap-1">
+                {(paused || busy + held.length + waitingQueue.length > 0) && (
+                  <button
+                    onClick={() => pauseAll.mutate(!paused)}
+                    disabled={pauseAll.isPending}
+                    title={paused ? 'Start downloading again' : 'Stop every download until you resume'}
+                    className="rounded px-1.5 py-0.5 text-[11px] text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+                  >
+                    {paused ? 'Resume' : 'Pause all'}
+                  </button>
+                )}
+                <button
+                  onClick={copy}
+                  title="Copy this list as text, to paste into a report"
+                  className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+                >
+                  {copied ? 'Copied' : 'Copy details'}
+                </button>
+              </div>
             </div>
 
             {busy + held.length + waitingQueue.length + failed.length === 0 ? (
@@ -124,22 +149,25 @@ export function DownloadsPanel() {
   )
 }
 
+// Each download its own card, as on the Downloads page.
+const row = 'rounded-lg border border-white/[0.08] bg-base-900/60 px-3 py-2'
+
 function Section({ label, count, children }: { label: string; count: number; children: React.ReactNode }) {
   if (count === 0) return null
   return (
-    <section>
-      <p className="flex justify-between bg-base-900/60 px-3 py-1 text-[11px] font-semibold tracking-wider text-base-400 uppercase">
+    <section className="px-2 pt-2 last:pb-2">
+      <p className="flex justify-between px-1 pb-1 text-[11px] font-semibold tracking-wider text-base-400 uppercase">
         {label}
         <span className="font-normal text-base-600">{count}</span>
       </p>
-      <ul className="divide-y divide-base-800">{children}</ul>
+      <ul className="space-y-1.5">{children}</ul>
     </section>
   )
 }
 
 function DownloadRow({ d }: { d: Download }) {
   return (
-    <li className="px-3 py-2">
+    <li className={row}>
       <p className="truncate text-xs font-medium text-base-100" title={d.name}>
         {downloadLabel(d)}
         {d.pinned && <span className="ml-1.5 font-normal text-accent-300">playing</span>}
@@ -152,7 +180,7 @@ function DownloadRow({ d }: { d: Download }) {
 
 function QueuedRow({ q, note, failed }: { q: Queued; note?: string; failed?: boolean }) {
   return (
-    <li className="px-3 py-2">
+    <li className={row}>
       <p className="truncate text-xs font-medium text-base-100">
         {q.title ?? `Anime ${q.animeId}`} episode {q.episode}
       </p>

@@ -34,7 +34,17 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
 const calls = []
-await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: [], waiting: {} } }))
+// One episode waiting its turn, and a queue that can be paused as a whole.
+let paused = false
+const queued = [{ animeId: 9, epKey: '2', episode: 2, state: 'pending', title: 'Queued Show' }]
+const queueCalls = []
+await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: queued, waiting: {}, paused } }))
+await page.route(/\/api\/download\/queue\/(pause|resume|now)$/, (route) => {
+  const verb = route.request().url().split('/').pop()
+  queueCalls.push(`${verb}${verb === 'now' ? ` ${route.request().postData()}` : ''}`)
+  if (verb !== 'now') paused = verb === 'pause'
+  return route.fulfill({ json: { paused, moved: true } })
+})
 await page.route('**/api/downloads', (route) => route.fulfill({ json: { items, count: items.length } }))
 await page.route(/\/api\/downloads\/[a-z0-9]+(\/(keep|unkeep))?$/, (route) => {
   const [, hash, verb] = route.request().url().match(/downloads\/([a-z0-9]+)(?:\/(keep|unkeep))?$/)
@@ -87,6 +97,33 @@ await page.waitForFunction(() => !document.querySelector('[aria-label^="Show dow
 check(calls.toSorted().join(' | ') === 'DELETE a1 | DELETE a3', 'only the ones not playing are deleted', calls.join(' | '))
 check((await toggle('Show One').count()) === 0, 'one download left: the show is a plain row again')
 check((await toggle('Show One Season 2').count()) === 1, 'the other season is untouched')
+
+// Pausing one download lets the next in line start, so stopping everything is its own control.
+check((await page.getByRole('status').count()) === 0, 'no paused notice while the queue runs')
+await page.getByRole('button', { name: 'Pause all' }).click()
+const notice = page.getByRole('status')
+check(await notice.waitFor({ timeout: 8000 }).then(() => true, () => false), 'pause all says downloads are paused')
+check(queueCalls.join(' | ') === 'pause', 'pause all pauses the queue, not one download', queueCalls.join(' | '))
+check((await page.getByRole('button', { name: 'Resume downloads' }).count()) === 1, 'the button turns into resume')
+await page.screenshot({ path: `${SHOTS}/downloads-paused.png` })
+await notice.getByRole('button', { name: 'Resume' }).click()
+await notice.waitFor({ state: 'detached', timeout: 8000 }).catch(() => {})
+check(queueCalls.join(' | ') === 'pause | resume' && (await notice.count()) === 0, 'resume starts it again', queueCalls.join(' | '))
+
+// A waiting episode can be started at once.
+queueCalls.length = 0
+await page.locator('li', { hasText: 'Queued Show' }).getByRole('button', { name: 'Download now' }).click()
+await page.waitForTimeout(500)
+check(queueCalls.length === 1 && /^now .*"animeId":9.*"epKey":"2"/.test(queueCalls[0]), 'download now asks for that episode', queueCalls.join(' | '))
+
+// Each download is its own outlined card, with a gap before the next.
+const cards = await page.locator('ul.space-y-2 > li').evaluateAll((rows) =>
+  rows
+    .filter((li) => parseFloat(getComputedStyle(li).borderTopWidth) > 0)
+    .map((li) => ({ top: li.getBoundingClientRect().top, bottom: li.getBoundingClientRect().bottom })),
+)
+const gaps = cards.slice(1).map((c, i) => Math.round(c.top - cards[i].bottom))
+check(cards.length >= 4 && gaps.every((g) => g >= 6), 'downloads are separate cards with space between', `${cards.length} cards, gaps ${gaps.join(',')}`)
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

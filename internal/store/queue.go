@@ -141,7 +141,7 @@ func (s *Store) ResetActive(ctx context.Context) error {
 func (s *Store) Prioritise(ctx context.Context, animeID int, epKey string) (bool, error) {
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
-		SET queued_at = coalesce((SELECT min(queued_at) FROM download_queue WHERE state = 'pending'), queued_at) - 1
+		SET queued_at = coalesce((SELECT min(queued_at) FROM download_queue), queued_at) - 1
 		WHERE anime_id = ? AND ep_key = ? AND state = 'pending'`, animeID, epKey)
 	if err != nil {
 		return false, err

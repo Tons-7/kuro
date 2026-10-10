@@ -156,9 +156,8 @@ func (c *Cache) evictDownTo(ctx context.Context, rep *SweepReport, target int64,
 	}
 }
 
-// MakeRoom evicts until `need` more bytes fit the budget, for the next episode of a show being watched:
-// that is worth more than an old cached one. Never one of that show's unwatched episodes, which are what
-// the room is for, and nothing at all unless what can go is enough.
+// MakeRoom evicts older episodes until `need` more bytes fit, for the next episode of a show being watched.
+// Never that show's unwatched episodes, and nothing at all unless what can go is enough.
 func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
 	c.sweeping.Lock()
 	defer c.sweeping.Unlock()

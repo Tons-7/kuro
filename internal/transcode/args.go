@@ -86,7 +86,7 @@ func (s *Session) args(offset float64, startSegment int) []string {
 		"-hls_segment_filename", "%d.mp4",
 		"-y", "playlist.m3u8",
 	)
-	return append(a, s.liveSubtitleArgs(startSegment)...)
+	return a
 }
 
 func (s *Session) videoArgs() []string {
