@@ -114,7 +114,7 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 	if usage.Budget <= 0 || usage.Bytes <= usage.Budget {
 		return rep, nil
 	}
-	c.evictDownTo(ctx, &rep, usage.Budget, evictionOrder(usage.Entries, c.stalled()), torrentBytes(usage.Entries))
+	c.evictDownTo(ctx, &rep, usage.Budget, evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), torrentBytes(usage.Entries))
 
 	if rep.Evicted > 0 {
 		c.log.Info("cache swept",
@@ -186,7 +186,7 @@ func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
 		}
 	}
 	freed := torrentBytes(usage.Entries)
-	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled()), func(e store.CacheEntry) bool {
+	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), func(e store.CacheEntry) bool {
 		return spared[e.InfoHash]
 	})
 	var available int64
@@ -210,12 +210,29 @@ func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
 	return rep.After <= target
 }
 
-// A pin or a keep covers its whole torrent: eviction deletes every file of it.
-func evictionOrder(entries []store.CacheEntry, stalled map[string]bool) []store.CacheEntry {
+// episodeRef names an episode; the zero value names none.
+type episodeRef struct {
+	animeID int
+	epKey   string
+}
+
+// lastPlayed is the episode someone is in the middle of: played most recently and not finished. A film
+// bigger than the budget was deleted a minute after the player closed, hours of downloading gone.
+func (c *Cache) lastPlayed(ctx context.Context) episodeRef {
+	animeID, epKey, ok := c.store.LastPlayed(ctx)
+	if !ok {
+		return episodeRef{}
+	}
+	return episodeRef{animeID: animeID, epKey: epKey}
+}
+
+// A pin, a keep or the episode last played covers its whole torrent: eviction deletes every file of it.
+func evictionOrder(entries []store.CacheEntry, stalled map[string]bool, watching episodeRef) []store.CacheEntry {
 	held := map[string]bool{}
 	for _, e := range entries {
+		inProgress := e.AnimeID != nil && *e.AnimeID == watching.animeID && e.EpKey == watching.epKey
 		// Unfinished too: deleting one loses every byte transferred. A stalled one goes.
-		if e.Pinned || e.Kept || (!e.Complete && !stalled[strings.ToLower(e.InfoHash)]) {
+		if e.Pinned || e.Kept || inProgress || (!e.Complete && !stalled[strings.ToLower(e.InfoHash)]) {
 			held[e.InfoHash] = true
 		}
 	}

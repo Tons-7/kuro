@@ -93,6 +93,8 @@ type entry struct {
 	quietSince time.Time
 	// For regroup: since when it has wanted data with no peer connected.
 	aloneSince time.Time
+	// For census: who it was connected to, for the log.
+	heads headcount
 }
 
 // inspection is a torrent added only to read its file list. It is kept a few
@@ -309,6 +311,7 @@ func (e *Engine) janitor() {
 		for _, en := range entries {
 			e.unstick(en, now)
 			e.regroup(en, now)
+			e.census(en, now)
 		}
 	}
 }
@@ -336,7 +339,8 @@ func (e *Engine) unstick(en *entry, now time.Time) {
 	e.mu.Unlock()
 
 	if stalled {
-		e.log.Debug("re-planning a stalled torrent", "hash", t.InfoHash().HexString())
+		e.log.Info("download received nothing from its peers; planning its requests afresh",
+			"name", t.Name(), "peers", st.ActivePeers, "quietFor", stallAfter)
 		e.replan(en)
 	}
 }

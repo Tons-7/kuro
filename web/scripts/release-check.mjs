@@ -44,6 +44,7 @@ const CHECKS = [
   ['list-state-check.mjs', {}, ALONE],
   ['lossless-audio-check.mjs'],
   ['no-transcoder-check.mjs', { BIN_ONLY: 'none' }],
+  ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
   ['related-check.mjs', {}, ALONE],
   ['saved-copy-check.mjs', {}, ALONE],

@@ -160,6 +160,20 @@ export function Watch() {
   // Offering to download an episode that is already on disk queues a job whose
   // only outcome is to notice that and stop.
   const downloads = useDownloads()
+  // A release bigger than the cache budget is removed once nothing plays it; said now, with the way out.
+  const cache = useQuery({
+    enabled: play.data?.source === 'torrent',
+    queryKey: ['cache'],
+    queryFn: () => api.get<{ budget: number }>('/api/cache'),
+    staleTime: 60_000,
+  })
+  const playing = (downloads.data?.items ?? []).find((d) => !!play.data?.infoHash && d.infoHash === play.data.infoHash)
+  const overBudget = !!playing && !playing.kept && !!cache.data?.budget && playing.totalBytes > cache.data.budget
+  const keep = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post(`/api/downloads/${playing!.infoHash}/keep`),
+    onSuccess: () => refreshDownloads(qc),
+  })
   // A season pack lists every episode it serves.
   const held = (downloads.data?.items ?? []).some(
     (d) => d.animeId === id && d.episodes.includes(String(ep)) && d.percent >= 100,
@@ -399,6 +413,21 @@ export function Watch() {
                   )}
                 </div>
               </div>
+
+              {overBudget && (
+                <div
+                  role="status"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100"
+                >
+                  <p>
+                    This release is {bytes(playing.totalBytes)}, bigger than the {bytes(cache.data!.budget)} cache: it is
+                    removed once you stop watching unless you keep it.
+                  </p>
+                  <Button variant="primary" onClick={() => keep.mutate()} disabled={keep.isPending}>
+                    Keep this episode
+                  </Button>
+                </div>
+              )}
 
               {/* Until settings load every switch would read off, and a click
                   then would write from the wrong state. */}

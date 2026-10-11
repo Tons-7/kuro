@@ -50,6 +50,18 @@ func finished(position, duration float64, watched bool, threshold float64) bool 
 	return watched
 }
 
+// LastPlayed is the episode played most recently, while it is unfinished: not watched, not dismissed.
+func (s *Store) LastPlayed(ctx context.Context) (animeID int, epKey string, ok bool) {
+	var watched, dismissed int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT anime_id, ep_key, watched, dismissed FROM playback
+		ORDER BY last_played_at DESC, rowid DESC LIMIT 1`).Scan(&animeID, &epKey, &watched, &dismissed)
+	if err != nil || watched == 1 || dismissed == 1 {
+		return 0, "", false
+	}
+	return animeID, epKey, true
+}
+
 // resumable is where a saved position is worth offering back.
 func resumable(position, duration float64, watched bool, threshold float64) bool {
 	// Resuming a few seconds in is worse than starting over.
