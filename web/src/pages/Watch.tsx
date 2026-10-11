@@ -10,7 +10,7 @@ import {
   type SkipRange,
   type StreamInfo,
 } from '../lib/api'
-import { cx } from '../lib/format'
+import { bytes, cx } from '../lib/format'
 import { refreshDownloads, useDownloads, useEpisodes, usePrefs, useSetPref } from '../lib/queries'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
@@ -124,6 +124,9 @@ export function Watch() {
     // cached answer would describe a playlist that is no longer there.
     gcTime: 0,
   })
+
+  // From pressing play to the stream opening: the search, then the release's first data, then its start.
+  const startingNote = useStartingNote(id, ep, play.isPending || (!!source && stream.isPending))
 
   // AniSkip matches on the episode's real length, known only once the stream is
   // open. Remembered, since an audio switch briefly clears it and the query
@@ -298,12 +301,13 @@ export function Watch() {
                   onPick={() => setPicking(true)}
                 />
               ) : play.isPending && !streamed ? (
-                <Searching />
+                <Searching note={startingNote} />
               ) : playingInMpv ? (
                 <MpvPanel title={play.data?.title ?? showTitle} episode={ep} player={play.data?.player ?? 'mpv'} />
               ) : (
                 <Player
                   stream={stream.data}
+                  starting={startingNote}
                   startAt={play.data?.startAt ?? 0}
                   skips={skips.data?.ranges ?? []}
                   autoSkip={autoSkip}
@@ -598,34 +602,65 @@ function EpisodeAbout({
   )
 }
 
-/**
- * Resolving a release means several throttled indexer searches taking ~ten
- * seconds; a bare spinner that long reads as a hang, so it says what it's doing.
- */
-function Searching() {
-  const [seconds, setSeconds] = useState(0)
+/** What a starting episode is waiting on, as the server reports it. */
+interface PlayStage {
+  step?: 'search' | 'files' | 'data' | 'start'
+  release?: string
+  peers?: number
+  bytes?: number
+}
 
+/**
+ * Starting an episode is a search, a file list from the swarm, the first data and the start of the
+ * file: each can be the slow one, so the wait says which it is and how long it has been.
+ */
+function useStartingNote(animeId: number, episode: number, waiting: boolean): { title: string; detail: string } {
+  const [seconds, setSeconds] = useState(0)
   useEffect(() => {
+    if (!waiting) return
+    setSeconds(0)
     const id = window.setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [waiting, animeId, episode])
 
+  const stage = useQuery({
+    enabled: waiting,
+    queryKey: ['play-stage', animeId, episode],
+    queryFn: () => api.get<PlayStage>(`/api/play/stage${query({ id: animeId, episode })}`),
+    refetchInterval: 1000,
+    gcTime: 0,
+  }).data
+
+  const clock = seconds >= 20 ? ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : ''
+  switch (stage?.step) {
+    case 'files':
+      return { title: 'Getting the file list…', detail: `${stage.release ?? 'From the people sharing it'}${clock}` }
+    case 'data': {
+      const swarm = stage.peers
+        ? `${stage.peers} ${stage.peers === 1 ? 'peer' : 'peers'}, ${bytes(stage.bytes ?? 0)} so far`
+        : 'no peers connected yet'
+      return { title: 'Waiting for the first data…', detail: `${stage.release ? `${stage.release} · ` : ''}${swarm}${clock}` }
+    }
+    case 'start':
+      return {
+        title: 'Reading the start of the file…',
+        detail: `A large release on a slow connection can take a few minutes${clock}`,
+      }
+    default:
+      return {
+        title: 'Searching for a release…',
+        detail: `${seconds < 6 ? 'Checking the release sites under each of the show’s titles' : 'Still looking — searches are rate limited'}${clock}`,
+      }
+  }
+}
+
+function Searching({ note }: { note: { title: string; detail: string } }) {
   return (
     <div className="grid aspect-video place-items-center">
-      <div className="text-center">
+      <div className="max-w-md px-4 text-center">
         <Spinner className="mx-auto size-8" />
-        <p className="mt-3 text-sm text-base-300">
-          {seconds < 15 ? 'Searching for a release…' : 'Getting the start of the episode…'}
-        </p>
-        <p className="mt-1 text-xs text-base-500 tabular-nums">
-          {seconds < 6
-            ? 'Checking the indexer under each of the show’s titles'
-            : seconds < 15
-              ? 'Still looking — searches are rate limited'
-              : seconds < 45
-                ? 'Connecting to people sharing it'
-                : `Slow swarm or connection, still downloading · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`}
-        </p>
+        <p className="mt-3 text-sm text-base-300">{note.title}</p>
+        <p className="mt-1 text-xs break-words text-base-500 tabular-nums">{note.detail}</p>
       </div>
     </div>
   )

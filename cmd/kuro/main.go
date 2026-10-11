@@ -454,6 +454,19 @@ func run(log *slog.Logger) error {
 		detectEncoder(detect)
 	})
 
+	// A slow download is still a download: opening waits on the file's start while bytes keep coming.
+	streams.OnArriving(func(ctx context.Context, sessionID string) int64 {
+		animeID, episode, ok := parseStreamID(sessionID)
+		if !ok {
+			return 0
+		}
+		hash, _, err := st.CachedFile(ctx, animeID, strconv.Itoa(episode))
+		if err != nil || hash == "" {
+			return 0
+		}
+		return cache.Downloaded(ctx, hash)
+	})
+
 	// Seeking into a part that has not downloaded should start fetching there
 	// immediately, rather than after the encoder has opened the source.
 	streams.OnSeek(func(sessionID string, fraction float64) {

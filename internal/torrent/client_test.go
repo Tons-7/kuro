@@ -112,6 +112,31 @@ func TestInspectSkipsARecentlyFailedMagnet(t *testing.T) {
 	}
 }
 
+// Picking a release again after it failed must try it again: refusing it at once is an error the
+// person can do nothing about.
+func TestInspectPickedTriesAMagnetThatFailedRecently(t *testing.T) {
+	var calls int
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			http.Error(w, "no peers", http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"id":0,"details":{"info_hash":"dead","name":"x","files":[]}}`))
+	})
+
+	const magnet = "magnet:?xt=urn:btih:dead"
+	if _, err := c.Inspect(context.Background(), magnet); err == nil {
+		t.Fatal("expected the first inspect to fail")
+	}
+	if _, err := c.InspectPicked(context.Background(), magnet); err != nil {
+		t.Fatalf("a picked release was refused for its earlier failure: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("the engine was asked %d times, want the pick to reach it", calls)
+	}
+}
+
 func TestInspectCancelledByTheCallerIsNotHeldAgainstTheMagnet(t *testing.T) {
 	var calls atomic.Int32
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {

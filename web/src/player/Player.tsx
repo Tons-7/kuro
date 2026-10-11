@@ -119,6 +119,8 @@ function savePersisted(patch: Persisted) {
 
 export interface PlayerProps {
   stream?: StreamInfo
+  /** What the episode is waiting on before its stream opens. */
+  starting?: { title: string; detail: string }
   startAt: number
   skips: SkipRange[]
   autoSkip: { op: boolean; ed: boolean }
@@ -143,6 +145,7 @@ export interface PlayerProps {
 
 export function Player({
   stream,
+  starting,
   startAt,
   skips,
   autoSkip,
@@ -668,17 +671,25 @@ export function Player({
             {/* No stream yet means a release is still being resolved; the stall
                 copy below would blame a download that has not started. */}
             {!stream && (
-              <p className="mt-3 text-xs text-base-400">Finding a release…</p>
+              <>
+                <p className="mt-3 text-sm text-base-300">{starting?.title ?? 'Finding a release…'}</p>
+                {starting && (
+                  <p className="mx-auto mt-1 max-w-md px-4 text-xs break-words text-base-500 tabular-nums">
+                    {starting.detail}
+                  </p>
+                )}
+              </>
             )}
             {/* A frozen frame with a spinner looks the same whether it is
                 buffering for a second or the swarm has stopped feeding us. */}
             {stream && stalledFor > 12 && (
               <p className="mt-3 max-w-xs text-xs text-base-400">
-                {health?.slow
-                  ? `Peers are sending ${health.mbps.toFixed(1)} Mbps; playing needs about ${health.needed.toFixed(0)}.`
-                  : stalledFor > 40
-                    ? 'This release is downloading too slowly to stream. Try another episode or come back later.'
-                    : 'Waiting for the download to catch up…'}
+                {/* What is arriving, never whether it is enough: a slow line buffers and plays on, as on any site. */}
+                {!health || health.complete
+                  ? 'Buffering…'
+                  : health.peers > 0
+                    ? `Buffering… ${health.mbps.toFixed(1)} Mbps from ${health.peers} ${health.peers === 1 ? 'peer' : 'peers'}`
+                    : 'Buffering… no peers connected right now'}
               </p>
             )}
             {health?.slow && stalledFor > 20 &&
@@ -953,6 +964,7 @@ function Scrubber({
 
   const shown = dragging && at !== null ? at * duration : time
   const percent = duration > 0 ? (shown / duration) * 100 : 0
+  const loaded = useLoadedRanges(video)
 
   return (
     <div
@@ -979,8 +991,18 @@ function Scrubber({
         if (!dragging) setAt(null)
       }}
     >
-      <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 overflow-hidden rounded-full bg-white/30">
-        <div className="h-full bg-accent-500" style={{ width: `${percent}%` }} />
+      <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 overflow-hidden rounded-full bg-white/20">
+        {/* What is loaded and will play without waiting, lighter than the rest of the bar. */}
+        {duration > 0 &&
+          loaded.map(([from, to]) => (
+            <div
+              key={from}
+              data-loaded
+              className="absolute inset-y-0 bg-white/35"
+              style={{ left: `${(from / duration) * 100}%`, width: `${((to - from) / duration) * 100}%` }}
+            />
+          ))}
+        <div className="relative h-full bg-accent-500" style={{ width: `${percent}%` }} />
       </div>
 
       {/* Openings and endings in amber, so what is about to be skipped is
@@ -1012,6 +1034,31 @@ function Scrubber({
       )}
     </div>
   )
+}
+
+// The stretches of the episode the browser holds, as [from, to] seconds: the lighter part of the bar.
+function useLoadedRanges(video: HTMLVideoElement | null): Array<[number, number]> {
+  const [ranges, setRanges] = useState<Array<[number, number]>>([])
+  useEffect(() => {
+    if (!video) return
+    const read = () => {
+      const next: Array<[number, number]> = []
+      for (let i = 0; i < video.buffered.length; i++) next.push([video.buffered.start(i), video.buffered.end(i)])
+      // Only when it moved by a visible amount: progress fires many times a second.
+      setRanges((prev) =>
+        prev.length === next.length && prev.every((r, i) => Math.abs(r[0] - next[i][0]) < 0.5 && Math.abs(r[1] - next[i][1]) < 0.5)
+          ? prev
+          : next,
+      )
+    }
+    read()
+    const events = ['progress', 'seeked', 'loadeddata', 'emptied'] as const
+    for (const e of events) video.addEventListener(e, read)
+    return () => {
+      for (const e of events) video.removeEventListener(e, read)
+    }
+  }, [video])
+  return ranges
 }
 
 /**

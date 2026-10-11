@@ -305,6 +305,7 @@ func (s *Server) setDownloadRunning(w http.ResponseWriter, r *http.Request, run 
 	if run {
 		err = s.cache.Resume(r.Context(), hash)
 	} else {
+		s.log.Info("download paused from the downloads list", "hash", hash)
 		err = s.cache.Pause(r.Context(), hash)
 	}
 	if err != nil {

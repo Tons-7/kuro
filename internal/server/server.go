@@ -209,6 +209,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /callback", hostOnly(s.authCallback))
 	mux.HandleFunc("POST /api/sync", s.sync)
 	mux.HandleFunc("POST /api/play", s.play)
+	mux.HandleFunc("GET /api/play/stage", s.playStage)
 	mux.HandleFunc("POST /api/stop", s.stopPlayback)
 	mux.HandleFunc("POST /api/progress", s.progress)
 	mux.HandleFunc("POST /api/prepare", s.prepare)

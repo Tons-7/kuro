@@ -53,6 +53,10 @@ type Playback struct {
 	yieldMu  sync.Mutex
 	yielded  []string
 	starting int
+
+	// What each starting episode is waiting on, for the player to show.
+	stageMu sync.Mutex
+	stages  map[string]Stage
 }
 
 // Prober reads an episode's length and chapters; optional.
@@ -159,6 +163,9 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 			return session, nil
 		}
 	}
+
+	p.SetStage(req.AnimeID, req.Episode, Stage{Step: "search"})
+	defer p.ClearStage(req.AnimeID, req.Episode)
 
 	p.yield(ctx, req.AnimeID)
 	p.yieldMu.Lock()
@@ -319,7 +326,11 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 	if err := p.torrent.Start(ctx, id); err != nil {
 		p.log.Debug("resume download", "torrent", id, "err", err)
 	}
-	if err := p.warmed(ctx, id, rec.FileIndex); err != nil {
+	waiting := func(peers int, bytes int64) {
+		p.SetStage(req.AnimeID, req.Episode, Stage{Step: "data", Release: rec.Name, Peers: peers, Bytes: bytes})
+	}
+	waiting(0, 0)
+	if err := p.warmed(ctx, id, rec.FileIndex, waiting, false); err != nil {
 		if stats, serr := p.torrent.Stats(ctx, id); serr == nil && stats.Checking() {
 			return nil, false, fmt.Errorf("episode %d is still being verified after a restart; try again in a minute", req.Episode)
 		}
@@ -380,7 +391,9 @@ var (
 	racePatience = 30 * time.Second
 )
 
-func (p *Playback) warmed(ctx context.Context, id, fileIndex int) error {
+// waiting, when set, is told the peers and bytes so far while the head is slow to arrive. picked is a
+// release chosen by hand: with no next candidate to give the time to, a quiet swarm is waited on longer.
+func (p *Playback) warmed(ctx context.Context, id, fileIndex int, waiting func(peers int, bytes int64), picked bool) error {
 	// Waited for separately so the deadlines below measure only delivery. Returns
 	// at once when live, but extends while a check is still reading the file.
 	if err := p.torrent.WaitLive(ctx, id, engineReadyDeadline); err != nil {
@@ -404,13 +417,17 @@ func (p *Playback) warmed(ctx context.Context, id, fileIndex int) error {
 
 	// Nothing downloaded and no peers: the tracker's seeder count was wrong, and
 	// the time belongs to the next candidate.
-	if stats.Received() == 0 && stats.Peers() == 0 {
+	if !picked && stats.Received() == 0 && stats.Peers() == 0 {
 		return fmt.Errorf("no peers after %s", peerProbeDeadline)
 	}
 
 	p.log.Info("release is slow, waiting",
 		"torrent", id, "bytes", stats.Received(), "peers", stats.Peers())
-	return p.awaitHead(ctx, id, fileIndex, stats.Received())
+	stall := headStall
+	if picked {
+		stall = pickedStall
+	}
+	return p.awaitHead(ctx, id, fileIndex, stats.Received(), waiting, stall)
 }
 
 // On a slow line one piece can take minutes, so the head waits while bytes
@@ -419,9 +436,13 @@ var (
 	headPoll  = 3 * time.Second
 	headStall = 45 * time.Second
 	headCap   = 6 * time.Minute
+	// How long a release picked by hand may send nothing before it is given up on.
+	pickedStall = 3 * time.Minute
 )
 
-func (p *Playback) awaitHead(ctx context.Context, id, fileIndex int, seen int64) error {
+func (p *Playback) awaitHead(
+	ctx context.Context, id, fileIndex int, seen int64, waiting func(peers int, bytes int64), stall time.Duration,
+) error {
 	read, stop := context.WithTimeout(ctx, headCap)
 	defer stop()
 	done := make(chan error, 1)
@@ -443,10 +464,13 @@ func (p *Playback) awaitHead(ctx context.Context, id, fileIndex int, seen int64)
 		if got := stats.Received(); got > seen {
 			seen, moved = got, time.Now()
 		}
-		if time.Since(moved) > headStall {
+		if waiting != nil {
+			waiting(stats.Peers(), seen)
+		}
+		if time.Since(moved) > stall {
 			stop()
 			<-done
-			return fmt.Errorf("stalled: nothing arrived for %s", headStall)
+			return fmt.Errorf("stalled: nothing arrived for %s", stall)
 		}
 	}
 }
@@ -460,12 +484,20 @@ type inspection struct {
 	err     error
 }
 
-func (p *Playback) inspectAhead(ctx context.Context, candidates []score.Result) []chan inspection {
+// inspect fetches a release's file list. One picked by hand is the only candidate: it gets the long wait.
+func (p *Playback) inspect(ctx context.Context, picked bool, magnet string) (*torrent.Torrent, error) {
+	if picked {
+		return p.torrent.InspectPicked(ctx, magnet)
+	}
+	return p.torrent.Inspect(ctx, magnet)
+}
+
+func (p *Playback) inspectAhead(ctx context.Context, picked bool, candidates []score.Result) []chan inspection {
 	pending := make([]chan inspection, len(candidates))
 	for i := 0; i < len(candidates) && i < inspectAhead; i++ {
 		pending[i] = make(chan inspection, 1)
 		go func(i int, magnet string) {
-			got, err := p.torrent.Inspect(ctx, magnet)
+			got, err := p.inspect(ctx, picked, magnet)
 			pending[i] <- inspection{torrent: got, err: err}
 		}(i, candidates[i].Torrent.Magnet())
 	}
@@ -475,10 +507,10 @@ func (p *Playback) inspectAhead(ctx context.Context, candidates []score.Result) 
 // awaitInspect takes the lookup already in flight, or runs one for a candidate
 // too far down the list to have been prefetched.
 func (p *Playback) awaitInspect(
-	ctx context.Context, pending []chan inspection, i int, magnet string,
+	ctx context.Context, pending []chan inspection, i int, picked bool, magnet string,
 ) (*torrent.Torrent, error) {
 	if i >= len(pending) || pending[i] == nil {
-		return p.torrent.Inspect(ctx, magnet)
+		return p.inspect(ctx, picked, magnet)
 	}
 	select {
 	case got := <-pending[i]:
@@ -534,7 +566,7 @@ func (p *Playback) attachFrom(ctx context.Context, req PlayRequest, candidates [
 		return score.Result{}, nil, nil, torrent.File{}, 0, fmt.Errorf("list downloads: %w", err)
 	}
 
-	pending := p.inspectAhead(ctx, candidates)
+	pending := p.inspectAhead(ctx, req.InfoHash != "", candidates)
 	return p.race(ctx, req, candidates, pending, held)
 }
 
@@ -663,9 +695,15 @@ func (p *Playback) tryCandidate(
 	ctx context.Context, req PlayRequest, release score.Result,
 	pending []chan inspection, held map[string]int, index int,
 ) attempt {
-	fail := func(err error) attempt { return attempt{index: index, err: err} }
+	fail := func(err error) attempt {
+		p.dropStage(req.AnimeID, req.Episode, index)
+		return attempt{index: index, err: err}
+	}
+	title := release.Torrent.Title
 
-	added, err := p.awaitInspect(ctx, pending, index, release.Torrent.Magnet())
+	p.setStage(req.AnimeID, req.Episode, index, Stage{Step: "files", Release: title})
+	picked := req.InfoHash != ""
+	added, err := p.awaitInspect(ctx, pending, index, picked, release.Torrent.Magnet())
 	if err != nil {
 		p.log.Warn("release unusable, trying the next", "title", release.Torrent.Title, "err", err)
 		return fail(fmt.Errorf("inspect torrent: %w", err))
@@ -689,8 +727,12 @@ func (p *Playback) tryCandidate(
 		p.log.Debug("resume download", "torrent", live.ID, "err", err)
 	}
 
+	waiting := func(peers int, bytes int64) {
+		p.setStage(req.AnimeID, req.Episode, index, Stage{Step: "data", Release: title, Peers: peers, Bytes: bytes})
+	}
+	waiting(0, 0)
 	// Streaming before the engine reports live fails with an opaque 500.
-	if err := p.warmed(ctx, live.ID, fileIndex); err != nil {
+	if err := p.warmed(ctx, live.ID, fileIndex, waiting, picked); err != nil {
 		if ctx.Err() != nil {
 			p.log.Info("release stopped, another one won", "title", release.Torrent.Title)
 		} else {

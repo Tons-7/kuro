@@ -63,7 +63,9 @@ type Engine struct {
 	byHash    map[metainfo.Hash]*entry
 	nextID    int
 	inspected map[metainfo.Hash]*inspection
-	closed    bool
+	// Peers each torrent has known, to try again after an outage took them all.
+	known  map[metainfo.Hash]map[string]atorrent.PeerInfo
+	closed bool
 
 	// Test hooks: adjust the client config; see each torrent as it is added.
 	configure func(*atorrent.ClientConfig)
@@ -89,6 +91,8 @@ type entry struct {
 	// For unstick: useful bytes at the last change, and when that was.
 	useful     int64
 	quietSince time.Time
+	// For regroup: since when it has wanted data with no peer connected.
+	aloneSince time.Time
 }
 
 // inspection is a torrent added only to read its file list. It is kept a few
@@ -114,6 +118,7 @@ func New(opts Options, log *slog.Logger) (*Engine, error) {
 		byHash:    map[metainfo.Hash]*entry{},
 		nextID:    1,
 		inspected: map[metainfo.Hash]*inspection{},
+		known:     map[metainfo.Hash]map[string]atorrent.PeerInfo{},
 	}
 	e.server = &http.Server{Handler: e.routes(), ReadHeaderTimeout: 10 * time.Second}
 	go e.server.Serve(l)
@@ -277,21 +282,33 @@ func (e *Engine) janitor() {
 			return
 		}
 		now := time.Now()
+		var looking []*atorrent.Torrent
 		for hash, in := range e.inspected {
 			if now.After(in.expires) {
 				delete(e.inspected, hash)
 				if _, managed := e.byHash[hash]; !managed {
 					in.t.Drop()
+					delete(e.known, hash)
 				}
+				continue
 			}
+			looking = append(looking, in.t)
 		}
 		entries := make([]*entry, 0, len(e.byID))
 		for _, en := range e.byID {
 			entries = append(entries, en)
 		}
 		e.mu.Unlock()
+		// A torrent only being looked at meets its peers before it is added; they count from then.
+		for _, t := range looking {
+			swarm := t.KnownSwarm()
+			e.mu.Lock()
+			e.remember(t.InfoHash(), swarm)
+			e.mu.Unlock()
+		}
 		for _, en := range entries {
 			e.unstick(en, now)
+			e.regroup(en, now)
 		}
 	}
 }
@@ -320,9 +337,14 @@ func (e *Engine) unstick(en *entry, now time.Time) {
 
 	if stalled {
 		e.log.Debug("re-planning a stalled torrent", "hash", t.InfoHash().HexString())
-		t.DisallowDataDownload()
-		e.apply(en)
+		e.replan(en)
 	}
+}
+
+// replan makes anacrolix plan a torrent's requests afresh, by switching its downloading off and on.
+func (e *Engine) replan(en *entry) {
+	en.t.DisallowDataDownload()
+	e.apply(en)
 }
 
 // wantsData reports a selected file not yet complete. Callers hold e.mu.

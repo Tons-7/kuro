@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -114,7 +115,9 @@ type Manager struct {
 	encoder string
 	onSeek  SeekHook
 	onIdle  func(id string)
-	log     *slog.Logger
+	// Bytes of a session's source that have arrived; nil when nothing can say.
+	arriving func(ctx context.Context, id string) int64
+	log      *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -184,6 +187,33 @@ func (m *Manager) Purge() (int, error) {
 	return removed, nil
 }
 
+// How many more times a probe waits out its limit while the file's start is still arriving.
+const probeExtensions = 4
+
+// OnArriving sets how many bytes of a session's source have arrived, for a probe to tell slow from stopped.
+func (m *Manager) OnArriving(bytes func(ctx context.Context, id string) int64) { m.arriving = bytes }
+
+// probeWhileArriving reads the start of the file for as long as its download keeps moving: a slow
+// connection buffers, as in any player, and only a download that has stopped is given up on.
+func (m *Manager) probeWhileArriving(ctx context.Context, id, source string) (*MediaInfo, error) {
+	var seen int64
+	if m.arriving != nil {
+		seen = m.arriving(ctx, id)
+	}
+	for extended := 0; ; extended++ {
+		info, err := m.prober.Probe(ctx, source)
+		if err == nil || !errors.Is(err, ErrProbeTimeout) || m.arriving == nil || extended >= probeExtensions {
+			return info, err
+		}
+		got := m.arriving(ctx, id)
+		if got <= seen {
+			return nil, err
+		}
+		m.log.Info("the start of the file is still arriving, waiting on", "session", id, "arrivedMB", got>>20)
+		seen = got
+	}
+}
+
 func (m *Manager) Open(ctx context.Context, id, source string) (*Session, error) {
 	return m.OpenProbing(ctx, id, source, source)
 }
@@ -209,15 +239,17 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 		m.discard(id)
 	}
 
-	info, err := m.prober.Probe(ctx, probeSource)
-	probed := "disk"
+	var info *MediaInfo
+	var err error
+	probed := "source"
 	if probeSource == source {
-		probed = "source"
-	}
-	if err != nil && probeSource != source {
+		info, err = m.probeWhileArriving(ctx, id, source)
+	} else if info, err = m.prober.Probe(ctx, probeSource); err == nil {
+		probed = "disk"
+	} else {
 		m.log.Warn("probe from disk failed, reading through the engine",
 			"session", id, "err", err)
-		info, err = m.prober.Probe(ctx, source)
+		info, err = m.probeWhileArriving(ctx, id, source)
 		probed = "engine"
 	}
 	if err != nil {

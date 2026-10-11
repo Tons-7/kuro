@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"kuro/internal/library"
 	"kuro/internal/torrent"
 	"kuro/internal/transcode"
 )
@@ -60,6 +61,11 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := sessionID(animeID, episode)
+	// Reading a file's start out of a slow swarm can take minutes; the player says that is the wait.
+	if s.playback != nil && s.engineSource(source) {
+		s.playback.SetStage(animeID, episode, library.Stage{Step: "start"})
+		defer s.playback.ClearStage(animeID, episode)
+	}
 	session, err := s.streams.OpenProbing(r.Context(), id, source,
 		s.readablePath(r.Context(), animeID, episode, source))
 	if err != nil {

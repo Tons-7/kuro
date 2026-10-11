@@ -189,6 +189,16 @@ func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error
 	return got, err
 }
 
+// A release picked by hand has no next candidate to fall back on, so its file list is waited for.
+const pickedInspectTimeout = 3 * time.Minute
+
+// InspectPicked is Inspect for a release someone chose: a longer wait, and never refused for an earlier failure.
+func (c *Client) InspectPicked(parent context.Context, magnet string) (*Torrent, error) {
+	ctx, cancel := context.WithTimeout(parent, pickedInspectTimeout)
+	defer cancel()
+	return c.add(ctx, magnet, url.Values{"list_only": {"true"}})
+}
+
 func (c *Client) magnetFailedRecently(magnet string) (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

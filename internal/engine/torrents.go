@@ -200,6 +200,7 @@ func (e *Engine) remove(en *entry, data bool) error {
 	e.mu.Lock()
 	delete(e.byID, en.id)
 	delete(e.byHash, en.t.InfoHash())
+	delete(e.known, en.t.InfoHash())
 	e.mu.Unlock()
 
 	var paths []string

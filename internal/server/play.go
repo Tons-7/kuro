@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"kuro/internal/library"
 )
@@ -68,6 +69,14 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, http.StatusOK, session)
+}
+
+// playStage is what a starting episode is waiting on; an empty step when it is not starting.
+func (s *Server) playStage(w http.ResponseWriter, r *http.Request) {
+	animeID, _ := strconv.Atoi(r.URL.Query().Get("id"))
+	episode, _ := strconv.Atoi(r.URL.Query().Get("episode"))
+	stage, _ := s.playback.Stage(animeID, episode)
+	send(w, http.StatusOK, stage)
 }
 
 func (s *Server) cacheStatus(w http.ResponseWriter, r *http.Request) {

@@ -391,6 +391,7 @@ func (p *Prefetcher) Download(ctx context.Context, animeID, episode, season int,
 func (p *Prefetcher) awaitOrStop(ctx context.Context, id int, stall time.Duration) error {
 	err := p.torrent.Await(ctx, id, stall)
 	if err != nil && !errors.Is(err, torrent.ErrPaused) {
+		p.log.Info("stopping a download that did not finish", "torrent", id, "reason", err)
 		if perr := p.torrent.Pause(context.WithoutCancel(ctx), id); perr != nil {
 			p.log.Warn("stop abandoned download", "torrent", id, "err", perr)
 		}
@@ -534,6 +535,7 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 		}
 		if err != nil {
 			// Cancelled or dead half way: stopped, not left fetching unrecorded.
+			p.log.Info("stopping a download that did not start", "torrent", added.ID, "reason", err)
 			if perr := p.torrent.Pause(context.WithoutCancel(ctx), added.ID); perr != nil {
 				p.log.Warn("stop abandoned download", "torrent", added.ID, "err", perr)
 			}

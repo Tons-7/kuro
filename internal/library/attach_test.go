@@ -412,6 +412,37 @@ func TestAttachKeepsReleasesTheEngineAlreadyHeld(t *testing.T) {
 	}
 }
 
+// A release kuro chose is dropped the moment it shows no peers, for the next one. A release picked by
+// hand has no next one: it is waited on, and plays when its swarm wakes up.
+func TestPickedReleaseIsWaitedForWhereAnAutomaticOneIsDropped(t *testing.T) {
+	old := peerProbeDeadline
+	peerProbeDeadline = 200 * time.Millisecond
+	t.Cleanup(func() { peerProbeDeadline = old })
+
+	// No peers counted, and the first byte only after the quick look has ended.
+	results := []indexer.Torrent{release(goodHash, "[Slow] Sousou no Frieren - 01 [1080p].mkv", 3)}
+	ctx := context.Background()
+
+	engine := newFakeEngine()
+	engine.slow[goodHash] = 900 * time.Millisecond
+	automatic := newPlayback(t, engine, results)
+	if _, _, _, _, _, err := automatic.attach(ctx, PlayRequest{
+		AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences(),
+	}); err == nil {
+		t.Fatal("an automatic pick with no peers was waited on; the time belongs to the next candidate")
+	}
+
+	engine = newFakeEngine()
+	engine.slow[goodHash] = 900 * time.Millisecond
+	picked := newPlayback(t, engine, results)
+	rel, _, live, _, _, err := picked.attach(ctx, PlayRequest{
+		AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences(), InfoHash: goodHash,
+	})
+	if err != nil || live == nil || rel.Torrent.InfoHash != goodHash {
+		t.Fatalf("the picked release was given up on: %v", err)
+	}
+}
+
 // The best release wins whenever it can deliver, even if a lower-ranked one
 // answers first; racing for speed must never trade quality for a head start.
 func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {

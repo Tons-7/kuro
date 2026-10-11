@@ -55,7 +55,7 @@ func makePack(t *testing.T, dir string) (metainfo.MetaInfo, map[string][]byte) {
 }
 
 func TestMain(m *testing.M) {
-	janitorEvery, stallAfter = 500*time.Millisecond, 2*time.Second
+	janitorEvery, stallAfter, regroupAfter = 500*time.Millisecond, 2*time.Second, 1500*time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -423,5 +423,139 @@ func TestImportedSessionInTheCacheIsRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(session, hash+".torrent")); err != nil {
 		t.Errorf("metainfo not kept: %v", err)
+	}
+}
+
+// A stream waiting on data that has not arrived must outlive a re-plan: the re-plan exists for exactly
+// that torrent, and ending its readers ended playback of every slow release half a minute in.
+func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
+	seedDir := t.TempDir()
+	mi, content := makePack(t, seedDir)
+	s := seeder(t, seedDir, mi)
+	f := &fixture{
+		content: content, cache: t.TempDir(), session: t.TempDir(),
+		peer:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.LocalPort()},
+		magnet: mi.Magnet(nil, nil).String(),
+	}
+	f.start(t)
+	c := ctx(t)
+
+	// The file list is known, then the only peer goes: nothing can arrive.
+	in, err := f.client.Inspect(c, f.magnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	added, err := f.client.Add(c, f.magnet, in.Details.Files[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := make(chan error, 1)
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, f.client.StreamURL(added.ID, 2), nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			read <- err
+			return
+		}
+		defer res.Body.Close()
+		n, err := io.Copy(io.Discard, res.Body)
+		if err == nil && n < int64(len(content["Show - 03.mkv"])) {
+			err = fmt.Errorf("stream ended at %d of %d bytes", n, len(content["Show - 03.mkv"]))
+		}
+		read <- err
+	}()
+
+	// Waiting, as a player on a slow swarm does.
+	select {
+	case err := <-read:
+		t.Fatalf("the read ended before any re-plan: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	en, err := f.engine.entryByID(added.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine.replan(en)
+
+	select {
+	case err := <-read:
+		t.Fatalf("the re-plan ended the stream: %v", err)
+	case <-time.After(time.Second):
+	}
+}
+
+// seederOn serves the pack from dir on a given port, so a peer can come back where it was.
+func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *atorrent.Client {
+	t.Helper()
+	cfg := atorrent.NewDefaultClientConfig()
+	quietConfig(cfg)
+	cfg.ListenPort = port
+	cfg.DataDir = dir
+	cfg.DefaultStorage = files{base: dir, pieces: storage.NewMapPieceCompletion()}
+	cfg.Seed = true
+	var cl *atorrent.Client
+	var err error
+	// The port is being let go by the seeder that just closed.
+	for range 40 {
+		if cl, err = atorrent.NewClient(cfg); err == nil {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("seeder on port %d: %v", port, err)
+	}
+	t.Cleanup(func() { cl.Close() })
+	tt, err := cl.AddTorrent(&mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.VerifyDataContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return cl
+}
+
+// Losing the network drops every peer. When it is back the peers are where they were, and the download
+// must find them again by itself: restarting kuro was the only thing that did.
+func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
+	seedDir := t.TempDir()
+	mi, content := makePack(t, seedDir)
+	s := seeder(t, seedDir, mi)
+	port := s.LocalPort()
+	f := &fixture{
+		content: content, cache: t.TempDir(), session: t.TempDir(),
+		peer:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port},
+		magnet: mi.Magnet(nil, nil).String(),
+	}
+	f.start(t)
+	c := ctx(t)
+
+	in, err := f.client.Inspect(c, f.magnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Known for a moment, as a real swarm is, then the network goes: the peer is unreachable.
+	time.Sleep(1200 * time.Millisecond)
+	s.Close()
+	added, err := f.client.Add(c, f.magnet, in.Details.Files[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(4 * time.Second)
+	if st, _ := f.client.Stats(c, added.ID); st.Finished {
+		t.Fatal("the download finished with no peer; the test proves nothing")
+	}
+
+	// And comes back: the same peer, at the same address.
+	seederOn(t, seedDir, mi, port)
+	if err := f.client.Await(c, added.ID, 20*time.Second); err != nil {
+		st, _ := f.client.Stats(c, added.ID)
+		t.Fatalf("the download did not resume once its peer was back: %v (state %s, peers %d)", err, st.State, st.Peers())
 	}
 }

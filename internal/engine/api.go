@@ -32,6 +32,8 @@ func (e *Engine) routes() http.Handler {
 	})))
 	mux.HandleFunc("GET /torrents/{id}/stream/{file}", e.started(e.withEntry(e.handleStream)))
 	mux.HandleFunc("POST /torrents/{id}/pause", e.started(e.withEntry(func(w http.ResponseWriter, r *http.Request, en *entry) {
+		// Always said: a pause ends any stream reading the torrent, and a silent one cannot be traced afterwards.
+		e.log.Info("torrent paused", "id", en.id, "name", en.t.Name())
 		e.setPaused(en, true)
 		reply(w, struct{}{})
 	})))
