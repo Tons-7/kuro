@@ -35,6 +35,8 @@ export function ReleasePicker({
         signal,
       ),
     staleTime: 5 * 60_000,
+    // The search already tries every title; retrying it tripled the wait before saying a site is down.
+    retry: false,
   })
 
   const results = sources.data?.results ?? []

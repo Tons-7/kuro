@@ -241,7 +241,12 @@ func run(log *slog.Logger) error {
 	log.Info("database ready", "path", cfg.DatabasePath())
 
 	st := store.New(conn)
-	al := anilist.New(log)
+	var alOpts []anilist.Option
+	// The browser checks point their throwaway instances at a caching proxy, so they are not rate limited.
+	if override := os.Getenv("KURO_ANILIST_API"); override != "" {
+		alOpts = append(alOpts, anilist.WithEndpoint(override))
+	}
+	al := anilist.New(log, alOpts...)
 	al.SetArchive(st)
 
 	token, err := st.EnsureSetting(ctx, "access.token", server.NewAccessToken())

@@ -290,3 +290,92 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 		time.Sleep(200 * time.Millisecond)
 	}
 }
+
+// A lossless track stays lossless: it becomes FLAC, which a browser plays, not lossy AAC. A lossy one
+// gains nothing from FLAC but size, so it still goes to AAC.
+func TestLosslessAudioIsConvertedToFLACAndLossyToAAC(t *testing.T) {
+	for _, tt := range []struct {
+		audio Stream
+		want  string
+	}{
+		{Stream{Codec: "truehd", Channels: 8}, "flac"},
+		{Stream{Codec: "pcm_s24le", Channels: 2}, "flac"},
+		{Stream{Codec: "dts", Profile: "DTS-HD MA", Channels: 6}, "flac"},
+		{Stream{Codec: "dts", Profile: "DTS", Channels: 6}, "aac"},
+		{Stream{Codec: "eac3", Channels: 6}, "aac"},
+		{Stream{Codec: "ac3", Channels: 6}, "aac"},
+	} {
+		info := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{tt.audio}}
+		plan := PlanFor(info, "")
+		if plan.AudioCopy || plan.AudioCodec != tt.want {
+			t.Errorf("%s %s: copy %v, codec %q, want %q", tt.audio.Codec, tt.audio.Profile, plan.AudioCopy, plan.AudioCodec, tt.want)
+		}
+	}
+	// FLAC itself was never converted.
+	if plan := PlanFor(&MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "flac"}}}, ""); !plan.AudioCopy {
+		t.Error("a FLAC track is re-encoded")
+	}
+}
+
+// Surround is kept as it is up to 5.1; a 7.1 track is folded to 5.1, never to stereo.
+func TestFLACConversionKeepsSurround(t *testing.T) {
+	args := func(channels int) string {
+		s := liveSession(false)
+		s.Info.Audio = []Stream{{Codec: "truehd", Channels: channels}}
+		s.Plan = PlanFor(s.Info, "")
+		return strings.Join(s.audioArgs(), " ")
+	}
+	if got := args(6); got != "-c:a flac" {
+		t.Errorf("5.1: %q, want the channels left alone", got)
+	}
+	if got := args(8); got != "-c:a flac -ac 6" {
+		t.Errorf("7.1: %q, want it folded to 5.1", got)
+	}
+}
+
+// The real encoder on a file with lossless sound: the segments carry FLAC, in step with the picture.
+func TestLosslessSourcePlaysAsFLAC(t *testing.T) {
+	ffmpeg, ffprobe := binaries(t)
+	clip := filepath.Join(t.TempDir(), "clip.mkv")
+	if o, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=40",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=40",
+		"-map", "0:v", "-map", "1:a",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "48",
+		"-c:a", "pcm_s24le", "-ac", "2", clip).CombinedOutput(); err != nil {
+		t.Fatalf("build clip: %v\n%s", err, o)
+	}
+
+	m := NewManager(ffmpeg, ffprobe, t.TempDir(), "libx264", slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	session, err := m.Open(ctx, "flac", clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close("flac")
+	if plan := session.CurrentPlan(); plan.AudioCopy || plan.AudioCodec != "flac" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	for n := range 3 {
+		if _, err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
+			t.Fatalf("segment %d: %v", n, err)
+		}
+	}
+
+	init, _ := os.ReadFile(session.InitPath())
+	body, _ := os.ReadFile(session.SegmentPath(0))
+	whole := filepath.Join(t.TempDir(), "whole.mp4")
+	os.WriteFile(whole, append(init, body...), 0o644)
+	codec, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=codec_name", "-of", "csv=p=0", whole).Output()
+	if err != nil || strings.TrimSpace(string(codec)) != "flac" {
+		t.Fatalf("segment audio is %q (err %v), want flac", strings.TrimSpace(string(codec)), err)
+	}
+	for n := range 2 {
+		video, audio := lastPacket(t, ffprobe, session, n, "v:0"), lastPacket(t, ffprobe, session, n, "a:0")
+		if audio < video-1 {
+			t.Errorf("segment %d: picture runs to %.2fs but sound only to %.2fs", n, video, audio)
+		}
+	}
+}

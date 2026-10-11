@@ -133,6 +133,14 @@ func (s *Session) audioArgs() []string {
 	if s.Plan.AudioCopy {
 		return []string{"-c:a", "copy"}
 	}
+	if s.Plan.AudioCodec == "flac" {
+		a := []string{"-c:a", "flac"}
+		// Surround stays as it is up to 5.1, which browsers play; more is folded down to that.
+		if s.Info != nil && s.audioTrack < len(s.Info.Audio) && s.Info.Audio[s.audioTrack].Channels > 6 {
+			a = append(a, "-ac", "6")
+		}
+		return a
+	}
 	return []string{"-c:a", "aac", "-b:a", "192k", "-ac", "2"}
 }
 

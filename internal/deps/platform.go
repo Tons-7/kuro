@@ -5,9 +5,7 @@ import (
 	"runtime"
 )
 
-// exeExt is the suffix an executable carries on this OS.
-func exeExt() string { return exeExtFor(runtime.GOOS) }
-
+// exeExtFor is the suffix an executable carries on that OS.
 func exeExtFor(goos string) string {
 	if goos == "windows" {
 		return ".exe"

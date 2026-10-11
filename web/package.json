@@ -5,17 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsgo -b --force",
     "build": "tsgo --noEmit && vite build",
     "lint": "oxlint src",
-    "verify": "node scripts/e2e.mjs",
     "preview": "vite preview",
     "e2e:player": "node scripts/run-player-check.mjs",
     "e2e:features": "node scripts/run-player-check.mjs features-check.mjs",
     "e2e:recovery": "node scripts/run-player-check.mjs recovery-check.mjs",
     "e2e:thumbs": "node scripts/run-player-check.mjs thumbs-check.mjs",
     "e2e:prefs": "node scripts/run-player-check.mjs prefs-scope-check.mjs",
-    "test": "node scripts/run-player-check.mjs"
+    "test": "node scripts/run-player-check.mjs",
+    "release-check": "node scripts/release-check.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
@@ -24,7 +24,6 @@
     "anime4k-webgpu": "^1.0.0",
     "hls.js": "^1.6.17",
     "jassub": "^2.5.14",
-    "motion": "^13.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2"

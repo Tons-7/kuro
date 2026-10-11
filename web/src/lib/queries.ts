@@ -259,13 +259,6 @@ export function useFilters() {
   })
 }
 
-export function useSettings() {
-  return useQuery({
-    queryKey: ['settings'],
-    queryFn: () => api.get<Record<string, string>>('/api/settings'),
-  })
-}
-
 export function usePrefs(animeId?: number) {
   return useQuery({
     queryKey: ['prefs', animeId ?? 0],

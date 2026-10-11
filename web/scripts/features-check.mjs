@@ -92,11 +92,14 @@ page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 
 // ---------------------------------------------------------------- downloads: pack row
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-const packRow = page.locator('li', { hasText: 'Batch' })
+// A show with several downloads is one closed card; its rows are inside.
+const group = page.getByRole('button', { name: /^Show downloads of / }).first()
+if (await until(() => group.isVisible(), 5000)) await group.click()
+const packRow = page.locator('li:not(:has(li))', { hasText: 'Batch' })
 check(await until(() => packRow.count().then((n) => n === 1)), 'a season pack is one row')
 check(
   // A finished row states its size once; "of" belongs to what is still arriving.
-  await until(() => packRow.innerText().then((t) => /episodes 4, 5/.test(t) && /1\.4 GB/.test(t))),
+  await until(() => packRow.innerText().then((t) => /episodes 4, 5/i.test(t) && /1\.4 GB/.test(t))),
   'the pack row names every episode and sums their size',
   (await packRow.innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120),
 )

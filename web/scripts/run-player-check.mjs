@@ -13,9 +13,10 @@
 //   SKIP_BUILD=1     reuse the current web/dist and a prebuilt kuro.exe
 //   KEEP=1           leave the scratch dir and its logs in place afterwards
 //   BIN_ONLY=a,b     a bin holding only these programs (none: empty)
+//   ANILIST_LIVE=1   ask AniList directly instead of through the day-long cache
 //
-// Requires a network connection: the series page fetches real metadata for the
-// catalogue id from AniList/MAL, exactly as it would in normal use.
+// Requires a network connection the first time each day: the series page fetches
+// real metadata from AniList/MAL; AniList's answers are then reused (anilist-cache.mjs).
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -59,6 +60,9 @@ const binCache = join(tmpdir(), 'kuro-e2e-bin')
 const kuroExe = join(binCache, exe('kuro'))
 
 let server
+// AniList answers come through a caching proxy (see anilist-cache.mjs) unless ANILIST_LIVE=1.
+let anilist
+const ANILIST_PORT = Number(PORT) + 1000
 
 const stage = (msg) => console.log(`\n▶ ${msg}`)
 const run = (cmd, args, opts = {}) => {
@@ -235,13 +239,19 @@ try {
   stage('generating test episode')
   makeEpisode()
 
+  const upstream = {}
+  if (process.env.ANILIST_LIVE !== '1') {
+    anilist = spawn(process.execPath, [join(scriptDir, 'anilist-cache.mjs'), String(ANILIST_PORT)], { stdio: 'ignore' })
+    upstream.KURO_ANILIST_API = `http://127.0.0.1:${ANILIST_PORT}`
+  }
+
   stage(`starting server on ${URL}`)
   const logFd = openSync(serverLog, 'w')
   server = spawn(kuroExe, [], {
     cwd: root,
     // No app window: Playwright is the browser, and the window's Chromium
     // profile outlives taskkill and blocks the scratch cleanup.
-    env: { ...process.env, ...isolated, ...binOnlyPath() },
+    env: { ...process.env, ...isolated, ...upstream, ...binOnlyPath() },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })
@@ -264,6 +274,7 @@ try {
   process.exitCode = 1
 } finally {
   killTree(server)
+  killTree(anilist)
   if (KEEP) {
     console.log(`\nscratch kept at ${scratch} (server log: ${serverLog})`)
   } else {

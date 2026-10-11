@@ -312,6 +312,10 @@ func planFor(info *MediaInfo, encoder string, track int) Plan {
 		default:
 			plan.AudioCopy = false
 			plan.AudioCodec = "aac"
+			// Lossless in, lossless out: FLAC is the lossless format every browser plays.
+			if lossless(a) {
+				plan.AudioCodec = "flac"
+			}
 			reasons = append(reasons, "audio "+a.Codec)
 		}
 	}
@@ -322,6 +326,18 @@ func planFor(info *MediaInfo, encoder string, track int) Plan {
 		plan.Reason = "remux only"
 	}
 	return plan
+}
+
+// lossless reports an audio track that holds the sound exactly, which a lossy re-encode would throw away.
+func lossless(a Stream) bool {
+	switch a.Codec {
+	case "truehd", "mlp", "alac", "wavpack", "tta", "ape":
+		return true
+	case "dts":
+		// The core is lossy; only the Master Audio extension is not.
+		return strings.Contains(strings.ToUpper(a.Profile), "HD MA")
+	}
+	return strings.HasPrefix(a.Codec, "pcm_")
 }
 
 func orDefault(v, fallback string) string {

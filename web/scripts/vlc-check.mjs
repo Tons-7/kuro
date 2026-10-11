@@ -90,7 +90,8 @@ check(!(await episode(1))?.watched, 'a stopped episode is not watched')
 
 // Resume near the end: VLC reaches the end, the episode is watched, and
 // auto-next opens episode 2 in a new VLC.
-await post('/api/progress', { animeId: ANIME, episode: 1, position: 150, duration: 180, played: 10 })
+// Played covers half the episode: reaching the end only counts once that much has really played.
+await post('/api/progress', { animeId: ANIME, episode: 1, position: 150, duration: 180, played: 100 })
 check(!(await episode(1))?.watched, 'episode 1 is not watched before the ending plays')
 const play = (await post('/api/play', { animeId: ANIME, episode: 1, external: true })).body ?? {}
 check(play.player === 'vlc' && Math.round(play.startAt) === 150, 'play resumes in VLC at the saved point', JSON.stringify({ player: play.player, startAt: play.startAt }))

@@ -342,16 +342,6 @@ func (p *Prefetcher) TakePrepared(animeID, episode int) (score.Result, bool) {
 	return got.result, true
 }
 
-// Fetch downloads one episode without playing it. Used by auto-download as
-// well as prefetch; the only difference is what triggers it.
-func (p *Prefetcher) Fetch(ctx context.Context, animeID, episode, season int, prefs score.Preferences) error {
-	if p == nil || p.torrent == nil {
-		return fmt.Errorf("torrent engine unavailable")
-	}
-	_, _, err := p.fetch(ctx, animeID, episode, season, prefs, false)
-	return err
-}
-
 // Download fetches the episode and waits for it to land. Without the wait every
 // queued episode is added within seconds and competes for the same line. What
 // it lands is kept: asked for, so outside the cache budget and its eviction.

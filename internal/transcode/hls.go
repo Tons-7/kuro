@@ -680,9 +680,6 @@ func (s *Session) CurrentPlan() Plan {
 	return s.Plan
 }
 
-// Started reports whether an encoder pass is already running for this session.
-func (s *Session) Started() bool { return s.running() }
-
 // advanceHead moves headTo up to the highest segment the current pass has
 // finished, so the restart decision knows where the encoder really is. A
 // segment counts as done once the next one has started (the same rule

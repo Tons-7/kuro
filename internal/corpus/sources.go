@@ -12,7 +12,6 @@ package corpus
 
 import (
 	"bufio"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,9 +29,7 @@ const (
 	ManamiURL   = "https://github.com/manami-project/anime-offline-database/releases/download/latest/anime-offline-database.jsonl.zst"
 	AnimeAPIURL = "https://raw.githubusercontent.com/nattadasu/animeApi/v3/database/animeapi.tsv"
 	DeadIDsURL  = "https://github.com/manami-project/anime-offline-database/releases/download/latest/anilist-minified.json.zst"
-	AniDBURL    = "https://anidb.net/api/anime-titles.dat.gz"
 
-	// AniDB rejects requests without a distinct User-Agent and allows one download per day.
 	userAgent = "kuro/0.1 (personal media library)"
 )
 
@@ -68,7 +65,6 @@ func NewFetcher() *Fetcher {
 		urls: map[string]string{
 			"manami":   ManamiURL,
 			"animeapi": AnimeAPIURL,
-			"anidb":    AniDBURL,
 		},
 	}
 }
@@ -233,66 +229,4 @@ func field(fields []string, col map[string]int, name string) int {
 	}
 	n, _ := strconv.Atoi(strings.TrimSpace(fields[i]))
 	return n
-}
-
-// AniDB publishes a daily title dump covering 70 languages. Its terms allow one
-// download per day and require a distinct User-Agent.
-func (f *Fetcher) AniDBTitles(ctx context.Context, yield func(anidbID int, t Title) error) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-	body, err := f.get(ctx, f.urls["anidb"])
-	if err != nil {
-		return 0, err
-	}
-	defer body.Close()
-
-	gz, err := gzip.NewReader(body)
-	if err != nil {
-		return 0, err
-	}
-	defer gz.Close()
-
-	scan := bufio.NewScanner(gz)
-	scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	var n int
-	for scan.Scan() {
-		line := scan.Text()
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "|", 4)
-		if len(parts) != 4 {
-			continue
-		}
-		id, err := strconv.Atoi(parts[0])
-		if err != nil {
-			continue
-		}
-		if err := yield(id, Title{
-			Text: parts[3],
-			Kind: anidbKind(parts[1]),
-			Lang: parts[2],
-		}); err != nil {
-			return n, err
-		}
-		n++
-	}
-	return n, scan.Err()
-}
-
-// Types 5 and 6 appear in the data but not in the file's own header.
-func anidbKind(code string) string {
-	switch code {
-	case "1":
-		return "primary"
-	case "2":
-		return "synonym"
-	case "3":
-		return "short"
-	case "4":
-		return "official"
-	default:
-		return "other"
-	}
 }

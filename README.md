@@ -225,12 +225,11 @@ cd web
 npm run dev                      # hot reload, proxying /api to :4321
 npm run typecheck                # tsgo
 npm run lint
-npm run verify                   # loads every screen in a real browser
+npm run release-check            # Go suite, then every browser check on a throwaway kuro
 ```
 
 The dev server proxies `/api` to a running `kuro.exe`, so start the binary
-first and edit the frontend against it. `npm run verify` needs the binary
-running too; it reports console errors, failed requests and blank screens, and
-writes a screenshot of each page.
+first and edit the frontend against it. `npm run release-check` needs no
+running kuro: each check gets its own instance, data and ports.
 
 Type checking uses `tsgo`, the native TypeScript compiler, rather than `tsc`.
