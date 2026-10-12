@@ -33,6 +33,7 @@ const CHECKS = [
   ['about-folders-check.mjs'],
   ['anime4k-tiers-check.mjs', {}, ALONE],
   ['backup-check.mjs'],
+  ['browse-filters-check.mjs', {}, ALONE],
   ['browse-paging-check.mjs', {}, ALONE],
   ['continue-next-check.mjs'],
   ['downloads-fresh-check.mjs'],
@@ -47,6 +48,8 @@ const CHECKS = [
   ['no-transcoder-check.mjs', { BIN_ONLY: 'none' }],
   ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
+  // Real sites would compete with the local swarm's.
+  ['prefetch-check.mjs', { KURO_EXTRA_CONFIG: '' }, ALONE],
   ['related-check.mjs', {}, ALONE],
   ['saved-copy-check.mjs', {}, ALONE],
   ['seek-spinner-check.mjs'],

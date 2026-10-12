@@ -26,6 +26,7 @@ type Media struct {
 	MeanScore       *int      `json:"meanScore"`
 	Popularity      *int      `json:"popularity"`
 	Favourites      *int      `json:"favourites"`
+	Trending        *int      `json:"trending"`
 	CountryOfOrigin *string   `json:"countryOfOrigin"`
 	IsAdult         bool      `json:"isAdult"`
 	CoverImage      Cover     `json:"coverImage"`
@@ -107,7 +108,7 @@ const mediaFields = `
   id idMal isAdult countryOfOrigin
   title { romaji english native userPreferred }
   format status episodes duration season seasonYear
-  averageScore meanScore popularity favourites genres synonyms
+  averageScore meanScore popularity favourites trending genres synonyms
   description(asHtml: false)
   source
   coverImage { extraLarge large medium color }

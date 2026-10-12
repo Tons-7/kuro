@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -48,10 +49,16 @@ func watcherWith(st *store.Store, releases ...indexer.Torrent) *Watcher {
 	return NewWatcher(st, NewFinder(st, idx, discard()), idx, discard())
 }
 
-// What had aired before the first look is old news; the episode that airs afterwards is announced, once.
-func TestWatcherAnnouncesOnlyWhatAirsAfterItStartedLooking(t *testing.T) {
+func episodeOf(n store.Notification) int {
+	if n.Episode == nil {
+		return 0
+	}
+	return *n.Episode
+}
+
+// Nothing past the viewer has aired, so there is no news; once an episode airs it is announced, once.
+func TestWatcherAnnouncesAnEpisodeOnceItAirs(t *testing.T) {
 	st := prefetchStore(t)
-	// Nothing past the viewer has aired yet: episode 4 is next, in an hour.
 	setAiring(t, st, 4, time.Now().Add(time.Hour))
 	ctx := context.Background()
 	w := watcherWith(st,
@@ -65,14 +72,14 @@ func TestWatcherAnnouncesOnlyWhatAirsAfterItStartedLooking(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rep.Checked != 1 || rep.Notified != 0 || len(notifications(t, st)) != 0 {
-		t.Fatalf("the first look announced old episodes: %+v", rep)
+		t.Fatalf("announced before anything aired: %+v", rep)
 	}
 
 	// Episode 4 airs, and 5 is next.
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
 	rep, _ = w.Poll(ctx)
 	got := notifications(t, st)
-	if rep.Notified != 1 || len(got) != 1 || got[0].Episode == nil || *got[0].Episode != 4 {
+	if rep.Notified != 1 || len(got) != 1 || episodeOf(got[0]) != 4 {
 		t.Fatalf("report = %+v, notifications = %+v; want episode 4 announced", rep, got)
 	}
 	if rep, _ := w.Poll(ctx); rep.Notified != 0 || len(notifications(t, st)) != 1 {
@@ -80,21 +87,79 @@ func TestWatcherAnnouncesOnlyWhatAirsAfterItStartedLooking(t *testing.T) {
 	}
 }
 
-// A show that finished long ago has nothing new, however far behind the viewer is.
-func TestWatcherIsSilentAboutAShowFinishedLongAgo(t *testing.T) {
+// The reported bug: on episode 3 of a show at 9, with part of the backlog recorded by an earlier build,
+// every poll announced the rest of it. Only the latest aired episode is news, whatever the records say.
+func TestWatcherAnnouncesOnlyTheLatestWhateverWasRecordedBefore(t *testing.T) {
 	st := prefetchStore(t)
+	setAiring(t, st, 10, time.Now().Add(24*time.Hour))
 	ctx := context.Background()
-	episodes, current := 12, "CURRENT"
-	if _, err := st.ImportList(ctx,
-		[]store.Anime{{ID: 1, Romaji: "Show", Synonyms: "[]", Genres: "[]", Episodes: &episodes}},
-		[]store.Entry{{ID: 11, AnimeID: 1, Status: &current, Progress: 3}}, store.ImportMerge); err != nil {
+	for ep := 4; ep <= 6; ep++ {
+		if err := st.RecordNotified(ctx, fmt.Sprintf("old:%d", ep), 1, ep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var releases []indexer.Torrent
+	for ep := 4; ep <= 9; ep++ {
+		releases = append(releases, release(fmt.Sprintf("%040d", ep), fmt.Sprintf("[Best] Show - %02d [1080p].mkv", ep), 500))
+	}
+	w := watcherWith(st, releases...)
+
+	rep, _ := w.Poll(ctx)
+	got := notifications(t, st)
+	if rep.Notified != 1 || len(got) != 1 || episodeOf(got[0]) != 9 {
+		t.Fatalf("report = %+v, notifications = %+v; want episode 9 alone", rep, got)
+	}
+	if rep, _ := w.Poll(ctx); rep.Notified != 0 || len(notifications(t, st)) != 1 {
+		t.Fatalf("a later poll announced more: %+v", rep)
+	}
+}
+
+// The viewer caught up past what has aired: nothing to say until the next episode airs.
+func TestWatcherIsQuietWhenTheViewerIsUpToDate(t *testing.T) {
+	st := prefetchStore(t)
+	setAiring(t, st, 5, time.Now().Add(time.Hour))
+	ctx := context.Background()
+	if _, err := st.MarkWatched(ctx, 1, 4); err != nil {
 		t.Fatal(err)
 	}
-	w := watcherWith(st, release(goodHash, "[Best] Show - 04 [1080p].mkv", 500), release(deadHash, "[Best] Show - 09 [1080p].mkv", 500))
+	w := watcherWith(st, release(goodHash, "[Best] Show - 04 [1080p].mkv", 500), release(deadHash, "[Best] Show - 05 [1080p].mkv", 500))
+	if rep, _ := w.Poll(ctx); rep.Notified != 0 || len(notifications(t, st)) != 0 {
+		t.Fatalf("announced an episode already watched or not yet aired: %+v", rep)
+	}
+}
+
+func finishedShow(t *testing.T, ended time.Time, progress int) *store.Store {
+	t.Helper()
+	st := prefetchStore(t)
+	episodes, current := 12, "CURRENT"
+	if _, err := st.ImportList(context.Background(),
+		[]store.Anime{{ID: 1, Romaji: "Show", Synonyms: "[]", Genres: "[]", Episodes: &episodes, EndDate: ended.Format("2006-01-02")}},
+		[]store.Entry{{ID: 11, AnimeID: 1, Status: &current, Progress: progress}}, store.ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// A show that finished long ago has nothing new, however far behind the viewer is.
+func TestWatcherIsSilentAboutAShowFinishedLongAgo(t *testing.T) {
+	st := finishedShow(t, time.Now().AddDate(0, 0, -30), 3)
+	ctx := context.Background()
+	w := watcherWith(st, release(goodHash, "[Best] Show - 04 [1080p].mkv", 500), release(deadHash, "[Best] Show - 12 [1080p].mkv", 500))
 	for range 3 {
 		if rep, _ := w.Poll(ctx); rep.Notified != 0 || len(notifications(t, st)) != 0 {
 			t.Fatalf("an old episode was announced: %+v", rep)
 		}
+	}
+}
+
+// The finale: the catalogue drops the airing schedule once a show ends, but its last episode is still news.
+func TestWatcherAnnouncesTheFinaleOfAShowThatJustEnded(t *testing.T) {
+	st := finishedShow(t, time.Now().AddDate(0, 0, -1), 11)
+	ctx := context.Background()
+	w := watcherWith(st, release(goodHash, "[Best] Show - 12 [1080p].mkv", 500))
+	rep, _ := w.Poll(ctx)
+	if got := notifications(t, st); rep.Notified != 1 || len(got) != 1 || episodeOf(got[0]) != 12 {
+		t.Fatalf("report = %+v, notifications = %+v; want the finale announced", rep, got)
 	}
 }
 

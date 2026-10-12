@@ -1,10 +1,12 @@
 package store
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-// The catalogue names only the next episode's air time. Once that passes and
-// before the row is refreshed, the one after it must still count as unaired,
-// or a stray "07" gets announced days early.
+// Only the next episode's air time is known: once it passes, before the row is refreshed, the one
+// after must still count as unaired, or a stray "07" gets announced days early.
 func TestAiredKnowsOnlyTheNextEpisode(t *testing.T) {
 	const next, at = 7, int64(1_000_000)
 	for _, tt := range []struct {
@@ -24,5 +26,30 @@ func TestAiredKnowsOnlyTheNextEpisode(t *testing.T) {
 	}
 	if !aired(3, 0, 0, at) {
 		t.Error("with no schedule at all, nothing can be held back")
+	}
+}
+
+// The one episode that is news: the last to air, or the finale of a show that ended this week.
+func TestLatestIsTheEpisodeThatAiredLast(t *testing.T) {
+	now := time.Now()
+	day := func(d int) string { return now.AddDate(0, 0, d).Format("2006-01-02") }
+	for _, tt := range []struct {
+		name string
+		f    Follow
+		want int
+	}{
+		{"next airs tomorrow", Follow{NextEpisode: 6, NextAiringAt: now.Unix() + 3600}, 5},
+		{"next's time has passed", Follow{NextEpisode: 6, NextAiringAt: now.Unix() - 60}, 6},
+		{"next known, time unknown", Follow{NextEpisode: 6}, 5},
+		{"first episode still to air", Follow{NextEpisode: 1, NextAiringAt: now.Unix() + 3600}, 0},
+		{"ended yesterday", Follow{Episodes: 12, EndDate: day(-1)}, 12},
+		{"ended today", Follow{Episodes: 12, EndDate: day(0)}, 12},
+		{"ended last month", Follow{Episodes: 12, EndDate: day(-30)}, 0},
+		{"no airing data", Follow{Episodes: 12}, 0},
+		{"end date unreadable", Follow{Episodes: 12, EndDate: "2024"}, 0},
+	} {
+		if got := tt.f.Latest(now.Unix()); got != tt.want {
+			t.Errorf("%s: Latest = %d, want %d", tt.name, got, tt.want)
+		}
 	}
 }

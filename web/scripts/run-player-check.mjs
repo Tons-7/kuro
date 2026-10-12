@@ -217,12 +217,11 @@ try {
   // BIN_ONLY=a,b links only those, the install of someone who skipped the rest;
   // BIN_ONLY=none links nothing.
   linkBin(join(repo, 'bin'), join(root, 'bin'), process.env.BIN_ONLY ? process.env.BIN_ONLY.split(',') : null)
-  // One site that refuses connections: searches fail fast instead of being
-  // refused for want of a site, and the first-run nudge stays off. The peer
-  // port is off the default so the real app's engine can still bind it.
+  // A port nothing listens on, so searches fail fast and the first-run nudge stays off; e2e-swarm answers
+  // there when a check starts it. The peer port is off the app's own.
   writeFileSync(
     join(root, 'config.toml'),
-    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:1"\n`,
+    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:${Number(PORT) + 2000}"\n`,
   )
 
   if (!SKIP_BUILD) {

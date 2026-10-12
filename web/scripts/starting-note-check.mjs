@@ -66,7 +66,8 @@ const bar = await page.evaluate(() => {
 })
 const ahead = bar.parts.find((p) => p.to > bar.played)
 check(bar.parts.length > 0, 'the seek bar draws the loaded part', JSON.stringify(bar))
-check(!!ahead && Math.abs(ahead.to - bar.buffered) < 0.03, 'it reaches as far as the browser has loaded', JSON.stringify(bar))
+// A library file is whole on disk, so the loaded part is the whole bar; the browser's buffer lies inside it.
+check(!!ahead && ahead.to > 0.99 && bar.buffered <= ahead.to, 'it spans the whole file, with the browser buffer inside', JSON.stringify(bar))
 await page.locator('video').first().hover()
 await page.screenshot({ path: `${SHOTS}/loaded-bar.png` })
 

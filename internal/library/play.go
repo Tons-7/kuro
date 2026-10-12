@@ -298,8 +298,14 @@ func (p *Playback) startLocal(ctx context.Context, req PlayRequest) (*Session, b
 // error means held but unplayable now: a search would replace and delete it.
 func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, bool, error) {
 	rec, ok, err := p.store.TorrentForEpisode(ctx, req.AnimeID, epKey(req.Episode))
-	if err != nil || !ok {
+	if err != nil {
 		return nil, false, nil
+	}
+	// Being fetched ahead this moment, not yet on record: its torrent is taken over, not fetched twice.
+	if !ok {
+		if rec, ok = p.prefetch.Fetching(req.AnimeID, req.Episode); !ok {
+			return nil, false, nil
+		}
 	}
 
 	// Recorded before identity was enforced, this can be another show entirely.

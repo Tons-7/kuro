@@ -98,8 +98,7 @@ func (s *Store) MarkRead(ctx context.Context, id int64) error {
 	return err
 }
 
-// DeleteNotification removes one, or all when id is zero. The record of what was
-// announced is kept separately, so clearing the list doesn't re-announce them.
+// DeleteNotification removes one, or all when id is zero; what was announced is recorded apart from the list.
 func (s *Store) DeleteNotification(ctx context.Context, id int64) (int, error) {
 	var (
 		res interface{ RowsAffected() (int64, error) }
@@ -117,8 +116,7 @@ func (s *Store) DeleteNotification(ctx context.Context, id int64) (int, error) {
 	return int(n), nil
 }
 
-// AlreadyNotified keeps an episode from being announced again, keyed on the
-// episode not the release: many groups sub the same episode, but it's one story.
+// AlreadyNotified keys on the episode, not the release: many groups sub the same episode, one story.
 func (s *Store) AlreadyNotified(ctx context.Context, infoHash string, animeID, episode int) (bool, error) {
 	var one int
 	err := s.r.QueryRowContext(ctx,
@@ -136,13 +134,6 @@ func (s *Store) AlreadyNotified(ctx context.Context, infoHash string, animeID, e
 	return err == nil, nil
 }
 
-// EverNotified reports whether the watcher has looked at a show before: any episode of it on record.
-func (s *Store) EverNotified(ctx context.Context, animeID int) bool {
-	var one int
-	err := s.r.QueryRowContext(ctx, `SELECT 1 FROM notified_release WHERE anime_id = ? LIMIT 1`, animeID).Scan(&one)
-	return err == nil
-}
-
 func (s *Store) RecordNotified(ctx context.Context, infoHash string, animeID, episode int) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO notified_release (info_hash, anime_id, episode, created_at)
@@ -157,18 +148,32 @@ type Follow struct {
 	Episodes int
 	Progress int
 
-	// The episode the catalogue says is next to air, and when. Zero when the
-	// show has finished or nothing has been synced.
+	// The episode the catalogue says airs next, and when; zero once the show has finished or before a sync.
 	NextEpisode  int
 	NextAiringAt int64
+	EndDate      string // YYYY-MM-DD, empty while airing or unknown
 }
 
 func (f Follow) Aired(episode int, now int64) bool {
 	return aired(episode, f.NextEpisode, f.NextAiringAt, now)
 }
 
-// aired reports whether an episode has broadcast. Only the next one's time is
-// known; anything past it airs later still, however stale the row.
+// Latest is the episode that aired last, or 0: the one before the next (the next itself once its time
+// has passed), or the last of a show that ended this week.
+func (f Follow) Latest(now int64) int {
+	switch {
+	case f.NextEpisode > 0 && f.NextAiringAt > 0 && f.NextAiringAt <= now:
+		return f.NextEpisode
+	case f.NextEpisode > 0:
+		return f.NextEpisode - 1
+	}
+	if ended, err := time.Parse("2006-01-02", f.EndDate); err == nil && now-ended.Unix() < 7*24*3600 {
+		return f.Episodes
+	}
+	return 0
+}
+
+// aired: only the next episode's time is known; anything past it airs later still, however stale the row.
 func aired(episode, nextEpisode int, airingAt, now int64) bool {
 	if nextEpisode <= 0 || airingAt <= 0 || episode < nextEpisode {
 		return true
@@ -179,8 +184,7 @@ func aired(episode, nextEpisode int, airingAt, now int64) bool {
 	return airingAt <= now
 }
 
-// EpisodeAired answers whether an episode has broadcast, and when the next one
-// does. Unknown counts as aired: no schedule is not evidence of a future date.
+// EpisodeAired: has the episode broadcast, and when does the next; no schedule counts as aired.
 func (s *Store) EpisodeAired(ctx context.Context, animeID, episode int) (bool, int64) {
 	var next, at *int
 	err := s.r.QueryRowContext(ctx,
@@ -191,32 +195,28 @@ func (s *Store) EpisodeAired(ctx context.Context, animeID, episode int) (bool, i
 	return aired(episode, *next, int64(*at), time.Now().Unix()), int64(*at)
 }
 
-// Watched shows are those followed plus those set to auto-download (separate
-// choices). Grouped by anime: a show that is both would otherwise be searched
-// on every indexer twice per poll.
+// Watched: followed, auto-download, or listed as watching; grouped, so a show that is several is searched once.
 const followQuery = `
 	SELECT anime_id, max(episode_count), max(progress),
-	       max(next_episode), max(next_airing_at)
+	       max(next_episode), max(next_airing_at), max(end_date)
 	FROM (
 		SELECT f.anime_id AS anime_id,
 		       coalesce(a.episode_count,0) AS episode_count,
 		       coalesce(e.progress,0) AS progress,
 		       coalesce(a.next_episode,0) AS next_episode,
-		       coalesce(a.next_airing_at,0) AS next_airing_at
+		       coalesce(a.next_airing_at,0) AS next_airing_at,
+		       coalesce(a.end_date,'') AS end_date
 		FROM follow f
 		LEFT JOIN anime a ON a.id = f.anime_id
 		LEFT JOIN list_entry e ON e.anime_id = f.anime_id
-		-- Watching normally stops at the last episode, but an anime whose
-		-- episode count is unknown has no last episode and would be searched
-		-- for forever. Finishing or abandoning it is the other signal that
-		-- there is nothing left to look for.
+		-- A show with no known episode count has no last episode to stop at; finishing or dropping it does.
 		WHERE coalesce(e.status, '') NOT IN ('COMPLETED', 'DROPPED')
 
 		UNION ALL
 
 		SELECT p.anime_id,
 		       coalesce(a.episode_count,0), coalesce(e.progress,0),
-		       coalesce(a.next_episode,0), coalesce(a.next_airing_at,0)
+		       coalesce(a.next_episode,0), coalesce(a.next_airing_at,0), coalesce(a.end_date,'')
 		FROM anime_pref p
 		LEFT JOIN anime a ON a.id = p.anime_id
 		LEFT JOIN list_entry e ON e.anime_id = p.anime_id
@@ -225,11 +225,10 @@ const followQuery = `
 
 		UNION ALL
 
-		-- Watching it, by any route: a status synced from the tracker followed nothing, so nobody heard.
-		-- A show muted on its own page (notify.enabled off for it) stays quiet.
+		-- A watching status synced from the tracker followed nothing, so nobody heard; muted on its page stays quiet.
 		SELECT e.anime_id,
 		       coalesce(a.episode_count,0), coalesce(e.progress,0),
-		       coalesce(a.next_episode,0), coalesce(a.next_airing_at,0)
+		       coalesce(a.next_episode,0), coalesce(a.next_airing_at,0), coalesce(a.end_date,'')
 		FROM list_entry e
 		LEFT JOIN anime a ON a.id = e.anime_id
 		WHERE e.status IN ('CURRENT', 'REPEATING')
@@ -248,7 +247,7 @@ func (s *Store) Follows(ctx context.Context) ([]Follow, error) {
 	var out []Follow
 	for rows.Next() {
 		var f Follow
-		if err := rows.Scan(&f.AnimeID, &f.Episodes, &f.Progress, &f.NextEpisode, &f.NextAiringAt); err != nil {
+		if err := rows.Scan(&f.AnimeID, &f.Episodes, &f.Progress, &f.NextEpisode, &f.NextAiringAt, &f.EndDate); err != nil {
 			return nil, err
 		}
 		out = append(out, f)

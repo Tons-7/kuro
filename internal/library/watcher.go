@@ -63,55 +63,21 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 		}
 		rep.Checked++
 
-		// News is what airs from now on. The first look at a show takes what aired before as seen,
-		// quietly, bar the latest episode of one still airing: a show finished years ago has nothing to say.
-		now := time.Now().Unix()
-		firstLook := !w.store.EverNotified(ctx, f.AnimeID)
-		latest := f.NextEpisode - 1
-		if f.NextEpisode > 0 && f.NextAiringAt > 0 && f.NextAiringAt <= now {
-			latest = f.NextEpisode
+		// News is the episode that aired last, and only that; the backlog is known, a show long finished is silent.
+		latest := f.Latest(time.Now().Unix())
+		if latest <= f.Progress || latest > f.Progress+maxBacklog || (f.Episodes > 0 && latest > f.Episodes) {
+			continue
 		}
-		searched := 0
-		for next := f.Progress + 1; next <= f.Progress+maxBacklog; next++ {
-			if f.Episodes > 0 && next > f.Episodes {
-				break
-			}
-			// Something numbered ahead of the broadcast turns up most weeks; it
-			// is never the episode, and downloading it fails after announcing it.
-			if !f.Aired(next, now) {
-				break
-			}
-			if seen, _ := w.store.AlreadyNotified(ctx, "", f.AnimeID, next); seen {
-				continue
-			}
-			if firstLook && next != latest {
-				if err := w.store.RecordNotified(ctx, fmt.Sprintf("seen:%d:%d", f.AnimeID, next), f.AnimeID, next); err != nil {
-					w.log.Warn("record seen episode", "err", err)
-				}
-				continue
-			}
-			// Capped so a long backlog does not flood the indexers in one poll.
-			if searched >= watchAhead {
-				break
-			}
-			searched++
-			w.check(ctx, f.AnimeID, next, notifyOn, auto, want, &rep)
+		if seen, _ := w.store.AlreadyNotified(ctx, "", f.AnimeID, latest); seen {
+			continue
 		}
-		// Nothing had aired yet: the look still counts, or the first episode would be taken as old news.
-		if firstLook && !w.store.EverNotified(ctx, f.AnimeID) {
-			if err := w.store.RecordNotified(ctx, fmt.Sprintf("seen:%d:0", f.AnimeID), f.AnimeID, 0); err != nil {
-				w.log.Warn("record first look", "err", err)
-			}
-		}
+		w.check(ctx, f.AnimeID, latest, notifyOn, auto, want, &rep)
 	}
 	return rep, nil
 }
 
-// Searches per show per poll, and how far past progress to look at all.
-const (
-	watchAhead = 4
-	maxBacklog = 200
-)
+// How far past progress an episode can be and still be news; beyond it the catalogue is suspect.
+const maxBacklog = 200
 
 func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, auto bool, want func(parse.Release) bool, rep *WatchReport) {
 	found, err := w.finder.Find(ctx, Request{

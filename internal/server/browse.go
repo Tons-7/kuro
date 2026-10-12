@@ -152,47 +152,6 @@ func (c *browseCounts) get(key string, measure func() (int, error)) (int, error)
 	}
 }
 
-// browseStudio lists a studio's works. AniList cannot filter the media query
-// by studio, so format, status and genre narrow each page here instead.
-func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int) {
-	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	perPage, _ := strconv.Atoi(q.Get("perPage"))
-	name, result, err := s.anilist.StudioMedia(r.Context(), studio, q.Get("sort"), page, perPage)
-	if err != nil {
-		s.fail(w, "studio", err)
-		return
-	}
-
-	formats, statuses, genres := csv(q.Get("formats")), csv(q.Get("statuses")), csv(q.Get("genres"))
-	kept := result.Media[:0]
-	for _, m := range result.Media {
-		if len(formats) > 0 && !containsFold(formats, deref(m.Format)) {
-			continue
-		}
-		if len(statuses) > 0 && !containsFold(statuses, deref(m.Status)) {
-			continue
-		}
-		if !hasAll(m.Genres, genres) {
-			continue
-		}
-		kept = append(kept, m)
-	}
-	// The studio's total includes what the filters dropped, so it is unknown.
-	total := result.Total
-	if len(formats)+len(statuses)+len(genres) > 0 {
-		total = 0
-	}
-
-	send(w, http.StatusOK, map[string]any{
-		"items":   s.decorate(r, kept),
-		"page":    max(page, 1),
-		"hasMore": result.HasNextPage,
-		"total":   total,
-		"studio":  map[string]any{"id": studio, "name": name},
-	})
-}
-
 // studios answers the browse filter's studio search.
 func (s *Server) studios(w http.ResponseWriter, r *http.Request) {
 	search := strings.TrimSpace(r.URL.Query().Get("q"))

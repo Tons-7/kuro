@@ -65,7 +65,8 @@ type Server struct {
 	latestMu   sync.Mutex
 	latestJobs map[string]time.Time
 
-	counts browseCounts
+	counts      browseCounts
+	studioWorks studioLists
 
 	// What a system ffmpeg is and can do, per binary; Setup polls every second.
 	systemMu sync.Mutex

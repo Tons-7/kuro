@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -70,6 +72,17 @@ func (f *fakeEngine) handler() http.Handler {
 	mux.HandleFunc("POST /torrents", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		hash := hashOf(string(body))
+		// Named after the release, as a real torrent is, so the file can be told apart by episode.
+		name := "Frieren - 01.mkv"
+		if m := magnetName.FindStringSubmatch(string(body)); m != nil {
+			if dn, err := url.QueryUnescape(m[1]); err == nil && dn != "" {
+				name = dn
+			}
+		}
+		file := name
+		if !strings.HasSuffix(strings.ToLower(file), ".mkv") {
+			file += ".mkv"
+		}
 
 		f.mu.Lock()
 		id := 0
@@ -86,10 +99,9 @@ func (f *fakeEngine) handler() http.Handler {
 			"id": id,
 			"details": map[string]any{
 				"info_hash": hash,
-				"name":      "Frieren - 01.mkv",
+				"name":      name,
 				"files": []map[string]any{
-					{"name": "Frieren - 01.mkv", "components": []string{"Frieren - 01.mkv"},
-						"length": 1 << 30, "included": true},
+					{"name": file, "components": []string{file}, "length": 1 << 30, "included": true},
 				},
 			},
 		})
@@ -208,13 +220,10 @@ func (f *fakeEngine) isPaused(id int) bool {
 func (f *fakeEngine) wasDeleted(hash string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, h := range f.deleted {
-		if h == hash {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.deleted, hash)
 }
+
+var magnetName = regexp.MustCompile(`[?&]dn=([^&"\s]+)`)
 
 func hashOf(magnet string) string {
 	const marker = "urn:btih:"

@@ -89,7 +89,7 @@ export function Browse() {
     retry: 12,
     retryDelay: 5000,
   })
-  // A studio's total is AniList's own and exact, unless its list is filtered here (then 0, unknown).
+  // A studio's total is exact: the server holds its whole list and narrows it.
   const resultCount = active.studio
     ? results.data?.total || undefined
     : results.data && !results.data.hasMore
@@ -290,11 +290,6 @@ export function Browse() {
       </div>
       {random.isError && (
         <p className="text-xs text-recap">{(random.error as Error).message}</p>
-      )}
-      {active.studio && (active.q || active.year || active.season) && (
-        <p className="text-xs text-base-500">
-          A studio's list is its whole catalogue: search, year and season don't narrow it.
-        </p>
       )}
 
       {results.isError && !results.data ? (

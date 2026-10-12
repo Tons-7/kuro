@@ -56,6 +56,28 @@ func (c *Client) StudioMedia(ctx context.Context, id int, sort string, page, per
 	}, nil
 }
 
+// studioPagesCap bounds a studio's list: the largest studios have some 800 works, 50 to a page.
+var studioPagesCap = 20
+
+// StudioWorks is everything a studio made as main studio, anime only, most popular first. The studio
+// query takes no filters, so the list is fetched whole for the caller to narrow, sort and page.
+func (c *Client) StudioWorks(ctx context.Context, id int) (string, []Media, error) {
+	var name string
+	var works []Media
+	for page := 1; page <= studioPagesCap; page++ {
+		n, got, err := c.StudioMedia(ctx, id, "popular", page, 50)
+		if err != nil {
+			return "", nil, err
+		}
+		name = n
+		works = append(works, got.Media...)
+		if !got.HasNextPage {
+			break
+		}
+	}
+	return name, works, nil
+}
+
 type Studio struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`

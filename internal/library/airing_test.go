@@ -51,8 +51,7 @@ func pollWith(t *testing.T, st *store.Store, results []indexer.Torrent) WatchRep
 	return rep
 }
 
-// The reported bug: on Sunday kuro announced an episode airing the following
-// Saturday, then failed to play what it had grabbed.
+// The reported bug: on Sunday kuro announced an episode airing the next Saturday, then failed to play it.
 func TestNoNotificationBeforeTheEpisodeAirs(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Unix()
 	st := airingStore(t, 6, tomorrow, 5)
@@ -85,8 +84,7 @@ func TestNotifiesOnceTheEpisodeHasAired(t *testing.T) {
 	}
 }
 
-// Notifications and auto-download are separate switches: turning off the bell
-// used to stop every auto-download with it.
+// Notifications and auto-download are separate switches: the bell off used to stop every auto-download.
 func TestAutoDownloadWithNotificationsOff(t *testing.T) {
 	anHourAgo := time.Now().Add(-time.Hour).Unix()
 	st := airingStore(t, 6, anHourAgo, 5)
@@ -141,8 +139,7 @@ func TestCatchingUpAnnouncesOnlyTheLatestAiredEpisode(t *testing.T) {
 	}
 }
 
-// A pack that states no range covers nothing in particular; announcing one
-// claims an episode that may not exist yet.
+// A pack that states no range covers nothing in particular; announcing one claims an episode that may not exist.
 func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {
 	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 

@@ -82,7 +82,11 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, map[string]any{"preparing": false})
 		return
 	}
-	// Already on screen: playback is resolving this very episode.
+	// Already on screen, or starting: playback is resolving this very episode.
+	if _, starting := s.playback.Stage(body.AnimeID, body.Episode); starting {
+		send(w, http.StatusOK, map[string]any{"preparing": false})
+		return
+	}
 	if s.streams != nil {
 		if _, live := s.streams.Get(sessionID(body.AnimeID, body.Episode)); live {
 			send(w, http.StatusOK, map[string]any{"preparing": false})
