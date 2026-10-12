@@ -146,7 +146,8 @@ func (e *Engine) forgetMissing(t *atorrent.Torrent) {
 
 // track registers a torrent under a new id. Caller holds the lock.
 func (e *Engine) track(t *atorrent.Torrent, trackers []string) *entry {
-	en := &entry{id: e.nextID, t: t, trackers: trackers, selected: map[int]bool{}}
+	// The stall clock starts now: an inspected torrent already has peers and a zero start fired it at once.
+	en := &entry{id: e.nextID, t: t, trackers: trackers, selected: map[int]bool{}, quietSince: time.Now()}
 	e.nextID++
 	e.byID[en.id] = en
 	e.byHash[t.InfoHash()] = en
@@ -357,4 +358,21 @@ func (e *Engine) stats(en *entry) torrent.Stats {
 		s.Live = live
 	}
 	return s
+}
+
+// fileRanges merges a file's complete pieces into the stretches of it that are on disk.
+func fileRanges(f *atorrent.File) torrent.FileRanges {
+	out := torrent.FileRanges{Length: f.Length(), Ranges: []torrent.ByteRange{}}
+	var at int64
+	for _, p := range f.State() {
+		if p.Complete {
+			if n := len(out.Ranges); n > 0 && out.Ranges[n-1].To == at {
+				out.Ranges[n-1].To += p.Bytes
+			} else {
+				out.Ranges = append(out.Ranges, torrent.ByteRange{From: at, To: at + p.Bytes})
+			}
+		}
+		at += p.Bytes
+	}
+	return out
 }

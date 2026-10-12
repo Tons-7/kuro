@@ -1,6 +1,7 @@
 package transcode
 
 import (
+	"kuro/internal/sound"
 	"strings"
 	"testing"
 )
@@ -88,7 +89,7 @@ func TestAudioTrackDrivesArgsAndPlan(t *testing.T) {
 	}
 
 	s.audioTrack = 1
-	s.Plan = planFor(info, "libx264", 1)
+	s.Plan = planFor(info, "libx264", 1, sound.Options{})
 	if !strings.Contains(strings.Join(s.args(0, 0), " "), "0:a:1?") {
 		t.Error("switched track is mapped")
 	}

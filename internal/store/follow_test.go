@@ -66,6 +66,35 @@ func TestFollowIsOnlyForShowsBeingWatched(t *testing.T) {
 	}
 }
 
+// A show being watched is followed by that fact alone: statuses synced from the tracker never set a
+// follow, so nobody with a synced list ever got a notification.
+func TestAShowBeingWatchedIsFollowedWithoutAsking(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for id := 1; id <= 3; id++ {
+		seedAnime(t, s, id)
+	}
+	for id, status := range map[int]string{1: StatusCurrent, 2: "PLANNING", 3: "COMPLETED"} {
+		if err := s.SetListStatus(ctx, id, status, -1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// As the sync leaves it: the status alone, no follow row.
+	for id := 1; id <= 3; id++ {
+		if err := s.Unfollow(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	follows := mustFollows(t, s)
+	if !hasFollow(follows, 1) {
+		t.Error("a show being watched is not followed")
+	}
+	if hasFollow(follows, 2) || hasFollow(follows, 3) {
+		t.Errorf("planned or finished shows are followed: %+v", follows)
+	}
+}
+
 func mustFollows(t *testing.T, s *Store) []Follow {
 	t.Helper()
 	out, err := s.Follows(context.Background())

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"kuro/internal/sound"
 	"log/slog"
 	"net"
 	"os"
@@ -49,7 +50,9 @@ type Options struct {
 	Audio string
 	// SubLanguages are the settings' ISO 639-1 codes, best first.
 	SubLanguages []string
-	Extra        []string
+	// Sound is what to do to the audio: dialogue lift, night mode, headphones, mono.
+	Sound sound.Options
+	Extra []string
 }
 
 // AudioLanguages is mpv's --alang list for a preference, empty when either track will do.
@@ -171,6 +174,7 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 	if slang := SubtitleLanguages(opts.SubLanguages); slang != "" {
 		args = append(args, "--slang="+slang)
 	}
+	args = append(args, sound.MPVArgs(opts.Sound)...)
 	if opts.Anime4K {
 		// gpu-next is what actually runs the shader chain well; gpu-hq only
 		// raises the scaling defaults underneath it.

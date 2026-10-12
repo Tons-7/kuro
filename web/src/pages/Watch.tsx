@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -8,7 +8,10 @@ import {
   query,
   type PlaySession,
   type SkipRange,
+  SOUND_PREFS,
+  type SoundOptions,
   type StreamInfo,
+  type VoiceLevel,
 } from '../lib/api'
 import { bytes, cx } from '../lib/format'
 import { refreshDownloads, useDownloads, useEpisodes, usePrefs, useSetPref } from '../lib/queries'
@@ -111,12 +114,39 @@ export function Watch() {
 
   // mpv opens the file itself and reports over its own IPC socket, so there is nothing here to transcode for.
   const source = playingInMpv ? undefined : play.data?.streamUrl
+  // Read at open time, not part of the key: changing it mid-episode restarts the pass in place.
+  const soundOptions = useMemo<SoundOptions>(
+    () => ({
+      voice: (effective['playback.voice'] || 'off') as VoiceLevel,
+      night: flag('playback.night'),
+      headphones: flag('playback.headphones'),
+      mono: flag('playback.mono'),
+      boost: (effective['playback.boost'] || 'off') as VoiceLevel,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- effective and flag follow prefs.data
+    [prefs.data],
+  )
+  const soundAtOpen = useRef(soundOptions)
+  soundAtOpen.current = soundOptions
+  // Stable, or the player's key handler is torn down and re-added on every progress tick.
+  const setSoundMutate = setPref.mutate
+  const soundProp = useMemo(
+    () => ({
+      options: soundOptions,
+      onChange: (next: SoundOptions) => {
+        for (const key of Object.keys(SOUND_PREFS) as (keyof SoundOptions)[]) {
+          if (next[key] !== soundOptions[key]) setSoundMutate({ key: SOUND_PREFS[key], value: String(next[key]) })
+        }
+      },
+    }),
+    [soundOptions, setSoundMutate],
+  )
   const stream = useQuery({
     enabled: !!source,
     queryKey: ['stream', id, ep, source, wantAudio],
     queryFn: () =>
       api.post<StreamInfo>(
-        `/api/stream/open${query({ id, episode: ep, source, audio: wantAudio })}`,
+        `/api/stream/open${query({ id, episode: ep, source, audio: wantAudio, ...soundAtOpen.current })}`,
       ),
     retry: 1,
     staleTime: Infinity,
@@ -328,6 +358,7 @@ export function Watch() {
                   autoPlay={flag('playback.autoplay')}
                   subLanguages={subLanguages}
                   upscale={upscaling}
+                  sound={soundProp}
                   title={showTitle}
                   subtitle={episodeLabel}
                   onProgress={reportProgress}

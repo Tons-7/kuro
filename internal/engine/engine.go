@@ -345,9 +345,17 @@ func (e *Engine) unstick(en *entry, now time.Time) {
 	}
 }
 
-// replan makes anacrolix plan a torrent's requests afresh, by switching its downloading off and on.
+// replan makes anacrolix plan a torrent's requests afresh by dropping and restoring its files' priorities.
+// Not the download switch: flipping that fails every reader mid-wait, and three flips ended the stream.
 func (e *Engine) replan(en *entry) {
-	en.t.DisallowDataDownload()
+	e.mu.Lock()
+	selected := maps(en.selected)
+	e.mu.Unlock()
+	for i, f := range en.t.Files() {
+		if selected[i] {
+			f.SetPriority(atorrent.PiecePriorityNone)
+		}
+	}
 	e.apply(en)
 }
 

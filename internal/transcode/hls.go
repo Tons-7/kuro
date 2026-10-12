@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"kuro/internal/sound"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -65,6 +66,8 @@ type Session struct {
 	// it. Only a changed preference re-picks: re-picking drops every segment.
 	audioTrack int
 	audioPref  string
+	// What is done to the audio on the way out; see voice.go.
+	sound sound.Options
 	// Set once the session is released, so a late waiter's restart branch does
 	// not relaunch ffmpeg into a directory that is being torn down.
 	closed bool

@@ -9,6 +9,12 @@ import {
   type StreamHealth,
   type StreamInfo,
   type SubtitleTrack,
+  DEFAULT_SOUND,
+  sameSound,
+  soundFrom,
+  type SoundOptions,
+  VOICE_LEVELS,
+  type VoiceLevel,
 } from '../lib/api'
 import { clockTime, cx, languageName } from '../lib/format'
 import { refreshDownloads } from '../lib/queries'
@@ -129,6 +135,8 @@ export interface PlayerProps {
   subLanguages?: string[]
   /** onSlow is set only under Auto: a tier picked by hand is left alone. */
   upscale?: { enabled: boolean; mode: string; tier?: UpscaleTier; onSlow?: () => void }
+  /** The sound settings, and where a change made here is remembered. */
+  sound?: { options: SoundOptions; onChange: (next: SoundOptions) => void }
   title: string
   subtitle?: string
   /** played is media time that actually played since the last report. */
@@ -152,6 +160,7 @@ export function Player({
   autoPlay,
   subLanguages,
   upscale,
+  sound,
   title,
   subtitle,
   onProgress,
@@ -239,6 +248,7 @@ export function Player({
   // afresh; either way old buffered segments and the new pass must not share a
   // SourceBuffer, so the epoch forces a fresh HLS instance and resumeAt seeks it.
   const [audioTrack, setAudioTrack] = useState(0)
+  const [soundState, setSoundState] = useState<SoundOptions>(sound?.options ?? DEFAULT_SOUND)
   const [epoch, setEpoch] = useState(0)
   const [resumeAt, setResumeAt] = useState(startAt)
   // The session could not be reopened after the reaper took it.
@@ -251,6 +261,7 @@ export function Player({
   if (stream?.id !== attached) {
     setAttached(stream?.id)
     setAudioTrack(stream?.audioTrack ?? 0)
+    setSoundState(stream?.sound ? soundFrom(stream.sound) : (sound?.options ?? DEFAULT_SOUND))
     setEpoch(0)
     setResumeAt(startAt)
     // Or the scrubber reads the last episode's length and a skip button for its ranges sits over the new one.
@@ -286,6 +297,25 @@ export function Player({
     audioChosen.current = false
   }, [stream?.id])
 
+  // Same shape as a track switch: the pass restarts where the viewer is, and the change is remembered.
+  const switchSound = useCallback(
+    (patch: Partial<SoundOptions>) => {
+      const id = stream?.id
+      const next = { ...soundState, ...patch }
+      if (!id || sameSound(next, soundState)) return
+      resumeAfterRebuild(video, !!video && !video.paused && !video.ended)
+      setResumeAt(video?.currentTime ?? startAt)
+      setSoundState(next)
+      setEpoch((e) => e + 1)
+      void api.post(`/api/stream/${id}/sound${soundQuery(patch)}`).catch(() => {})
+      sound?.onChange(next)
+    },
+    [stream?.id, soundState, video, startAt, sound],
+  )
+  const cycleVoice = useCallback(() => {
+    switchSound({ voice: VOICE_LEVELS[(VOICE_LEVELS.indexOf(soundState.voice) + 1) % VOICE_LEVELS.length] })
+  }, [switchSound, soundState.voice])
+
   // Filled below once hls exists; keepalive and fatal 404 can notice together, so one reopen at a time.
   const recoverRef = useRef<() => void>(() => {})
   const recovering = useRef(false)
@@ -298,12 +328,16 @@ export function Player({
     recovering.current = true
     const wasPlaying = !!video && !video.paused && !video.ended
     const track = audioTrack
+    const snd = soundState
     void onSessionLost()
       .then(() => {
         // The rebuilt session picks the track from the sub/dub preference, so a
         // mid-episode switch has to be asked for again or the menu lies.
         if (audioChosen.current && stream?.id) {
           void api.post(`/api/stream/${stream.id}/audio?track=${track}`).catch(() => {})
+        }
+        if (!sameSound(snd, DEFAULT_SOUND) && stream?.id) {
+          void api.post(`/api/stream/${stream.id}/sound${soundQuery(snd)}`).catch(() => {})
         }
         setResumeAt(video?.currentTime ?? startAt)
         setEpoch((e) => e + 1)
@@ -526,6 +560,8 @@ export function Player({
     showVolume,
     shiftSubDelay: track === null ? undefined : shiftSubDelay,
     skipTo: activeSkip?.end,
+    // Only where the control shows: a file with no audio has nothing to lift.
+    cycleVoice: (stream?.audio?.length ?? 0) > 0 ? cycleVoice : undefined,
   })
 
   // How long the picture has been stuck, so a slow swarm can say so rather than looking like a hang.
@@ -833,6 +869,10 @@ export function Player({
               />
             )}
 
+            {!pip.active && stream && (stream.audio?.length ?? 0) > 0 && (
+              <SoundPicker value={soundState} onChange={switchSound} />
+            )}
+
             {(stream?.subtitles?.length ?? 0) > 0 && (
               <SubtitlePicker
                 tracks={stream!.subtitles}
@@ -964,7 +1004,7 @@ function Scrubber({
 
   const shown = dragging && at !== null ? at * duration : time
   const percent = duration > 0 ? (shown / duration) * 100 : 0
-  const loaded = useLoadedRanges(video)
+  const loaded = useLoadedRanges(streamId)
 
   return (
     <div
@@ -1036,28 +1076,32 @@ function Scrubber({
   )
 }
 
-// The stretches of the episode the browser holds, as [from, to] seconds: the lighter part of the bar.
-function useLoadedRanges(video: HTMLVideoElement | null): Array<[number, number]> {
+// The stretches that will play without waiting on the network, as [from, to] seconds: the lighter part of
+// the bar. Asked of the server; the browser's own buffer is a small window around the playhead, no more.
+function useLoadedRanges(streamId: string | undefined): Array<[number, number]> {
   const [ranges, setRanges] = useState<Array<[number, number]>>([])
   useEffect(() => {
-    if (!video) return
-    const read = () => {
-      const next: Array<[number, number]> = []
-      for (let i = 0; i < video.buffered.length; i++) next.push([video.buffered.start(i), video.buffered.end(i)])
-      // Only when it moved by a visible amount: progress fires many times a second.
-      setRanges((prev) =>
-        prev.length === next.length && prev.every((r, i) => Math.abs(r[0] - next[i][0]) < 0.5 && Math.abs(r[1] - next[i][1]) < 0.5)
-          ? prev
-          : next,
-      )
+    setRanges([])
+    if (!streamId) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = async () => {
+      try {
+        const res = await api.get<{ complete: boolean; ranges: Array<[number, number]> }>(`/api/stream/${streamId}/loaded`)
+        if (stopped) return
+        setRanges(res.ranges)
+        // A finished episode cannot change; a download is asked again every few seconds.
+        if (!res.complete) timer = setTimeout(read, 4000)
+      } catch {
+        if (!stopped) timer = setTimeout(read, 10_000)
+      }
     }
-    read()
-    const events = ['progress', 'seeked', 'loadeddata', 'emptied'] as const
-    for (const e of events) video.addEventListener(e, read)
+    void read()
     return () => {
-      for (const e of events) video.removeEventListener(e, read)
+      stopped = true
+      clearTimeout(timer)
     }
-  }, [video])
+  }, [streamId])
   return ranges
 }
 
@@ -1325,6 +1369,96 @@ function AudioPicker({
   )
 }
 
+const LEVEL_LABELS: Record<VoiceLevel, string> = { off: 'Off', medium: 'Medium', high: 'High' }
+
+/** The query for a sound change: only the fields given, so the rest stay as they are on the server. */
+function soundQuery(patch: Partial<SoundOptions>): string {
+  const q = new URLSearchParams()
+  for (const [key, value] of Object.entries(patch)) if (value !== undefined) q.set(key, String(value))
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
+/** What is on, in a few words, for the button. */
+function soundSummary(s: SoundOptions): string {
+  const on = []
+  if (s.voice !== 'off') on.push(`Voice ${LEVEL_LABELS[s.voice].toLowerCase()}`)
+  if (s.night) on.push('Night')
+  if (s.headphones) on.push('Headphones')
+  if (s.mono) on.push('Mono')
+  if (s.boost !== 'off') on.push(`Boost ${LEVEL_LABELS[s.boost].toLowerCase()}`)
+  return on.length ? on.join(', ') : 'Default'
+}
+
+// Enhancing (what the ear picks out) and boosting (how loud the whole thing is) are different asks,
+// so they sit apart, as on the services that offer both.
+function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
+  const [open, setOpen] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
+  const ref = useDismiss<HTMLDivElement>(close)
+  const summary = soundSummary(value)
+  const heading = 'px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase'
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        title="Sound: voice boost (V), night mode, headphones, mono, volume boost"
+        aria-label={`Sound: ${summary}`}
+        className={cx(
+          'flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors hover:bg-white/15',
+          summary === 'Default' ? 'text-white/90' : 'text-accent-300',
+        )}
+      >
+        <VoiceIcon />
+        <span className="max-w-32 truncate max-sm:hidden">{summary === 'Default' ? 'Sound' : summary}</span>
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60"
+        >
+          <p className={heading}>Voice boost</p>
+          {VOICE_LEVELS.map((level) => (
+            <MenuRow key={level} selected={level === value.voice} onClick={() => onChange({ voice: level })}>
+              {LEVEL_LABELS[level]}
+            </MenuRow>
+          ))}
+          <p className={heading}>Enhance</p>
+          <MenuRow selected={value.night} onClick={() => onChange({ night: !value.night })}>Night mode</MenuRow>
+          <MenuRow selected={value.headphones} onClick={() => onChange({ headphones: !value.headphones })}>Headphones</MenuRow>
+          <MenuRow selected={value.mono} onClick={() => onChange({ mono: !value.mono })}>Mono</MenuRow>
+          <p className={heading}>Volume boost</p>
+          {VOICE_LEVELS.map((level) => (
+            <MenuRow key={level} selected={level === value.boost} onClick={() => onChange({ boost: level })}>
+              {LEVEL_LABELS[level]}
+            </MenuRow>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VoiceIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path
+        d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-6 9a6 6 0 0 0 12 0M12 18v3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function SpeedPicker({ value, onChange }: { value: number; onChange: (rate: number) => void }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
@@ -1412,6 +1546,7 @@ function useKeyboard({
   showVolume,
   shiftSubDelay,
   skipTo,
+  cycleVoice,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
@@ -1425,6 +1560,8 @@ function useKeyboard({
   shiftSubDelay?: (by: number) => void
   /** Where the opening or ending on screen ends; absent when there is none to skip. */
   skipTo?: number
+  /** v: off, medium, high, round again; absent before the stream is open. */
+  cycleVoice?: () => void
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1482,6 +1619,10 @@ function useKeyboard({
           if (skipTo === undefined || !video) return
           video.currentTime = skipTo
           break
+        case 'v':
+          if (!cycleVoice) return
+          cycleVoice()
+          break
         default:
           return
       }
@@ -1494,7 +1635,7 @@ function useKeyboard({
       window.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keydown', onKey)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo, cycleVoice])
 }
 
 function IconButton({

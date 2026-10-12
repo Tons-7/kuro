@@ -750,3 +750,22 @@ func isVideo(name string) bool {
 	}
 	return false
 }
+
+// ByteRange is a stretch of a file, [From, To) in bytes.
+type ByteRange struct {
+	From int64 `json:"from"`
+	To   int64 `json:"to"`
+}
+
+// FileRanges is what has arrived of one file: its length and the complete stretches, in order.
+type FileRanges struct {
+	Length int64       `json:"length"`
+	Ranges []ByteRange `json:"ranges"`
+}
+
+// Ranges reports the stretches of a file the engine has verified on disk.
+func (c *Client) Ranges(ctx context.Context, id, file int) (FileRanges, error) {
+	var out FileRanges
+	err := c.get(ctx, fmt.Sprintf("/torrents/%d/files/%d/ranges", id, file), &out)
+	return out, err
+}

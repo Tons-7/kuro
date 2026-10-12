@@ -38,6 +38,7 @@ export const SHORTCUTS: { where: string; items: Shortcut[] }[] = [
       { keys: ['S'], does: 'Skip the opening or ending, while the button shows' },
       { keys: ['↑', '↓'], does: 'Volume up or down' },
       { keys: ['M'], does: 'Mute' },
+      { keys: ['V'], does: 'Voice boost: off, medium, high' },
       { keys: ['F'], does: 'Fullscreen' },
       { keys: ['Z', 'X'], does: 'Subtitles earlier or later' },
     ],

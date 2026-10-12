@@ -15,7 +15,9 @@ import (
 	"testing"
 
 	"kuro/internal/config"
+	"kuro/internal/library"
 	"kuro/internal/store"
+	"kuro/internal/torrent"
 	"kuro/internal/transcode"
 )
 
@@ -182,6 +184,59 @@ func TestAnEpisodeStreamsFromOpenToClose(t *testing.T) {
 	}
 }
 
+// An episode already on disk has nothing to give back, so the queue keeps downloading while it plays.
+func TestWatchingAnEpisodeOnDiskDoesNotHoldTheQueue(t *testing.T) {
+	h, source := streamHarness(t)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h.server.downloader = library.NewDownloader(h.store, library.NewPrefetcher(h.store, nil, nil, log), nil, log)
+
+	if code, body := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, ""); code != http.StatusOK {
+		t.Fatalf("open answered %d: %v", code, body)
+	}
+	if h.server.downloader.Held() {
+		t.Fatal("the queue stood down for an episode that is whole on disk")
+	}
+}
+
+// The dialogue lift is asked for on open and switched mid-stream; either way the next segment carries it.
+func TestVoiceBoostOnOpenAndMidStream(t *testing.T) {
+	h, source := streamHarness(t)
+
+	code, opened := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source+"&voice=medium&night=true", "")
+	snd, _ := opened["sound"].(map[string]any)
+	if code != http.StatusOK || snd["voice"] != "medium" || snd["night"] != true || snd["mono"] != false {
+		t.Fatalf("open answered %d: %v", code, opened)
+	}
+	if plan, _ := opened["plan"].(map[string]any); plan["audioCopy"] != false {
+		t.Errorf("plan = %v, want an audio encode with the lift", plan)
+	}
+	base := "/api/stream/" + opened["id"].(string)
+
+	// One parameter at a time changes that one and keeps the rest.
+	code, body := h.call(t, "POST", base+"/sound?voice=high", "")
+	snd, _ = body["sound"].(map[string]any)
+	if code != http.StatusOK || snd["voice"] != "high" || snd["night"] != true || body["changed"] != true {
+		t.Fatalf("switch answered %d %v", code, body)
+	}
+	if _, body := h.call(t, "POST", base+"/sound?voice=high", ""); body["changed"] != false {
+		t.Errorf("the same level again was a change: %v", body)
+	}
+	if code, _ := h.call(t, "POST", base+"/sound?voice=loud", ""); code != http.StatusBadRequest {
+		t.Errorf("an unknown level answered %d, want 400", code)
+	}
+	if code, _, _ := h.fetch(t, "GET", base+"/init.mp4"); code != http.StatusOK {
+		t.Errorf("init after the switch answered %d", code)
+	}
+	_, body = h.call(t, "POST", base+"/sound?voice=off&night=false&mono=true&boost=high", "")
+	snd, _ = body["sound"].(map[string]any)
+	if snd["voice"] != "" || snd["night"] != false || snd["mono"] != true || snd["boost"] != "high" {
+		t.Errorf("off+mono+boost answered %v", body)
+	}
+	if code, _ := h.call(t, "POST", base+"/sound?boost=max", ""); code != http.StatusBadRequest {
+		t.Errorf("an unknown boost answered %d, want 400", code)
+	}
+}
+
 func TestStreamRefusesSegmentsThatCannotExist(t *testing.T) {
 	h, source := streamHarness(t)
 	if code, body := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, ""); code != http.StatusOK {
@@ -222,5 +277,37 @@ func TestStreamOpenRefusesWhatItCannotPlay(t *testing.T) {
 	bare := newHarness(t, config.Config{}, nil)
 	if code, _ := bare.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, ""); code != http.StatusServiceUnavailable {
 		t.Errorf("open without a transcoder answered %d, want 503", code)
+	}
+}
+
+// A library file plays without the network: the whole bar is loaded from the first look.
+func TestLoadedCoversAWholeLibraryFile(t *testing.T) {
+	h, source := streamHarness(t)
+	code, opened := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, "")
+	if code != http.StatusOK {
+		t.Fatalf("open answered %d: %v", code, opened)
+	}
+	code, body := h.call(t, "GET", "/api/stream/"+opened["id"].(string)+"/loaded", "")
+	if code != http.StatusOK || body["complete"] != true {
+		t.Fatalf("loaded answered %d %v", code, body)
+	}
+	ranges, _ := body["ranges"].([]any)
+	if len(ranges) != 1 {
+		t.Fatalf("ranges = %v, want one stretch", body["ranges"])
+	}
+	stretch, _ := ranges[0].([]any)
+	if stretch[0] != float64(0) || stretch[1].(float64) < 19 {
+		t.Errorf("stretch = %v, want the whole twenty seconds", stretch)
+	}
+}
+
+// Downloaded bytes map onto the episode's time as if spread evenly.
+func TestLoadedSecondsSpreadBytesOverTheEpisode(t *testing.T) {
+	got := loadedSeconds(torrent.FileRanges{Length: 1000, Ranges: []torrent.ByteRange{{From: 0, To: 250}, {From: 500, To: 1000}}}, 100)
+	if len(got) != 2 || got[0] != [2]float64{0, 25} || got[1] != [2]float64{50, 100} {
+		t.Errorf("got %v", got)
+	}
+	if n := len(loadedSeconds(torrent.FileRanges{}, 100)); n != 0 {
+		t.Errorf("no length, yet %d stretches", n)
 	}
 }

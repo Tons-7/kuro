@@ -250,8 +250,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stream/{id}/thumbnails", s.streamThumbnails)
 	mux.HandleFunc("GET /api/stream/{id}/thumbs.jpg", s.streamThumbSheet)
 	mux.HandleFunc("GET /api/stream/{id}/health", s.streamHealth)
+	mux.HandleFunc("GET /api/stream/{id}/loaded", s.streamLoaded)
 	mux.HandleFunc("GET /api/stream/{id}/font/{font}", s.streamFont)
 	mux.HandleFunc("POST /api/stream/{id}/audio", s.streamAudio)
+	mux.HandleFunc("POST /api/stream/{id}/sound", s.streamSound)
 	mux.HandleFunc("DELETE /api/stream/{id}", s.streamClose)
 
 	mux.HandleFunc("GET /api/prefs", s.getPrefs)

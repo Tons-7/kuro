@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"kuro/internal/sound"
 	"log/slog"
 	"net"
 	"net/http"
@@ -112,6 +113,7 @@ func (v *VLC) args(opts Options, ctl control) []string {
 	if alang := AudioLanguages(opts.Audio); alang != "" {
 		args = append(args, "--audio-language="+alang)
 	}
+	args = append(args, sound.VLCArgs(opts.Sound)...)
 	return append(args, opts.URL)
 }
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"kuro/internal/library"
+	"kuro/internal/sound"
 	"kuro/internal/torrent"
 	"kuro/internal/transcode"
 )
@@ -81,8 +82,11 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Queued downloads share this connection. Whatever is on screen comes first.
-	s.downloader.Hold(id)
+	// Queued downloads share this connection. Whatever is on screen comes first, unless it is already
+	// on disk (nothing to give back) or the line is fast enough for both.
+	if s.holdWhileWatching(r.Context(), session) {
+		s.downloader.Hold(id)
+	}
 
 	// The track follows the sub/dub choice on a fresh session and when the
 	// choice changes; a reopen with the same choice keeps the track it is on so
@@ -93,6 +97,9 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	if n, err := strconv.Atoi(r.URL.Query().Get("track")); err == nil {
 		session.SetAudioTrack(n)
+	}
+	if o, any := soundFromQuery(r, session.Sound()); any {
+		session.SetSound(o)
 	}
 
 	// Start the encoder now, at the resume point, rather than waiting to be asked:
@@ -108,6 +115,7 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		"video":      session.Info.Video,
 		"audio":      session.Info.Audio,
 		"audioTrack": session.AudioTrack(),
+		"sound":      session.Sound(),
 	}
 
 	// Fonts start extracting now but do not hold up the reply; the client
@@ -453,6 +461,16 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	w.Write(track)
 }
 
+// holdWhileWatching says whether the queue stands down for this session: only while the episode is
+// still arriving, and only under the default policy.
+func (s *Server) holdWhileWatching(ctx context.Context, session *transcode.Session) bool {
+	if s.sourceComplete(ctx, session) {
+		return false
+	}
+	prefs, err := s.store.Prefs(ctx, 0)
+	return err != nil || prefs.String("downloads.while_watching") != "continue"
+}
+
 // sourceComplete reports whether the bytes behind a session can still grow. A
 // torrent is complete when the engine says so; anything else was already whole.
 func (s *Server) sourceComplete(ctx context.Context, session *transcode.Session) bool {
@@ -560,6 +578,50 @@ func (s *Server) streamHealth(w http.ResponseWriter, r *http.Request) {
 	// Some headroom: a swarm exactly at the bitrate stalls on every burst.
 	health.Slow = health.Needed > 0 && health.Mbps < health.Needed*1.2
 	send(w, http.StatusOK, health)
+}
+
+// streamLoaded is what will play without waiting on the network, as stretches of the episode in
+// seconds: the lighter part of the seek bar. A library file or a finished download is all of it.
+func (s *Server) streamLoaded(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.stream(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	duration := 0.0
+	if session.Info != nil {
+		duration = session.Info.Duration
+	}
+	if s.sourceComplete(ctx, session) {
+		send(w, http.StatusOK, map[string]any{"complete": true, "ranges": [][2]float64{{0, duration}}})
+		return
+	}
+	ranges := [][2]float64{}
+	if animeID, episode, ok := parseSessionID(session.ID); ok && s.cache != nil {
+		if rec, found, err := s.store.TorrentForEpisode(ctx, animeID, strconv.Itoa(episode)); err == nil && found {
+			if loaded, ok := s.cache.Loaded(ctx, rec.InfoHash, rec.FileIndex); ok {
+				ranges = loadedSeconds(loaded, duration)
+			}
+		}
+	}
+	send(w, http.StatusOK, map[string]any{"complete": false, "ranges": ranges})
+}
+
+// loadedSeconds maps a file's downloaded stretches onto the episode's time, as if its bytes were spread
+// evenly: near enough for a bar, and the only mapping there is without reading the file.
+func loadedSeconds(loaded torrent.FileRanges, duration float64) [][2]float64 {
+	out := [][2]float64{}
+	if loaded.Length <= 0 || duration <= 0 {
+		return out
+	}
+	for _, r := range loaded.Ranges {
+		from := float64(r.From) / float64(loaded.Length) * duration
+		to := float64(r.To) / float64(loaded.Length) * duration
+		if to > from {
+			out = append(out, [2]float64{from, to})
+		}
+	}
+	return out
 }
 
 // thumbDir outlives the session directory, which every launch purges: a sheet
@@ -684,6 +746,40 @@ func (s *Server) streamAudio(w http.ResponseWriter, r *http.Request) {
 	}
 	changed := session.SetAudioTrack(track)
 	send(w, http.StatusOK, map[string]any{"audioTrack": session.AudioTrack(), "changed": changed})
+}
+
+// soundFromQuery applies the sound parameters present (voice, night, headphones, mono) over the
+// current options; the second result says whether any were given.
+func soundFromQuery(r *http.Request, current sound.Options) (sound.Options, bool) {
+	q := r.URL.Query()
+	any := false
+	if v := q.Get("voice"); v != "" {
+		current.Voice, any = v, true
+	}
+	if v := q.Get("boost"); v != "" {
+		current.Boost, any = v, true
+	}
+	for name, field := range map[string]*bool{"night": &current.Night, "headphones": &current.Headphones, "mono": &current.Mono} {
+		if v := q.Get(name); v != "" {
+			*field, any = v == "true" || v == "1", true
+		}
+	}
+	return current, any
+}
+
+// streamSound switches what is done to the audio mid-stream; the pass restarts where the viewer is.
+func (s *Server) streamSound(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.stream(w, r)
+	if !ok {
+		return
+	}
+	o, _ := soundFromQuery(r, session.Sound())
+	if !sound.ValidVoice(o.Voice) || !sound.ValidBoost(o.Boost) {
+		send(w, http.StatusBadRequest, map[string]any{"error": "voice and boost must be off, medium or high"})
+		return
+	}
+	changed := session.SetSound(o)
+	send(w, http.StatusOK, map[string]any{"sound": session.Sound(), "changed": changed})
 }
 
 func sessionID(animeID, episode int) string {

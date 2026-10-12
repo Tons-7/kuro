@@ -136,6 +136,13 @@ func (s *Store) AlreadyNotified(ctx context.Context, infoHash string, animeID, e
 	return err == nil, nil
 }
 
+// EverNotified reports whether the watcher has looked at a show before: any episode of it on record.
+func (s *Store) EverNotified(ctx context.Context, animeID int) bool {
+	var one int
+	err := s.r.QueryRowContext(ctx, `SELECT 1 FROM notified_release WHERE anime_id = ? LIMIT 1`, animeID).Scan(&one)
+	return err == nil
+}
+
 func (s *Store) RecordNotified(ctx context.Context, infoHash string, animeID, episode int) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO notified_release (info_hash, anime_id, episode, created_at)
@@ -215,6 +222,19 @@ const followQuery = `
 		LEFT JOIN list_entry e ON e.anime_id = p.anime_id
 		WHERE p.key = 'autodownload.enabled' AND p.value = 'true'
 		  AND coalesce(e.status, '') NOT IN ('COMPLETED', 'DROPPED')
+
+		UNION ALL
+
+		-- Watching it, by any route: a status synced from the tracker followed nothing, so nobody heard.
+		-- A show muted on its own page (notify.enabled off for it) stays quiet.
+		SELECT e.anime_id,
+		       coalesce(a.episode_count,0), coalesce(e.progress,0),
+		       coalesce(a.next_episode,0), coalesce(a.next_airing_at,0)
+		FROM list_entry e
+		LEFT JOIN anime a ON a.id = e.anime_id
+		WHERE e.status IN ('CURRENT', 'REPEATING')
+		  AND NOT EXISTS (SELECT 1 FROM anime_pref p
+		                  WHERE p.anime_id = e.anime_id AND p.key = 'notify.enabled' AND p.value = 'false')
 	)
 	GROUP BY anime_id`
 

@@ -37,6 +37,7 @@ const CHECKS = [
   ['continue-next-check.mjs'],
   ['downloads-fresh-check.mjs'],
   ['downloads-groups-check.mjs'],
+  ['episode-download-check.mjs'],
   ['fs-autonext-check.mjs'],
   ['fullscreen-check.mjs'],
   ['home-rails-check.mjs', {}, ALONE],
@@ -60,6 +61,7 @@ const CHECKS = [
   ['tour-check.mjs', {}, ALONE],
   ['ui-bits-check.mjs'],
   ['vlc-check.mjs'],
+  ['sound-check.mjs'],
 ]
 
 const only = process.argv.slice(2)

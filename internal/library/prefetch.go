@@ -514,6 +514,32 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 		return nil
 	}
 
+	// record makes the torrent this episode's. A prefetched episode is not playing, so it must not
+	// hold a pin: the cache manager has to stay free to evict it under pressure.
+	record := func(ctx context.Context) error {
+		if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
+			InfoHash:  best.Torrent.InfoHash,
+			EngineID:  added.ID,
+			Name:      inspected.Details.Name,
+			TotalSize: file.Length,
+			AnimeID:   animeID,
+			EpKey:     epKey(episode),
+			FileIndex: index,
+			FilePath:  file.Name,
+		}); err != nil {
+			return err
+		}
+		if err := p.store.PinCache(ctx, best.Torrent.InfoHash, index, false); err != nil {
+			return err
+		}
+		if keep {
+			if _, err := p.store.KeepDownload(ctx, best.Torrent.InfoHash, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	start := func() error {
 		p.claim(best.Torrent.InfoHash)
 		err := p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
@@ -522,6 +548,13 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 			warm, cancel := context.WithTimeout(ctx, prefetchWarmCap)
 			err = p.torrent.Prewarm(warm, added.ID, index, 2<<20)
 			cancel()
+		}
+		if err != nil && ctx.Err() != nil {
+			// Interrupted, not dead: recorded, kept if asked for, so the retry resumes this very
+			// torrent instead of searching again while the sweep lists it under no show.
+			if rerr := record(context.WithoutCancel(ctx)); rerr != nil {
+				p.log.Warn("record interrupted download", "err", rerr)
+			}
 		}
 		if err != nil {
 			// Cancelled or dead half way: stopped, not left fetching unrecorded.
@@ -572,30 +605,10 @@ func (p *Prefetcher) fetch(ctx context.Context, animeID, episode, season int, pr
 		}
 	}
 
-	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
-		InfoHash:  best.Torrent.InfoHash,
-		EngineID:  added.ID,
-		Name:      inspected.Details.Name,
-		TotalSize: file.Length,
-		AnimeID:   animeID,
-		EpKey:     epKey(episode),
-		FileIndex: index,
-		FilePath:  file.Name,
-	}); err != nil {
+	if err := record(ctx); err != nil {
 		return added.ID, true, err
 	}
 	dropSuperseded(ctx, p.store, p.torrent, p.log, animeID, epKey(episode))
-
-	// A prefetched episode is not playing, so it must not hold a pin: the
-	// cache manager has to stay free to evict it under pressure.
-	if err := p.store.PinCache(ctx, best.Torrent.InfoHash, index, false); err != nil {
-		return added.ID, true, err
-	}
-	if keep {
-		if _, err := p.store.KeepDownload(ctx, best.Torrent.InfoHash, true); err != nil {
-			return added.ID, true, err
-		}
-	}
 
 	p.log.Info("fetched episode",
 		"anime", animeID, "episode", episode, "group", best.Release.Group, "kept", keep)

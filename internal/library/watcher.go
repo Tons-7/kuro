@@ -53,17 +53,26 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 
 	for _, f := range follows {
 		auto := w.autoDownload(ctx, f.AnimeID)
+		// The global switch, which a show's own page can turn off for that show alone.
+		notifyOn := notifyOn
+		if p, err := w.store.Prefs(ctx, f.AnimeID); err == nil {
+			notifyOn = p.Bool("notify.enabled")
+		}
 		if !notifyOn && !auto {
 			continue
 		}
 		rep.Checked++
 
-		// Every aired episode past progress, not just the next one: someone
-		// saving a season for later still wants each week announced. Capped so
-		// a long backlog does not flood the indexers in one poll.
+		// News is what airs from now on. The first look at a show takes what aired before as seen,
+		// quietly, bar the latest episode of one still airing: a show finished years ago has nothing to say.
 		now := time.Now().Unix()
+		firstLook := !w.store.EverNotified(ctx, f.AnimeID)
+		latest := f.NextEpisode - 1
+		if f.NextEpisode > 0 && f.NextAiringAt > 0 && f.NextAiringAt <= now {
+			latest = f.NextEpisode
+		}
 		searched := 0
-		for next := f.Progress + 1; searched < watchAhead && next <= f.Progress+maxBacklog; next++ {
+		for next := f.Progress + 1; next <= f.Progress+maxBacklog; next++ {
 			if f.Episodes > 0 && next > f.Episodes {
 				break
 			}
@@ -75,8 +84,24 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 			if seen, _ := w.store.AlreadyNotified(ctx, "", f.AnimeID, next); seen {
 				continue
 			}
+			if firstLook && next != latest {
+				if err := w.store.RecordNotified(ctx, fmt.Sprintf("seen:%d:%d", f.AnimeID, next), f.AnimeID, next); err != nil {
+					w.log.Warn("record seen episode", "err", err)
+				}
+				continue
+			}
+			// Capped so a long backlog does not flood the indexers in one poll.
+			if searched >= watchAhead {
+				break
+			}
 			searched++
 			w.check(ctx, f.AnimeID, next, notifyOn, auto, want, &rep)
+		}
+		// Nothing had aired yet: the look still counts, or the first episode would be taken as old news.
+		if firstLook && !w.store.EverNotified(ctx, f.AnimeID) {
+			if err := w.store.RecordNotified(ctx, fmt.Sprintf("seen:%d:0", f.AnimeID), f.AnimeID, 0); err != nil {
+				w.log.Warn("record first look", "err", err)
+			}
 		}
 	}
 	return rep, nil

@@ -480,12 +480,17 @@ func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.engine.replan(en)
-
-	select {
-	case err := <-read:
-		t.Fatalf("the re-plan ended the stream: %v", err)
-	case <-time.After(time.Second):
+	// Half a minute apart on a quiet swarm; the reader gives up after three failed waits.
+	for range 3 {
+		f.engine.replan(en)
+		select {
+		case err := <-read:
+			t.Fatalf("the re-plan ended the stream: %v", err)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	if !en.quietSince.After(time.Now().Add(-time.Minute)) {
+		t.Error("a torrent added after its inspection starts with no stall clock")
 	}
 }
 

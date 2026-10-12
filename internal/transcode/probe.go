@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"kuro/internal/sound"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -278,18 +279,20 @@ type Plan struct {
 	AudioCopy  bool   `json:"audioCopy"`
 	VideoCodec string `json:"videoCodec"`
 	AudioCodec string `json:"audioCodec"`
-	Reason     string `json:"reason"`
+	// Sound is what is done to the audio on the way out; anything at all forces an audio re-encode.
+	Sound  sound.Options `json:"sound"`
+	Reason string        `json:"reason"`
 }
 
 // Chromium decodes H.264 and AAC everywhere; HEVC needs a platform extension
 // and 10-bit H.264 has no hardware decoder, so neither can be relied on.
 func PlanFor(info *MediaInfo, encoder string) Plan {
-	return planFor(info, encoder, 0)
+	return planFor(info, encoder, 0, sound.Options{})
 }
 
-// planFor judges the audio track that will actually be sent.
-func planFor(info *MediaInfo, encoder string, track int) Plan {
-	plan := Plan{VideoCopy: true, AudioCopy: true}
+// planFor judges the audio track that will actually be sent, under what is asked of the sound.
+func planFor(info *MediaInfo, encoder string, track int, snd sound.Options) Plan {
+	plan := Plan{VideoCopy: true, AudioCopy: true, Sound: sound.Normalized(snd)}
 	var reasons []string
 
 	switch v := info.Video; {
@@ -307,16 +310,24 @@ func planFor(info *MediaInfo, encoder string, track int) Plan {
 		track = 0
 	}
 	if len(info.Audio) > 0 {
-		switch a := info.Audio[track]; a.Codec {
+		a := info.Audio[track]
+		switch a.Codec {
 		case "aac", "mp3", "opus", "flac", "vorbis":
 		default:
 			plan.AudioCopy = false
+			reasons = append(reasons, "audio "+a.Codec)
+		}
+		// The sound is shaped while encoding, so a track that could have been copied is encoded too.
+		if plan.Sound.Any() {
+			plan.AudioCopy = false
+			reasons = append(reasons, "sound")
+		}
+		if !plan.AudioCopy {
 			plan.AudioCodec = "aac"
 			// Lossless in, lossless out: FLAC is the lossless format every browser plays.
 			if lossless(a) {
 				plan.AudioCodec = "flac"
 			}
-			reasons = append(reasons, "audio "+a.Codec)
 		}
 	}
 

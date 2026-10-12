@@ -223,6 +223,32 @@ function PlaybackTab() {
           </Select>
         </Row>
         <VLCNote />
+        <Row
+          label="Voice boost"
+          hint="Lifts dialogue over music and effects, like Prime Video's Dialogue Boost. Surround films lift the centre channel; stereo shows have the centred voice picked out. Browser player only; also under the player, or press V."
+        >
+          <Select value={f.value('playback.voice') || 'off'} onChange={(v) => f.set('playback.voice', v)}>
+            <option value="off">Off</option>
+            <option value="medium">Medium (+6 dB)</option>
+            <option value="high">High (+12 dB)</option>
+          </Select>
+        </Row>
+        <Row label="Night mode" hint="Evens out loud effects and quiet lines, so late at night nothing needs the volume knob.">
+          <Switch on={f.get('playback.night')} onChange={(v) => f.set('playback.night', String(v))} />
+        </Row>
+        <Row label="Headphones" hint="A little of each channel in the other ear, as speakers in a room do; eases hard-panned sound.">
+          <Switch on={f.get('playback.headphones')} onChange={(v) => f.set('playback.headphones', String(v))} />
+        </Row>
+        <Row label="Mono" hint="Both channels in both ears, for a release with the voices mixed to one side.">
+          <Switch on={f.get('playback.mono')} onChange={(v) => f.set('playback.mono', String(v))} />
+        </Row>
+        <Row label="Volume boost" hint="Raises the whole mix for a quiet release, limited so nothing clips. Separate from the voice boost.">
+          <Select value={f.value('playback.boost') || 'off'} onChange={(v) => f.set('playback.boost', v)}>
+            <option value="off">Off</option>
+            <option value="medium">Medium (twice as loud)</option>
+            <option value="high">High (four times)</option>
+          </Select>
+        </Row>
         <Row label="Anime4K upscaling" hint="Needs mpv, or a browser with WebGPU. Phones and tablets leave it off unless turned on there, under the player.">
           <Switch on={f.get('playback.anime4k')} onChange={(v) => f.set('playback.anime4k', String(v))} />
         </Row>
@@ -437,6 +463,15 @@ function QualityTab() {
           hint="Keep downloading after you stop, so coming back needs no swarm. Off, a download pauses the moment you leave."
         >
           <Switch on={f.get('cache.prefetch_full')} onChange={(v) => f.set('cache.prefetch_full', String(v))} />
+        </Row>
+        <Row
+          label="Downloads while watching"
+          hint="Standing down gives the episode on screen the whole line. An episode already on disk never pauses anything."
+        >
+          <Select value={f.value('downloads.while_watching') || 'pause'} onChange={(v) => f.set('downloads.while_watching', v)}>
+            <option value="pause">Pause while the episode is still arriving</option>
+            <option value="continue">Never pause</option>
+          </Select>
         </Row>
         <Row
           label="Auto-delete watched"

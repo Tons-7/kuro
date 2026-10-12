@@ -80,7 +80,7 @@ func (s *Session) SetAudioTrack(n int) bool {
 		return false
 	}
 	s.audioTrack = n
-	s.Plan = planFor(s.Info, s.encoder, n)
+	s.Plan = planFor(s.Info, s.encoder, n, s.sound)
 	s.headFrom, s.headTo = -1, -1
 	s.mu.Unlock()
 

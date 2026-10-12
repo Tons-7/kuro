@@ -514,6 +514,19 @@ func (c *Cache) Swarm(ctx context.Context, infoHash string) (mbps float64, peers
 	return megabits(stats.Live.DownloadSpeed.Mbps), stats.Live.Snapshot.PeerStats.Live
 }
 
+// Loaded is what has arrived of one file of a download the engine holds.
+func (c *Cache) Loaded(ctx context.Context, infoHash string, fileIndex int) (torrent.FileRanges, bool) {
+	if c.torrent == nil {
+		return torrent.FileRanges{}, false
+	}
+	id, ok := c.liveID(ctx, infoHash)
+	if !ok {
+		return torrent.FileRanges{}, false
+	}
+	ranges, err := c.torrent.Ranges(ctx, id, fileIndex)
+	return ranges, err == nil
+}
+
 // megabits converts the engine's MiB/s to the megabits/s everything shows.
 func megabits(mibps float64) float64 { return mibps * 8 * 1.048576 }
 

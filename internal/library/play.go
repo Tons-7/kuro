@@ -15,6 +15,7 @@ import (
 	"kuro/internal/parse"
 	"kuro/internal/player"
 	"kuro/internal/score"
+	"kuro/internal/sound"
 	"kuro/internal/store"
 	"kuro/internal/torrent"
 	"kuro/internal/transcode"
@@ -167,7 +168,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 	p.SetStage(req.AnimeID, req.Episode, Stage{Step: "search"})
 	defer p.ClearStage(req.AnimeID, req.Episode)
 
-	p.yield(ctx, req.AnimeID)
+	p.yield(ctx, req.AnimeID, req.Episode)
 	p.yieldMu.Lock()
 	p.starting++
 	p.yieldMu.Unlock()
@@ -801,8 +802,8 @@ func (p *Playback) Suspend(ctx context.Context, animeID, episode int) {
 
 // yield pauses other shows' background downloads so the starting episode gets
 // the line. Kept ones belong to the queue; this show's may share the torrent.
-func (p *Playback) yield(ctx context.Context, animeID int) {
-	if p.torrent == nil {
+func (p *Playback) yield(ctx context.Context, animeID, episode int) {
+	if p.torrent == nil || !p.yieldWanted(ctx, animeID, episode) {
 		return
 	}
 	entries, err := p.store.CacheEntries(ctx)
@@ -837,6 +838,19 @@ func (p *Playback) yield(ctx context.Context, animeID int) {
 		p.yielded = append(p.yielded, hash)
 	}
 	p.yieldMu.Unlock()
+}
+
+// yieldWanted: not under "continue", and not for an episode already whole on disk, which has nothing
+// to gain from the line.
+func (p *Playback) yieldWanted(ctx context.Context, animeID, episode int) bool {
+	if prefs, err := p.store.Prefs(ctx, 0); err == nil && prefs.String("downloads.while_watching") == "continue" {
+		return false
+	}
+	hash, index, _ := p.store.CachedFile(ctx, animeID, epKey(episode))
+	if hash == "" {
+		return true
+	}
+	return !p.store.FileComplete(ctx, hash, index) && !(p.cache != nil && p.cache.Finished(ctx, hash))
 }
 
 // resumeYielded restarts what yield paused, once no episode is playing (pinned)
@@ -1047,6 +1061,11 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 	opts.Anime4K = prefs.Bool("playback.anime4k")
 	opts.Anime4KMode = prefs.String("playback.anime4k_mode")
 	opts.Anime4KSize = prefs.String("playback.anime4k_size")
+	opts.Sound = sound.Options{
+		Voice: prefs.String("playback.voice"), Night: prefs.Bool("playback.night"),
+		Headphones: prefs.Bool("playback.headphones"), Mono: prefs.Bool("playback.mono"),
+		Boost: prefs.String("playback.boost"),
+	}
 
 	// mpv only auto-skips from these, so they have to be resolved here.
 	if ranges := p.skipRanges(ctx, req, opts.URL); len(ranges) > 0 {

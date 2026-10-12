@@ -31,6 +31,14 @@ func (e *Engine) routes() http.Handler {
 		reply(w, e.stats(en))
 	})))
 	mux.HandleFunc("GET /torrents/{id}/stream/{file}", e.started(e.withEntry(e.handleStream)))
+	mux.HandleFunc("GET /torrents/{id}/files/{file}/ranges", e.started(e.withEntry(func(w http.ResponseWriter, r *http.Request, en *entry) {
+		i, err := strconv.Atoi(r.PathValue("file"))
+		if err != nil || en.t.Info() == nil || i < 0 || i >= len(en.t.Files()) {
+			http.Error(w, "no such file", http.StatusNotFound)
+			return
+		}
+		reply(w, fileRanges(en.t.Files()[i]))
+	})))
 	mux.HandleFunc("POST /torrents/{id}/pause", e.started(e.withEntry(func(w http.ResponseWriter, r *http.Request, en *entry) {
 		// Always said: a pause ends any stream reading the torrent, and a silent one cannot be traced afterwards.
 		e.log.Info("torrent paused", "id", en.id, "name", en.t.Name())

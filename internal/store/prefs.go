@@ -20,7 +20,15 @@ var Defaults = map[string]string{
 	"playback.autoskip_ed": "false",
 	"playback.autonext":    "false",
 	// Auto-next and prefetch step over filler and recap episodes.
-	"playback.skip_filler":  "false",
+	"playback.skip_filler": "false",
+	// Dialogue lifted over music and effects (off, medium, high); loud and quiet evened out; a little of
+	// each channel in the other ear for headphones; both channels in both ears.
+	"playback.voice":      "off",
+	"playback.night":      "false",
+	"playback.headphones": "false",
+	"playback.mono":       "false",
+	// The whole mix raised for a quiet release: off, medium or high.
+	"playback.boost":        "off",
 	"playback.anime4k":      "false",
 	"playback.anime4k_mode": "A",
 	"playback.anime4k_size": "M",
@@ -51,6 +59,8 @@ var Defaults = map[string]string{
 	// On: an episode keeps downloading after the player closes, so returning to it
 	// (and its second-half subtitles) needs no swarm.
 	"cache.prefetch_full": "true",
+	// "pause": downloads stand down while the episode on screen is still arriving; "continue": never.
+	"downloads.while_watching": "pause",
 	// off | now (gone once watched) | keep2 (gone once the two after it are watched
 	// too, so going back one is still free).
 	"cache.autodelete": "off",

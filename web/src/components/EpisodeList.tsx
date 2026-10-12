@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { api, hasFiller, type Episode } from '../lib/api'
 import { clockTime, cx, relativeTime } from '../lib/format'
-import { refreshDownloads } from '../lib/queries'
+import { refreshDownloads, useDownloadQueue, useDownloads } from '../lib/queries'
 import { Badge, useDismiss } from './ui'
 
 const PAGE_SIZE = 50
@@ -69,6 +69,18 @@ export function EpisodeList({
   const [picked, setPicked] = useState<Set<number>>(() => new Set())
   const [note, setNote] = useState<string | null>(null)
   const qc = useQueryClient()
+  // Episodes already queued or arriving: a second Download would only queue them again.
+  const queue = useDownloadQueue()
+  const downloads = useDownloads()
+  const busy = useMemo(() => {
+    const set = new Set<number>()
+    for (const q of queue.data?.items ?? []) if (q.animeId === animeId) set.add(q.episode)
+    for (const d of downloads.data?.items ?? []) {
+      if (d.animeId === animeId && d.percent < 100) for (const e of d.episodes) set.add(Number(e))
+    }
+    return set
+  }, [queue.data, downloads.data, animeId])
+
   const download = useMutation({
     meta: { inline: true },
     mutationFn: (numbers: number[]) =>
@@ -328,6 +340,7 @@ export function EpisodeList({
             cover={cover}
             selected={picked.has(episode.number)}
             onToggle={selecting ? () => toggle(episode.number) : undefined}
+            queued={busy.has(episode.number)}
           />
         ))}
         {paged.length === 0 && (
@@ -474,6 +487,7 @@ function EpisodeRow({
   cover,
   selected,
   onToggle,
+  queued,
 }: {
   animeId: number
   episode: Episode
@@ -487,6 +501,8 @@ function EpisodeRow({
   selected?: boolean
   /** In select mode a row toggles instead of opening the player. */
   onToggle?: () => void
+  /** Already in the queue or arriving, so not offered again. */
+  queued?: boolean
 }) {
   const row = useRef<HTMLLIElement>(null)
 
@@ -675,6 +691,32 @@ function EpisodeRow({
       </button>
     ))
 
+  // One click to queue this episode, beside the tick; the select mode is for many at once.
+  const fetch = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: number }),
+    onSuccess: () => refreshDownloads(qc),
+  })
+  const isQueued = fetch.isSuccess || queued
+  const download =
+    !unaired &&
+    !onToggle &&
+    !episode.onDisk && (
+      <button
+        type="button"
+        onClick={() => fetch.mutate()}
+        disabled={fetch.isPending || isQueued}
+        aria-label={isQueued ? `Episode ${number} queued` : `Download episode ${number}`}
+        title={fetch.isError ? (fetch.error as Error).message : isQueued ? 'Queued' : 'Download'}
+        className={cx(
+          'grid size-8 shrink-0 place-items-center rounded-full transition-colors',
+          fetch.isError ? 'text-recap' : isQueued ? 'text-emerald-300' : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
+        )}
+      >
+        {isQueued ? <WatchedTick /> : <DownloadArrow />}
+      </button>
+    )
+
   const shell = cx(
     'group/ep flex items-center gap-3 transition-colors',
     compact ? 'p-2' : 'rounded-xl p-2 sm:p-2.5',
@@ -724,10 +766,26 @@ function EpisodeRow({
             {thumb}
             {text}
           </Link>
+          {download}
           {tick}
         </div>
       )}
     </li>
+  )
+}
+
+function DownloadArrow() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path
+        d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   )
 }
 

@@ -133,6 +133,14 @@ func (s *Session) audioArgs() []string {
 	if s.Plan.AudioCopy {
 		return []string{"-c:a", "copy"}
 	}
+	// The lift ends in stereo itself, so no channel count is set beside it.
+	if filter := s.soundFilter(); filter != "" {
+		a := []string{"-af", filter, "-c:a", "aac", "-b:a", "192k"}
+		if s.Plan.AudioCodec == "flac" {
+			a = []string{"-af", filter, "-c:a", "flac"}
+		}
+		return a
+	}
 	if s.Plan.AudioCodec == "flac" {
 		a := []string{"-c:a", "flac"}
 		// Surround stays as it is up to 5.1, which browsers play; more is folded down to that.

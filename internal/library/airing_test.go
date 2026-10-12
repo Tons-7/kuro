@@ -119,8 +119,8 @@ func TestAutoDownloadWithNotificationsOff(t *testing.T) {
 	}
 }
 
-// Someone saving the season for later still gets every aired week, not only the one after their progress.
-func TestAnnouncesEveryAiredEpisodePastProgress(t *testing.T) {
+// Catching up on a show mid-season: the latest aired episode is news, the backlog behind it is not.
+func TestCatchingUpAnnouncesOnlyTheLatestAiredEpisode(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Unix()
 	st := airingStore(t, 6, tomorrow, 3)
 	results := []indexer.Torrent{
@@ -130,8 +130,11 @@ func TestAnnouncesEveryAiredEpisodePastProgress(t *testing.T) {
 			"[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 05 [1080p].mkv", 40),
 	}
 
-	if rep := pollWith(t, st, results); rep.Notified != 2 {
-		t.Fatalf("notified %d, want episodes 4 and 5", rep.Notified)
+	if rep := pollWith(t, st, results); rep.Notified != 1 {
+		t.Fatalf("notified %d, want episode 5 alone", rep.Notified)
+	}
+	if items, _ := st.Notifications(context.Background(), false, 10); len(items) != 1 || items[0].Episode == nil || *items[0].Episode != 5 {
+		t.Fatalf("notifications = %+v, want episode 5", items)
 	}
 	if rep := pollWith(t, st, results); rep.Notified != 0 {
 		t.Fatalf("second poll notified %d again", rep.Notified)
@@ -141,7 +144,7 @@ func TestAnnouncesEveryAiredEpisodePastProgress(t *testing.T) {
 // A pack that states no range covers nothing in particular; announcing one
 // claims an episode that may not exist yet.
 func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {
-	st := airingStore(t, 0, 0, 5)
+	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 
 	rep := pollWith(t, st, []indexer.Torrent{
 		release("2222222222222222222222222222222222222222",
@@ -155,7 +158,7 @@ func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {
 
 // A pack that does state its range holds the episode, so it still counts.
 func TestStatedPackStillAnnounces(t *testing.T) {
-	st := airingStore(t, 0, 0, 5)
+	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 
 	rep := pollWith(t, st, []indexer.Torrent{
 		release("3333333333333333333333333333333333333333",

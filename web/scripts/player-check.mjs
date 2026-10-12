@@ -291,6 +291,16 @@ check(back.frames > bFrames, 'frames advance after the backward seek', `${bFrame
 const bar = page.locator('.group\\/scrub')
 const box = await bar.boundingBox()
 check(!!box, 'scrubber present')
+
+// A library file is wholly on disk: the lighter, loaded part of the bar spans all of it, not just
+// the browser's window around the playhead.
+const loadedBar = bar.locator('[data-loaded]').first()
+let loadedWidth = 0
+for (let i = 0; i < 30 && loadedWidth < 99; i++) {
+  loadedWidth = await loadedBar.evaluate((el) => parseFloat(el.style.width)).catch(() => 0)
+  if (loadedWidth < 99) await sleep(500)
+}
+check(loadedWidth >= 99, 'the loaded part of the bar spans a file that is all on disk', `${loadedWidth.toFixed(1)}%`)
 if (box) {
   const y = box.y + box.height / 2
   await page.mouse.move(box.x + box.width * 0.2, y)

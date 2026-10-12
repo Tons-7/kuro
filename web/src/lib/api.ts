@@ -337,6 +337,32 @@ export interface StreamHealth {
   slow: boolean
 }
 
+export type VoiceLevel = 'off' | 'medium' | 'high'
+export const VOICE_LEVELS: VoiceLevel[] = ['off', 'medium', 'high']
+
+/** What is done to the audio on its way out; see the server's sound package. */
+export interface SoundOptions {
+  voice: VoiceLevel
+  night: boolean
+  headphones: boolean
+  mono: boolean
+  /** The whole mix raised, apart from the voice. */
+  boost: VoiceLevel
+}
+export const DEFAULT_SOUND: SoundOptions = { voice: 'off', night: false, headphones: false, mono: false, boost: 'off' }
+export const SOUND_PREFS: Record<keyof SoundOptions, string> = {
+  voice: 'playback.voice', night: 'playback.night', headphones: 'playback.headphones', mono: 'playback.mono', boost: 'playback.boost',
+}
+/** The server says "" for off. */
+export function soundFrom(raw?: Partial<SoundOptions> | null): SoundOptions {
+  return {
+    voice: raw?.voice || 'off', night: !!raw?.night, headphones: !!raw?.headphones, mono: !!raw?.mono, boost: raw?.boost || 'off',
+  }
+}
+export function sameSound(a: SoundOptions, b: SoundOptions): boolean {
+  return a.voice === b.voice && a.night === b.night && a.headphones === b.headphones && a.mono === b.mono && a.boost === b.boost
+}
+
 export interface StreamInfo {
   id: string
   playlist: string
@@ -346,6 +372,8 @@ export interface StreamInfo {
   audio?: AudioTrack[]
   /** Position in `audio` of the track being sent. */
   audioTrack?: number
+  /** What is being done to the audio. */
+  sound?: Partial<SoundOptions>
   subtitles: SubtitleTrack[]
   fonts: string[]
   /** Present when the file has subtitles; fonts are extracted in the background. */

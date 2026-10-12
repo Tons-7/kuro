@@ -181,6 +181,9 @@ func (d *Downloader) Release(sessionID string) {
 	}
 }
 
+// Held reports a queue standing down: paused, or an episode is playing.
+func (d *Downloader) Held() bool { return d.held() }
+
 func (d *Downloader) held() bool {
 	if d == nil {
 		return false

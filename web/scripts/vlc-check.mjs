@@ -66,6 +66,10 @@ if (process.env.KURO_VLC_EXPECT) {
 }
 check(!vlcRunning(), 'no VLC running before the test')
 await post('/api/prefs', { key: 'playback.player', value: 'vlc' })
+// With the sound settings on: VLC is launched with its own filters for them, and must still play.
+for (const [key, value] of [['playback.voice', 'medium'], ['playback.night', 'true'], ['playback.boost', 'medium']]) {
+  await post('/api/prefs', { key, value })
+}
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 
 const browser = await chromium.launch()
