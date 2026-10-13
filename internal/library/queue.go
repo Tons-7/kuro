@@ -102,6 +102,25 @@ func (d *Downloader) Now(ctx context.Context, animeID int, epKey string) (bool, 
 	return true, d.SetPaused(ctx, false)
 }
 
+// Restart is Now for an episode whose release was just changed: at the front, and stopped if it is the
+// one downloading, so the worker takes it up again with the release chosen.
+func (d *Downloader) Restart(ctx context.Context, animeID int, epKey string) (bool, error) {
+	if d == nil {
+		return false, nil
+	}
+	moved, err := d.store.Promote(ctx, animeID, epKey)
+	if err != nil || !moved {
+		return moved, err
+	}
+	d.mu.Lock()
+	current := d.current
+	d.mu.Unlock()
+	if current != nil {
+		current.stop()
+	}
+	return true, d.SetPaused(ctx, false)
+}
+
 // inFlight is what the worker is downloading, so cancelling can reach it — the
 // database has no row naming the torrent until a minute in.
 type inFlight struct {
@@ -388,7 +407,7 @@ func (d *Downloader) step(parent context.Context) bool {
 	d.current = &inFlight{animeID: next.AnimeID, epKey: next.EpKey, stop: stop}
 	d.mu.Unlock()
 
-	err = d.prefetch.Download(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent, next.AnimeID), queueStall)
+	err = d.prefetch.DownloadRelease(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent, next.AnimeID), queueStall, next.InfoHash)
 
 	d.mu.Lock()
 	d.current = nil

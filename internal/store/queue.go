@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,22 @@ type QueuedDownload struct {
 	Error   *string `json:"error,omitempty"`
 	Title   string  `json:"title,omitempty"`
 	Cover   *string `json:"cover,omitempty"`
+	// A release chosen by hand: the worker downloads this one instead of searching.
+	InfoHash string `json:"infoHash,omitempty"`
+	Release  string `json:"release,omitempty"`
+}
+
+// SetQueuedRelease pins a queued episode to one release, by hash, with its name for the list.
+func (s *Store) SetQueuedRelease(ctx context.Context, animeID int, epKey, infoHash, name string) (bool, error) {
+	res, err := s.w.ExecContext(ctx, `
+		UPDATE download_queue SET info_hash = ?, release_name = ?, error = NULL,
+		    state = CASE WHEN state = 'failed' THEN 'pending' ELSE state END
+		WHERE anime_id = ? AND ep_key = ?`, nullable(infoHash), nullable(name), animeID, epKey)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // Enqueue adds episodes to the back of the queue. An already-queued episode keeps
@@ -69,6 +86,7 @@ func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int
 func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	// One statement: a cancel between a read and the claim would otherwise be downloaded anyway.
 	var q QueuedDownload
+	var hash, name *string
 	err := s.w.QueryRowContext(ctx, `
 		UPDATE download_queue SET state = 'active', started_at = ?
 		WHERE state = 'pending' AND (anime_id, ep_key) = (
@@ -76,8 +94,9 @@ func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 		    WHERE state = 'pending'
 		    ORDER BY queued_at, episode
 		    LIMIT 1)
-		RETURNING anime_id, ep_key, episode, season`,
-		time.Now().Unix()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
+		RETURNING anime_id, ep_key, episode, season, info_hash, release_name`,
+		time.Now().Unix()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &hash, &name)
+	q.InfoHash, q.Release = derefString(hash), derefString(name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
 	}
@@ -139,10 +158,25 @@ func (s *Store) ResetActive(ctx context.Context) error {
 // Prioritise moves one waiting episode to the front. The worker takes the
 // oldest pending row, so being first in line is a queued_at older than the rest.
 func (s *Store) Prioritise(ctx context.Context, animeID int, epKey string) (bool, error) {
+	return s.promote(ctx, animeID, epKey, "pending")
+}
+
+// Promote is Prioritise for the episode downloading too: interrupted for a change of release, it
+// comes back at the front rather than behind the rest.
+func (s *Store) Promote(ctx context.Context, animeID int, epKey string) (bool, error) {
+	return s.promote(ctx, animeID, epKey, "pending", "active")
+}
+
+func (s *Store) promote(ctx context.Context, animeID int, epKey string, states ...string) (bool, error) {
+	args := []any{animeID, epKey}
+	for _, st := range states {
+		args = append(args, st)
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
 		SET queued_at = coalesce((SELECT min(queued_at) FROM download_queue), queued_at) - 1
-		WHERE anime_id = ? AND ep_key = ? AND state = 'pending'`, animeID, epKey)
+		WHERE anime_id = ? AND ep_key = ? AND state IN (`+marks+`)`, args...)
 	if err != nil {
 		return false, err
 	}
@@ -155,7 +189,7 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT q.anime_id, q.ep_key, q.episode, q.season, q.state, q.error,
-		       a.title_romaji, a.title_english, a.cover_url
+		       a.title_romaji, a.title_english, a.cover_url, q.info_hash, q.release_name
 		FROM download_queue q
 		LEFT JOIN anime a ON a.id = q.anime_id
 		ORDER BY q.state = 'active' DESC, q.queued_at, q.episode
@@ -168,11 +202,12 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 	out := []QueuedDownload{}
 	for rows.Next() {
 		var q QueuedDownload
-		var romaji, english *string
+		var romaji, english, hash, name *string
 		if err := rows.Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &q.State, &q.Error,
-			&romaji, &english, &q.Cover); err != nil {
+			&romaji, &english, &q.Cover, &hash, &name); err != nil {
 			return nil, err
 		}
+		q.InfoHash, q.Release = derefString(hash), derefString(name)
 		if romaji != nil {
 			q.Title = PickTitle(mode, *romaji, english)
 		}

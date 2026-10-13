@@ -47,6 +47,53 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// downloadRelease swaps the release an episode downloads: the one chosen is queued at the front, and a
+// copy held under another release is replaced by it. Not while the episode is on screen.
+func (s *Server) downloadRelease(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AnimeID  int    `json:"animeId"`
+		Episode  int    `json:"episode"`
+		Season   int    `json:"season"`
+		InfoHash string `json:"infoHash"`
+		Title    string `json:"title"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	hash := strings.ToLower(strings.TrimSpace(body.InfoHash))
+	if body.AnimeID == 0 || body.Episode <= 0 || len(hash) != 40 {
+		send(w, http.StatusBadRequest, map[string]any{"error": "animeId, episode and infoHash are required"})
+		return
+	}
+	if s.prefetch == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "torrent engine unavailable"})
+		return
+	}
+	if s.streams != nil {
+		if _, live := s.streams.Get(sessionID(body.AnimeID, body.Episode)); live {
+			send(w, http.StatusConflict, map[string]any{"error": "this episode is playing; choose its release from the player"})
+			return
+		}
+	}
+
+	ctx := r.Context()
+	epKey := strconv.Itoa(body.Episode)
+	if _, err := s.store.Enqueue(ctx, body.AnimeID, body.Season, []int{body.Episode}); err != nil {
+		s.fail(w, "queue download", err)
+		return
+	}
+	if _, err := s.store.SetQueuedRelease(ctx, body.AnimeID, epKey, hash, strings.TrimSpace(body.Title)); err != nil {
+		s.fail(w, "choose release", err)
+		return
+	}
+	if _, err := s.downloader.Restart(ctx, body.AnimeID, epKey); err != nil {
+		s.fail(w, "restart download", err)
+		return
+	}
+	s.downloader.Wake()
+	send(w, http.StatusAccepted, map[string]any{"queued": true, "animeId": body.AnimeID, "episode": body.Episode, "infoHash": hash})
+}
+
 // downloadEpisodes queues a hand-picked set — the episode-list checkboxes —
 // through the same queue as a whole season.
 func (s *Server) downloadEpisodes(w http.ResponseWriter, r *http.Request) {

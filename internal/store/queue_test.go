@@ -99,6 +99,67 @@ func TestQueueIsWorkedInOrder(t *testing.T) {
 	}
 }
 
+// A release chosen for a queued episode rides with it to the worker and goes with the row when done.
+func TestChosenReleaseIsKeptUntilTheEpisodeIsDone(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 100, "FINISHED", 12)
+	const hash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+
+	if _, err := s.Enqueue(ctx, 100, 1, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := s.SetQueuedRelease(ctx, 100, "2", hash, "[Group] Show - 02"); err != nil || !set {
+		t.Fatalf("set=%v err=%v", set, err)
+	}
+	if set, _ := s.SetQueuedRelease(ctx, 100, "9", hash, "nothing queued"); set {
+		t.Error("a release was set on an episode not in the queue")
+	}
+	// Queued again (a second click): the choice stands.
+	if _, err := s.Enqueue(ctx, 100, 1, []int{2}); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := s.QueuedDownloads(ctx)
+	if len(items) != 2 || items[1].InfoHash != hash || items[1].Release != "[Group] Show - 02" || items[0].InfoHash != "" {
+		t.Fatalf("queue = %+v, want the choice on episode 2 alone", items)
+	}
+
+	s.NextQueued(ctx) // episode 1
+	s.FinishQueued(ctx, 100, "1", nil)
+	next, ok, err := s.NextQueued(ctx)
+	if err != nil || !ok || next.Episode != 2 || next.InfoHash != hash {
+		t.Fatalf("next = %+v (ok %v, err %v), want episode 2 with its release", next, ok, err)
+	}
+	if err := s.FinishQueued(ctx, 100, "2", nil); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := s.QueuedDownloads(ctx); len(items) != 0 {
+		t.Errorf("queue = %+v after finishing, want empty", items)
+	}
+}
+
+// Changing the release of the episode downloading: it keeps the front of the line once interrupted.
+func TestPromoteReachesTheEpisodeDownloading(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 100, "FINISHED", 12)
+	if _, err := s.Enqueue(ctx, 100, 1, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.NextQueued(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := s.Promote(ctx, 100, "1"); err != nil || !moved {
+		t.Fatalf("moved=%v err=%v, want the active episode moved", moved, err)
+	}
+	if _, err := s.RequeueActive(ctx, 100, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if next, _, _ := s.NextQueued(ctx); next.Episode != 1 {
+		t.Errorf("started episode %d after the requeue, want 1 again", next.Episode)
+	}
+}
+
 // A failure is kept and reported rather than disappearing, which would be
 // indistinguishable from having worked.
 func TestFailedQueueEntryIsKept(t *testing.T) {

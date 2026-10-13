@@ -222,6 +222,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/download", s.download)
 	mux.HandleFunc("POST /api/download/all", s.downloadAll)
 	mux.HandleFunc("POST /api/download/episodes", s.downloadEpisodes)
+	mux.HandleFunc("POST /api/download/release", s.downloadRelease)
 	mux.HandleFunc("GET /api/download/queue", s.downloadQueue)
 	mux.HandleFunc("POST /api/download/queue/now", s.prioritiseQueued)
 	mux.HandleFunc("POST /api/download/queue/pause", s.pauseQueue)

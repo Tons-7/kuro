@@ -35,6 +35,7 @@ const CHECKS = [
   ['backup-check.mjs'],
   ['browse-filters-check.mjs', {}, ALONE],
   ['browse-paging-check.mjs', {}, ALONE],
+  ['change-release-check.mjs'],
   ['continue-next-check.mjs'],
   ['downloads-fresh-check.mjs'],
   ['downloads-groups-check.mjs'],

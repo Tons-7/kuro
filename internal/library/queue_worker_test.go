@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,13 @@ import (
 // workerQueue is a queue over a fake engine holding episode 1 complete, with
 // nothing to find for any other episode.
 func workerQueue(t *testing.T) (*Downloader, *store.Store) {
+	t.Helper()
+	d, st, _ := workerQueueWith(t)
+	return d, st
+}
+
+// workerQueueWith is workerQueue with an indexer offering these releases, and the engine to look at.
+func workerQueueWith(t *testing.T, releases ...indexer.Torrent) (*Downloader, *store.Store, *fakeEngine) {
 	t.Helper()
 	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
@@ -37,12 +45,83 @@ func workerQueue(t *testing.T) (*Downloader, *store.Store) {
 	if err := st.SetCacheBytes(ctx, goodHash, 0, 100, true); err != nil {
 		t.Fatal(err)
 	}
-	engine.ids[1] = goodHash
+	// An id the engine will not hand out itself (it counts from 1).
+	engine.ids[99] = goodHash
 	engine.finished[goodHash] = true
 
-	finder := NewFinder(st, fixedIndexer{results: []indexer.Torrent{}}, discard())
+	finder := NewFinder(st, fixedIndexer{results: releases}, discard())
 	prefs := func(context.Context, int) score.Preferences { return score.DefaultPreferences() }
-	return NewDownloader(st, NewPrefetcher(st, finder, torrent.NewClient(srv.URL), discard()), prefs, discard()), st
+	return NewDownloader(st, NewPrefetcher(st, finder, torrent.NewClient(srv.URL), discard()), prefs, discard()), st, engine
+}
+
+// A release chosen by hand replaces the copy held under another: that one is fetched, the old one goes.
+func TestWorkerDownloadsTheReleaseChosenOverTheHeldOne(t *testing.T) {
+	d, st, engine := workerQueueWith(t,
+		release(goodHash, "[Group] Show - 01 [1080p].mkv", 500),
+		release(otherHash, "[Other] Show - 01 [720p].mkv", 3),
+	)
+	engine.finished[otherHash] = true
+	ctx := context.Background()
+	if _, err := st.Enqueue(ctx, 1, 1, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := st.SetQueuedRelease(ctx, 1, "1", otherHash, "[Other] Show - 01 [720p].mkv"); err != nil || !set {
+		t.Fatalf("set=%v err=%v", set, err)
+	}
+
+	runUntil(t, d, func() bool { return len(queued(t, st)) == 0 })
+
+	if rec, ok, _ := st.TorrentForEpisode(ctx, 1, "1"); !ok || rec.InfoHash != otherHash {
+		t.Fatalf("episode 1 is %+v, want the chosen release", rec)
+	}
+	if !engine.wasDeleted(goodHash) {
+		t.Error("the copy held before is still in the engine")
+	}
+	entries, _ := st.CacheEntries(ctx)
+	if len(entries) != 1 || entries[0].InfoHash != otherHash || !entries[0].Kept {
+		t.Errorf("entries = %+v, want the chosen copy alone, kept", entries)
+	}
+}
+
+// A chosen release the sites no longer list fails the row rather than downloading something else.
+func TestWorkerFailsWhenTheChosenReleaseIsGone(t *testing.T) {
+	d, st, _ := workerQueueWith(t, release(goodHash, "[Group] Show - 02 [1080p].mkv", 500))
+	ctx := context.Background()
+	if _, err := st.Enqueue(ctx, 1, 1, []int{2}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetQueuedRelease(ctx, 1, "2", otherHash, "[Gone] Show - 02")
+
+	runUntil(t, d, func() bool {
+		items := queued(t, st)
+		return len(items) == 1 && items[0].State == "failed"
+	})
+	if failed := queued(t, st)[0]; failed.Error == nil || !strings.Contains(*failed.Error, "not found") {
+		t.Errorf("failed row = %+v, want it to say the release was not found", failed)
+	}
+}
+
+// Restart puts the episode first and stops the one downloading, even when that is the episode itself.
+func TestRestartStopsTheEpisodeDownloading(t *testing.T) {
+	d, st := workerQueue(t)
+	ctx := context.Background()
+	if _, err := st.Enqueue(ctx, 1, 1, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.NextQueued(ctx); err != nil {
+		t.Fatal(err)
+	}
+	running, stop := context.WithCancel(ctx)
+	d.mu.Lock()
+	d.current = &inFlight{animeID: 1, epKey: "1", stop: stop}
+	d.mu.Unlock()
+
+	if moved, err := d.Restart(ctx, 1, "1"); err != nil || !moved {
+		t.Fatalf("moved=%v err=%v", moved, err)
+	}
+	if running.Err() == nil {
+		t.Error("the download in flight was not stopped")
+	}
 }
 
 func queued(t *testing.T, st *store.Store) []store.QueuedDownload {

@@ -165,6 +165,42 @@ func TestDownloadNowMovesAnEpisodeFirstAndResumes(t *testing.T) {
 	}
 }
 
+// Changing an episode's release queues it at the front with that choice; a queued one just gets it.
+func TestChangeReleaseQueuesTheChoiceAtTheFront(t *testing.T) {
+	h, _ := downloadsHarness(t)
+	h.server.prefetch = library.NewPrefetcher(h.store, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	const hash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+
+	// Episode 7 is not queued: it is added, first in line, with the release.
+	code, body := h.call(t, "POST", "/api/download/release",
+		`{"animeId":1,"episode":7,"infoHash":"ABCDEFabcdefabcdefabcdefabcdefabcdefabcd","title":"[Group] Show - 07"}`)
+	if code != http.StatusAccepted || body["infoHash"] != hash {
+		t.Fatalf("answered %d %v", code, body)
+	}
+	keys, _ := queuedKeys(t, h)
+	if strings.Join(keys, ",") != "7,2,3,4" {
+		t.Errorf("queue is %v, want 7 first", keys)
+	}
+	items, _ := h.store.QueuedDownloads(context.Background())
+	if items[0].Episode != 7 || items[0].InfoHash != hash || items[0].Release != "[Group] Show - 07" {
+		t.Errorf("queued = %+v, want the release on episode 7", items[0])
+	}
+
+	// Episode 3 is already waiting: it keeps one row, now with the release, and moves first.
+	if code, _ := h.call(t, "POST", "/api/download/release", `{"animeId":1,"episode":3,"infoHash":"`+hash+`"}`); code != http.StatusAccepted {
+		t.Fatalf("answered %d", code)
+	}
+	if keys, _ := queuedKeys(t, h); strings.Join(keys, ",") != "3,7,2,4" {
+		t.Errorf("queue is %v, want 3 first", keys)
+	}
+
+	for _, bad := range []string{`{"animeId":1,"episode":3,"infoHash":"short"}`, `{"animeId":1,"infoHash":"` + hash + `"}`, `nope`} {
+		if code, _ := h.call(t, "POST", "/api/download/release", bad); code != http.StatusBadRequest {
+			t.Errorf("%s answered %d, want 400", bad, code)
+		}
+	}
+}
+
 func TestCancelDropsOneEpisodeOrTheWholeShow(t *testing.T) {
 	h, _ := downloadsHarness(t)
 

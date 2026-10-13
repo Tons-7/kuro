@@ -27,6 +27,7 @@ import {
   useDebounced,
 } from '../components/ui'
 import { notificationTarget } from '../components/NotificationPanel'
+import { ReleasePicker } from '../components/ReleasePicker'
 
 export function Notifications() {
   const { data, isPending, isError, error, refetch } = useNotifications()
@@ -294,6 +295,14 @@ export function Downloads() {
     onSuccess: done,
   })
 
+  // A release chosen for one episode replaces whatever it has or would get.
+  const [picking, setPicking] = useState<{ animeId: number; episode: number; current?: string } | null>(null)
+  const changeRelease = useMutation({
+    mutationFn: (pick: { animeId: number; episode: number; infoHash: string; title: string }) =>
+      api.post('/api/download/release', pick),
+    onSuccess: done,
+  })
+
   const requeue = useMutation({
     mutationFn: (q: Queued) =>
       api.post('/api/download', { animeId: q.animeId, episode: q.episode }),
@@ -390,6 +399,8 @@ export function Downloads() {
   const actions: RowActions = {
     // Paused by the queue, not by hand: its section already says it is waiting its turn.
     queueHeld: (d) => d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)),
+    changeRelease: (animeId, episode, current) => setPicking({ animeId, episode, current }),
+    chosenFor: (d) => queued.find((q) => q.animeId === d.animeId && d.episodes.includes(q.epKey) && !!q.release),
     confirming: confirmRemove,
     confirm: setConfirmRemove,
     removing: remove.isPending,
@@ -493,6 +504,7 @@ export function Downloads() {
                   onNow={() => now.mutate(r.q)}
                   onRetry={() => requeue.mutate(r.q)}
                   onRemove={() => dequeue.mutate(r.q)}
+                  onChangeRelease={() => actions.changeRelease(r.q.animeId, r.q.episode, r.q.infoHash)}
                 />
               )
             if ('show' in r)
@@ -508,6 +520,21 @@ export function Downloads() {
             return <DownloadRow key={r.d.infoHash} d={r.d} position={r.position} actions={actions} />
           })}
         </ul>
+      )}
+      {changeRelease.isError && <p className="text-xs text-recap">{(changeRelease.error as Error).message}</p>}
+
+      {picking && (
+        <ReleasePicker
+          animeId={picking.animeId}
+          episode={picking.episode}
+          current={picking.current}
+          purpose="download"
+          onClose={() => setPicking(null)}
+          onPick={(infoHash, title) => {
+            changeRelease.mutate({ animeId: picking.animeId, episode: picking.episode, infoHash, title })
+            setPicking(null)
+          }}
+        />
       )}
     </div>
   )
@@ -548,6 +575,10 @@ function byShow(finished: Download[]): (Download | Show)[] {
 
 interface RowActions {
   queueHeld: (d: Download) => boolean
+  /** Open the release picker for one episode, to download another release in its place. */
+  changeRelease: (animeId: number, episode: number, current?: string) => void
+  /** The release chosen to replace this download, while that is still queued. */
+  chosenFor: (d: Download) => Queued | undefined
   /** What the delete confirmation is open for: a download's hash or a show's key. */
   confirming: string | null
   confirm: (key: string | null) => void
@@ -695,6 +726,7 @@ function DownloadRow({
   nested?: boolean
 }) {
   const unfinished = d.percent < 100
+  const chosen = actions.chosenFor(d)
   // What follows "episode": "s 1, 2" for a pack.
   const numbers = d.episodes.length > 0 && `${d.episodes.length > 1 ? 's' : ''} ${d.episode}`
 
@@ -722,6 +754,11 @@ function DownloadRow({
           {d.title && (numbers || !nested) && (
             <p className="truncate text-xs text-base-600" title={d.name}>
               {d.name}
+            </p>
+          )}
+          {chosen && (
+            <p className="truncate text-xs text-accent-300" title={chosen.release}>
+              Changing to: {chosen.release}
             </p>
           )}
           {/* One line, left to right: how far, how big, how fast, how
@@ -753,6 +790,18 @@ function DownloadRow({
               className="grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
             >
               {d.paused ? <PlayGlyph /> : <PauseGlyph />}
+            </button>
+          )}
+
+          {/* One episode, not on screen: another release can take its place. */}
+          {!d.pinned && d.animeId && d.episodes.length === 1 && Number(d.episodes[0]) > 0 && (
+            <button
+              onClick={() => actions.changeRelease(d.animeId!, Number(d.episodes[0]), d.infoHash)}
+              aria-label={`Change release for episode ${d.episodes[0]}`}
+              title="Pick another release; this copy is replaced by it"
+              className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+            >
+              Change release
             </button>
           )}
 
@@ -827,12 +876,14 @@ function QueueRow({
   onNow,
   onRetry,
   onRemove,
+  onChangeRelease,
 }: {
   q: Queued
   position?: number
   onNow: () => void
   onRetry: () => void
   onRemove: () => void
+  onChangeRelease: () => void
 }) {
   return (
     <li className={cx(card, 'group flex items-center gap-3 p-3')}>
@@ -849,10 +900,24 @@ function QueueRow({
           <span className="ml-1.5 font-normal text-base-400">episode {q.episode}</span>
         </p>
         {q.error && <p className="truncate text-xs text-recap">{q.error}</p>}
-        {q.state === 'active' && <p className="text-xs text-base-400">Finding a release…</p>}
+        {q.release ? (
+          <p className="truncate text-xs text-base-600" title={q.release}>
+            Chosen: {q.release}
+          </p>
+        ) : (
+          q.state === 'active' && <p className="text-xs text-base-400">Finding a release…</p>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        <button
+          onClick={onChangeRelease}
+          aria-label={`Change release for episode ${q.episode}`}
+          title="Pick the release to download instead of what the search finds"
+          className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+        >
+          Change release
+        </button>
         {q.state === 'active' ? null : q.state === 'failed' ? (
           <button
             onClick={onRetry}

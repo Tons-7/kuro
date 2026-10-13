@@ -181,6 +181,9 @@ export interface Queued {
   error?: string
   title?: string
   cover?: string
+  /** A release chosen by hand: downloaded instead of whatever the search would pick. */
+  infoHash?: string
+  release?: string
 }
 
 // Both are local, cheap reads: always fresh on arrival, polled fast while anything is moving.

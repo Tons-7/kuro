@@ -11,6 +11,7 @@ export function ReleasePicker({
   episode,
   audio,
   current,
+  purpose,
   onPick,
   onClose,
 }: {
@@ -18,9 +19,11 @@ export function ReleasePicker({
   episode: number
   /** Sub or dub chosen for this episode, so the list is ranked for it. */
   audio?: string
-  /** Info hash of what is playing now, to mark the row. */
+  /** Info hash of what is playing or downloading now, to mark the row. */
   current?: string
-  onPick: (infoHash: string) => void
+  /** What picking does: plays the episode (default) or downloads it in place of the current release. */
+  purpose?: 'play' | 'download'
+  onPick: (infoHash: string, title: string) => void
   onClose: () => void
 }) {
   const close = useCallback(() => onClose(), [onClose])
@@ -57,7 +60,10 @@ export function ReleasePicker({
           <div>
             <h2 className="text-base font-semibold text-white">Choose a release</h2>
             <p className="mt-0.5 text-xs text-base-500">
-              Episode {episode} · best first. Picking one plays it now; the choice is not remembered.
+              Episode {episode} · best first.{' '}
+              {purpose === 'download'
+                ? 'Picking one downloads it instead of the current release.'
+                : 'Picking one plays it now; the choice is not remembered.'}
             </p>
           </div>
           <button
@@ -89,7 +95,7 @@ export function ReleasePicker({
                   key={r.Torrent.infoHash}
                   candidate={r}
                   active={r.Torrent.infoHash === current}
-                  onPick={() => onPick(r.Torrent.infoHash)}
+                  onPick={() => onPick(r.Torrent.infoHash, r.Torrent.title)}
                 />
               ))}
             </ul>
