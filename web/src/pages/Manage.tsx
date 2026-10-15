@@ -197,6 +197,41 @@ function PlayGlyph() {
   )
 }
 
+// A bookmark, filled once kept: the fill carries the state, so the row needs no second word for it.
+function KeepGlyph({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path d="M6 4h12v17l-6-4.5L6 21V4Z" fill={filled ? 'currentColor' : 'none'} {...stroke} />
+    </svg>
+  )
+}
+
+const stroke = { stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
+
+function SwapGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path d="M4 8h13m0 0-3-3m3 3-3 3M20 16H7m0 0 3-3m-3 3 3 3" fill="none" {...stroke} />
+    </svg>
+  )
+}
+
+function FrontGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path d="M5 5h14M12 20V9m-5 5 5-5 5 5" fill="none" {...stroke} />
+    </svg>
+  )
+}
+
+function RetryGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5" fill="none" {...stroke} />
+    </svg>
+  )
+}
+
 // A pack's episodes, each with its own keep: the row's toggle moves all of
 // them, which is rarely what "keep episode 5" meant.
 function PackEpisodes({ hash }: { hash: string }) {
@@ -239,12 +274,11 @@ function PackEpisodes({ hash }: { hash: string }) {
                 onClick={() => keep.mutate(f)}
                 disabled={keep.isPending}
                 aria-pressed={f.kept}
-                className={cx(
-                  'rounded px-2 py-0.5',
-                  f.kept ? 'bg-accent-500/15 text-accent-300' : 'text-base-400 hover:bg-base-800',
-                )}
+                aria-label="Keep"
+                title={f.kept ? 'Kept. Click to let the cache evict it again.' : 'Keep: never evicted.'}
+                className={cx(keepButton(f.kept), 'size-6')}
               >
-                {f.kept ? '✓ Kept' : 'Keep'}
+                <KeepGlyph filled={f.kept} />
               </button>
             </li>
           ))}
@@ -609,13 +643,12 @@ function ConfirmDelete({ size, actions, onDelete }: { size: number; actions: Row
   )
 }
 
+// The rail every row ends with: same-size labelled icons, so columns line up; hover only colours them.
+const iconButton =
+  'grid size-7 shrink-0 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white'
+
 const keepButton = (kept: boolean) =>
-  cx(
-    'rounded-md px-2 py-1 text-xs transition-colors',
-    kept
-      ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-      : 'text-base-400 hover:bg-base-800 hover:text-white',
-  )
+  cx(iconButton, kept && 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25 hover:text-accent-200')
 
 const deleteButton =
   'grid size-7 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap'
@@ -676,10 +709,11 @@ function ShowRows({
           <button
             onClick={() => show.items.filter((d) => d.kept === allKept).forEach(actions.keep)}
             aria-pressed={allKept}
-            title={allKept ? 'Let the cache evict these again' : 'Keep every episode: never evicted, outside the cache budget'}
+            aria-label="Keep all"
+            title={allKept ? 'All kept. Click to let the cache evict these again' : 'Keep every episode: never evicted, outside the cache budget'}
             className={keepButton(allKept)}
           >
-            {allKept ? '✓ Kept' : 'Keep all'}
+            <KeepGlyph filled={allKept} />
           </button>
           {actions.confirming === key ? (
             <ConfirmDelete
@@ -787,7 +821,7 @@ function DownloadRow({
               disabled={actions.toggling}
               aria-label={d.paused ? 'Resume download' : 'Pause download'}
               title={d.paused ? 'Resume this one' : 'Pause this one. The next in line starts; "Pause all" stops everything.'}
-              className="grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+              className={iconButton}
             >
               {d.paused ? <PlayGlyph /> : <PauseGlyph />}
             </button>
@@ -798,18 +832,18 @@ function DownloadRow({
             <button
               onClick={() => actions.changeRelease(d.animeId!, Number(d.episodes[0]), d.infoHash)}
               aria-label={`Change release for episode ${d.episodes[0]}`}
-              title="Pick another release; this copy is replaced by it"
-              className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+              title="Change release: pick another one; this copy is replaced by it"
+              className={iconButton}
             >
-              Change release
+              <SwapGlyph />
             </button>
           )}
 
-          {/* Labelled by state: an action label next to the badge read
-              as the state and looked wrong. */}
+          {/* The badge says kept (Downloaded), the fill repeats it; "✓ Kept" as a label was a third time. */}
           <button
             onClick={() => actions.keep(d)}
             aria-pressed={d.kept}
+            aria-label="Keep"
             title={
               d.kept
                 ? `Kept: never evicted, outside the cache budget. Click to let the cache evict ${
@@ -821,7 +855,7 @@ function DownloadRow({
             }
             className={keepButton(d.kept)}
           >
-            {d.kept ? '✓ Kept' : 'Keep'}
+            <KeepGlyph filled={d.kept} />
           </button>
 
           {!d.pinned &&
@@ -913,25 +947,23 @@ function QueueRow({
         <button
           onClick={onChangeRelease}
           aria-label={`Change release for episode ${q.episode}`}
-          title="Pick the release to download instead of what the search finds"
-          className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+          title="Change release: pick the one to download instead of what the search finds"
+          className={iconButton}
         >
-          Change release
+          <SwapGlyph />
         </button>
         {q.state === 'active' ? null : q.state === 'failed' ? (
-          <button
-            onClick={onRetry}
-            className="rounded-md px-2 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
-          >
-            Try again
+          <button onClick={onRetry} aria-label="Try again" title="Try again" className={iconButton}>
+            <RetryGlyph />
           </button>
         ) : (
           <button
             onClick={onNow}
-            title="Start this one now. The one downloading goes back to wait behind it."
-            className="rounded-md px-2 py-1 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+            aria-label="Download now"
+            title="Download now. The one downloading goes back to wait behind it."
+            className={iconButton}
           >
-            Download now
+            <FrontGlyph />
           </button>
         )}
         <button

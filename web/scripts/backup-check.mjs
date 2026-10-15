@@ -83,18 +83,20 @@ const downloads = await api('/api/downloads')
 const first = downloads.body?.items?.[0]
 if (first) {
   await page.goto(`${BASE}/downloads`)
-  const button = page.locator('button', { hasText: /^(✓ Kept|Keep)$/ }).first()
+  // The keep toggle is an icon; its pressed state is the word.
+  const button = page.locator('button[aria-label="Keep"]').first()
   await button.waitFor({ timeout: 10_000 })
-  const before = (await button.textContent())?.trim()
+  const pressed = async () => (await button.getAttribute('aria-pressed')) === 'true'
+  const before = await pressed()
   await button.click()
   await page.waitForTimeout(500)
-  const afterClick = (await button.textContent())?.trim()
+  const afterClick = await pressed()
   check(before !== afterClick, 'the keep control flips on one click', `${before} -> ${afterClick}`)
   const row = (await api('/api/downloads')).body?.items?.find((d) => d.infoHash === first.infoHash)
-  check(row && row.kept === (afterClick === '✓ Kept'), 'and the server agrees')
+  check(row && row.kept === afterClick, 'and the server agrees')
   await button.click()
   await page.waitForTimeout(500)
-  check(((await button.textContent())?.trim() ?? '') === before, 'and back again')
+  check((await pressed()) === before, 'and back again')
 } else {
   console.log('     (no downloads seeded; keep control not exercised)')
 }

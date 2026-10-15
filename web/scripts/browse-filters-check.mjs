@@ -35,10 +35,12 @@ const cards = page.locator('a[href^="/anime/"]')
 // A card is two links (poster and title), so the shows listed are the distinct targets.
 const shown = async () => new Set(await cards.evaluateAll((els) => els.map((e) => e.getAttribute('href')))).size
 const results = () => page.locator('body').innerText().then((t) => t.match(/([\d,]+) results?\b/)?.[1]?.replace(',', '') ?? '')
-// The server's count for a filter set, the page's yardstick; 503 while a broad one is still being paged.
+// The server's count for a filter set, the page's yardstick; 503 while the request budget is spent,
+// 502 when AniList sat on a probe. On a cold cache a broad count took five minutes (2026-10-15).
 const count = async (qs) => {
-  for (let i = 0; i < 80; i++) {
-    const r = await page.request.get(`${BASE}/api/browse/count${qs ? `?${qs}` : ''}`)
+  const until = Date.now() + 8 * 60_000
+  while (Date.now() < until) {
+    const r = await page.request.get(`${BASE}/api/browse/count${qs ? `?${qs}` : ''}`, { timeout: 120_000 })
     if (r.ok()) return (await r.json()).count
     await new Promise((res) => setTimeout(res, 1500))
   }

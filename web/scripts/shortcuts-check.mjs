@@ -21,12 +21,17 @@ const download = (infoHash, name, more = {}) => ({
   infoHash, name, episodes: [], totalBytes: GB, bytesOnDisk: GB * 0.4, percent: 40,
   pinned: false, kept: false, state: 'live', mbps: 1.2, peers: 2, ...more,
 })
+const cover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="6"><rect width="4" height="6" fill="#88f"/></svg>')
 const items = [
-  download('a3', '[Group] Show One - 03 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '3', episodes: ['3'], pinned: true }),
+  download('a3', '[Group] Show One - 03 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '3', episodes: ['3'], pinned: true, cover }),
+  download('a4', '[Group] Show One - 04 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '4', episodes: ['4'], percent: 20, bytesOnDisk: GB * 0.2, cover }),
   download('x1', '[Stray] Other Show - 01 [1080p].mkv', { percent: 5, bytesOnDisk: GB * 0.05, mbps: 0 }),
   download('b1', '[Group] Show Two - 01 [1080p].mkv', { animeId: 2, title: 'Show Two', episode: '1', episodes: ['1'], percent: 100, bytesOnDisk: GB }),
 ]
-const queued = [{ animeId: 3, epKey: '7', episode: 7, state: 'failed', error: 'no release found', title: 'Show Three' }]
+const queued = [
+  { animeId: 3, epKey: '7', episode: 7, state: 'failed', error: 'no release found', title: 'Show Three' },
+  { animeId: 1, epKey: '5', episode: 5, state: 'pending', title: 'Show One', cover },
+]
 
 const browser = await chromium.launch()
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] })
@@ -52,9 +57,14 @@ const before = await state()
 await page.keyboard.press('d')
 check(await panel.waitFor({ timeout: 3000 }).then(() => true, () => false), 'D opens the downloads over the player')
 const text = (await panel.innerText().catch(() => '')).replace(/\n/g, ' | ')
-check(/Show One episode 3/.test(text) && /40%/.test(text) && /1\.2 Mbps/.test(text) && /2 peers/.test(text), 'a download shows its show, progress, speed and peers', text)
+// The show is the card, its episodes the lines under it: the name is said once.
+check(/Show One[ |]+Episode 3[ |]+playing[ |]+40%/.test(text) && /1\.2 Mbps/.test(text) && /2 peers/.test(text), 'a download shows its show, episode, progress, speed and peers', text)
+check((text.match(/Show One/g) ?? []).length === 1 && /Episode 4[ |]+20%/.test(text), 'two episodes of one show share its card')
+check(/Episode 4[ |]+20%[^|]*\|[ |]*Episode 5[ |]+waiting/.test(text), 'the one waiting its turn is a line of the same card, marked waiting', text)
+check(!/DOWNLOADING|WAITING|FAILED/.test(text), 'shows are the only grouping: no downloading, waiting or failed headings')
+check((await panel.locator('img[src^="data:"]').count()) === 1, 'the card carries the show poster, once')
 check(/\[Stray\] Other Show - 01/.test(text), 'a download under no show is listed by its release name')
-check(/Show Three episode 7/.test(text) && /no release found/.test(text), 'a failed one says why')
+check(/Show Three[ |]+Episode 7[ |]+no release found/.test(text), 'a failed one says why')
 check(!/Show Two/.test(text) && /1 on disk/.test(text), 'finished ones are counted, not listed')
 check(page.url().includes('/watch/'), 'the episode page is still open')
 check((await state()).paused === before.paused, 'opening it does not pause or start the video')
@@ -70,7 +80,7 @@ await page.keyboard.press('k')
 await panel.getByRole('button', { name: 'Copy details' }).click()
 await sleep(300)
 const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`)
-check(/Downloading \(2\)/.test(copied) && /Show One episode 3 — 40%/.test(copied) && /\[Stray\] Other Show/.test(copied) && /Failed \(1\)/.test(copied) && /On disk \(1\)/.test(copied),
+check(/Downloading \(3\)/.test(copied) && /Show One episode 3 — 40%/.test(copied) && /\[Stray\] Other Show/.test(copied) && /Failed \(1\)/.test(copied) && /On disk \(1\)/.test(copied),
   'copy details puts the whole list on the clipboard as text', copied.replace(/\n/g, ' | ').slice(0, 300))
 
 await page.keyboard.press('d')

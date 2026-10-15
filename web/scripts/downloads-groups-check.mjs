@@ -36,8 +36,15 @@ page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const calls = []
 // One episode waiting its turn, and a queue that can be paused as a whole.
 let paused = false
-const queued = [{ animeId: 9, epKey: '2', episode: 2, state: 'pending', title: 'Queued Show' }]
+const queued = [
+  { animeId: 9, epKey: '2', episode: 2, state: 'pending', title: 'Queued Show' },
+  { animeId: 9, epKey: '3', episode: 3, state: 'failed', title: 'Queued Show', error: 'no release found' },
+]
 const queueCalls = []
+await page.route('**/api/download', (route) => {
+  queueCalls.push(`retry ${route.request().postData()}`)
+  return route.fulfill({ json: { queued: 1 } })
+})
 await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: queued, waiting: {}, paused } }))
 await page.route(/\/api\/download\/queue\/(pause|resume|now)$/, (route) => {
   const verb = route.request().url().split('/').pop()
@@ -115,6 +122,13 @@ queueCalls.length = 0
 await page.locator('li', { hasText: 'Queued Show' }).getByRole('button', { name: 'Download now' }).click()
 await page.waitForTimeout(500)
 check(queueCalls.length === 1 && /^now .*"animeId":9.*"epKey":"2"/.test(queueCalls[0]), 'download now asks for that episode', queueCalls.join(' | '))
+// A failed one says why and can be asked for again.
+queueCalls.length = 0
+const failed = page.locator('li', { hasText: 'no release found' })
+check((await failed.count()) === 1, 'a failed episode shows its error')
+await failed.getByRole('button', { name: 'Try again' }).click()
+await page.waitForTimeout(500)
+check(queueCalls.length === 1 && /^retry .*"animeId":9.*"episode":3/.test(queueCalls[0]), 'try again queues that episode again', queueCalls.join(' | '))
 
 // Each download is its own outlined card, with a gap before the next.
 const cards = await page.locator('ul.space-y-2 > li').evaluateAll((rows) =>
@@ -124,6 +138,34 @@ const cards = await page.locator('ul.space-y-2 > li').evaluateAll((rows) =>
 )
 const gaps = cards.slice(1).map((c, i) => Math.round(c.top - cards[i].bottom))
 check(cards.length >= 4 && gaps.every((g) => g >= 6), 'downloads are separate cards with space between', `${cards.length} cards, gaps ${gaps.join(',')}`)
+
+// The row controls are an icon rail: one state word per row, no action repeated as text, every icon named.
+await toggle('Show One Season 2').click()
+const words = await page.locator('ul.space-y-2 button').evaluateAll((buttons) =>
+  buttons.map((b) => b.textContent?.trim()).filter((t) => /^(✓ Kept|Keep|Keep all|Change release|Download now|Try again)$/.test(t ?? '')),
+)
+check(words.length === 0, 'no row action is spelled out as text', words.join(','))
+const unnamed = await page.locator('ul.space-y-2 button').evaluateAll((buttons) =>
+  buttons.filter((b) => !(b.getAttribute('aria-label') || b.textContent?.trim())).length,
+)
+check(unnamed === 0, 'every control in the list has a name', `${unnamed} unnamed`)
+const rail = await page.locator('ul.space-y-2 button[aria-label="Keep"], ul.space-y-2 button[aria-label^="Change release"]').evaluateAll((buttons) =>
+  buttons.map((b) => b.getBoundingClientRect()).map((r) => `${Math.round(r.width)}x${Math.round(r.height)}`),
+)
+check(rail.length >= 4 && rail.every((s) => s === '28x28'), 'icons are 28 px squares, the same on every row', [...new Set(rail)].join(','))
+// Visible without hover, at phone width, and the page never scrolls sideways.
+await page.setViewportSize({ width: 390, height: 800 })
+await page.waitForTimeout(300)
+const phone = await page.evaluate(() => ({
+  overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  keep: [...document.querySelectorAll('ul.space-y-2 button[aria-label="Keep"]')].map((b) => {
+    const r = b.getBoundingClientRect()
+    return r.width > 0 && r.right <= innerWidth && r.left >= 0
+  }),
+}))
+check(phone.overflow <= 0, 'no horizontal scroll at phone width', `${phone.overflow}px over`)
+check(phone.keep.length > 0 && phone.keep.every(Boolean), 'the rail is on screen at phone width, without hover')
+await page.screenshot({ path: `${SHOTS}/downloads-phone.png` })
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

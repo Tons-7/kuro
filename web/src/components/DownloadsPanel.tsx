@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { copyText, downloadLabel, downloadProgress, downloadsReport, sortDownloads } from '../lib/downloads'
+import { copyText, downloadProgress, downloadsReport, sortDownloads } from '../lib/downloads'
 import { cx } from '../lib/format'
 import { refreshDownloads, useDownloadQueue, useDownloads, type Download, type Queued } from '../lib/queries'
 import { ProgressBar, useDismiss } from './ui'
@@ -107,32 +107,21 @@ export function DownloadsPanel() {
               </div>
             </div>
 
+            {/* Shows, in the order the queue works them; each episode line says where it stands. */}
             {busy + held.length + waitingQueue.length + failed.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-base-500">Nothing is downloading.</p>
             ) : (
-              <div className="max-h-[60vh] overflow-y-auto scrollbar-thin">
-                <Section label="Downloading" count={busy}>
-                  {searching.map((q) => (
-                    <QueuedRow key={`q-${q.animeId}-${q.epKey}`} q={q} note="Finding a release…" />
-                  ))}
-                  {active.map((d) => (
-                    <DownloadRow key={d.infoHash} d={d} />
-                  ))}
-                </Section>
-                <Section label="Waiting" count={held.length + waitingQueue.length}>
-                  {held.map((d) => (
-                    <DownloadRow key={d.infoHash} d={d} />
-                  ))}
-                  {waitingQueue.map((q) => (
-                    <QueuedRow key={`q-${q.animeId}-${q.epKey}`} q={q} />
-                  ))}
-                </Section>
-                <Section label="Failed" count={failed.length}>
-                  {failed.map((q) => (
-                    <QueuedRow key={`q-${q.animeId}-${q.epKey}`} q={q} note={q.error} failed />
-                  ))}
-                </Section>
-              </div>
+              <ul className="max-h-[60vh] space-y-2.5 overflow-y-auto p-2.5 scrollbar-thin">
+                {byShow([
+                  ...searching.map((q) => ({ q, note: 'Finding a release…' })),
+                  ...active.map((d) => ({ d })),
+                  ...held.map((d) => ({ d })),
+                  ...waitingQueue.map((q) => ({ q, note: 'waiting' })),
+                  ...failed.map((q) => ({ q, note: q.error ?? 'failed', failed: true })),
+                ]).map((g) => (
+                  <ShowCard key={g.key} group={g} />
+                ))}
+              </ul>
             )}
 
             <Link
@@ -149,42 +138,80 @@ export function DownloadsPanel() {
   )
 }
 
-// Each download its own card, as on the Downloads page.
-const row = 'rounded-lg border border-white/[0.08] bg-base-900/60 px-3 py-2'
+// One card per show, as on the Downloads page.
+const row = 'rounded-lg border border-white/[0.08] bg-base-900/60 px-3 py-2.5'
 
-function Section({ label, count, children }: { label: string; count: number; children: React.ReactNode }) {
-  if (count === 0) return null
+/** A torrent or a queue entry, with the note a queue entry carries (why it waits, why it failed). */
+interface Entry {
+  d?: Download
+  q?: Queued
+  note?: string
+  failed?: boolean
+}
+
+interface ShowGroup {
+  key: string
+  title: string
+  cover?: string
+  entries: Entry[]
+}
+
+// The show is the card, its episodes the lines (one name, not eight); a release under no show is its own card.
+function byShow(entries: Entry[]): ShowGroup[] {
+  const groups: ShowGroup[] = []
+  const index = new Map<string, ShowGroup>()
+  for (const e of entries) {
+    const animeId = e.d?.animeId ?? e.q?.animeId
+    const stray = !animeId || (e.d && !e.d.title)
+    const key = stray ? `t-${e.d?.infoHash ?? `${e.q?.animeId}-${e.q?.epKey}`}` : `a-${animeId}`
+    let g = index.get(key)
+    if (!g) {
+      const title = e.d?.title ?? e.q?.title ?? (e.d ? e.d.name : `Anime ${animeId}`)
+      g = { key, title, cover: e.d?.cover ?? e.q?.cover ?? undefined, entries: [] }
+      index.set(key, g)
+      groups.push(g)
+    }
+    g.entries.push(e)
+  }
+  return groups
+}
+
+function ShowCard({ group }: { group: ShowGroup }) {
   return (
-    <section className="px-2 pt-2 last:pb-2">
-      <p className="flex justify-between px-1 pb-1 text-[11px] font-semibold tracking-wider text-base-400 uppercase">
-        {label}
-        <span className="font-normal text-base-600">{count}</span>
-      </p>
-      <ul className="space-y-1.5">{children}</ul>
-    </section>
+    <li className={row}>
+      <div className="flex items-center gap-2">
+        {group.cover && <img src={group.cover} alt="" loading="lazy" className="h-9 w-6 shrink-0 rounded object-cover" />}
+        <p className="truncate text-xs font-medium text-base-100">{group.title}</p>
+      </div>
+      <ul className="mt-2.5 space-y-2.5">
+        {group.entries.map((e) =>
+          e.d ? <EpisodeLine key={e.d.infoHash} d={e.d} /> : <QueuedLine key={`${e.q!.animeId}-${e.q!.epKey}`} {...e} />,
+        )}
+      </ul>
+    </li>
   )
 }
 
-function DownloadRow({ d }: { d: Download }) {
+// The episode and how it is doing; a release under no show has only the progress, its name being the card.
+function EpisodeLine({ d }: { d: Download }) {
+  const label = d.title && d.episodes.length > 0 ? `Episode${d.episodes.length > 1 ? 's' : ''} ${d.episode}` : ''
   return (
-    <li className={row}>
-      <p className="truncate text-xs font-medium text-base-100" title={d.name}>
-        {downloadLabel(d)}
-        {d.pinned && <span className="ml-1.5 font-normal text-accent-300">playing</span>}
+    <li title={d.name}>
+      <p className="flex items-baseline gap-2 text-[11px]">
+        {label && <span className="shrink-0 font-medium text-base-200">{label}</span>}
+        {d.pinned && <span className="shrink-0 text-accent-300">playing</span>}
+        <span className="min-w-0 truncate text-base-500">{downloadProgress(d)}</span>
       </p>
-      <p className="mt-0.5 truncate text-[11px] text-base-500">{downloadProgress(d)}</p>
       <ProgressBar value={d.percent} className="mt-1.5" />
     </li>
   )
 }
 
-function QueuedRow({ q, note, failed }: { q: Queued; note?: string; failed?: boolean }) {
+function QueuedLine({ q, note, failed }: Entry) {
   return (
-    <li className={row}>
-      <p className="truncate text-xs font-medium text-base-100">
-        {q.title ?? `Anime ${q.animeId}`} episode {q.episode}
-      </p>
-      {note && <p className={cx('mt-0.5 truncate text-[11px]', failed ? 'text-recap' : 'text-base-500')}>{note}</p>}
+    <li className="flex items-baseline gap-2 text-[11px]">
+      <span className="shrink-0 font-medium text-base-200">Episode {q!.episode}</span>
+      {note && <span className={cx('min-w-0 truncate', failed ? 'text-recap' : 'text-base-500')}>{note}</span>}
     </li>
   )
 }
