@@ -40,8 +40,9 @@ const results = () => page.locator('body').innerText().then((t) => t.match(/([\d
 const count = async (qs) => {
   const until = Date.now() + 8 * 60_000
   while (Date.now() < until) {
-    const r = await page.request.get(`${BASE}/api/browse/count${qs ? `?${qs}` : ''}`, { timeout: 120_000 })
-    if (r.ok()) return (await r.json()).count
+    // A request that times out is not an answer: the measurement goes on server-side, so ask again.
+    const r = await page.request.get(`${BASE}/api/browse/count${qs ? `?${qs}` : ''}`, { timeout: 120_000 }).catch(() => null)
+    if (r?.ok()) return (await r.json()).count
     await new Promise((res) => setTimeout(res, 1500))
   }
   return -1
