@@ -421,7 +421,15 @@ func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction f
 var ErrPaused = errors.New("download paused")
 
 // How often Await asks the engine where it is. Overridden in tests.
-var awaitPoll = 5 * time.Second
+var AwaitPoll = 5 * time.Second
+
+// StallError is Await giving up: nothing arrived for Quiet, with Percent of the file on disk.
+type StallError struct {
+	Percent float64
+	Quiet   time.Duration
+}
+
+func (e *StallError) Error() string { return fmt.Sprintf("stalled at %.0f%%", e.Percent) }
 
 // Await blocks until the torrent has everything it was asked for. It gives up
 // once nothing has arrived for stall, so one dead release can't hold up the queue.
@@ -445,16 +453,16 @@ func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
 		if stats.ProgressBytes > best {
 			best, quiet = stats.ProgressBytes, 0
 		} else {
-			quiet += awaitPoll
+			quiet += AwaitPoll
 			if quiet >= stall {
-				return fmt.Errorf("stalled at %.0f%%", stats.Percent())
+				return &StallError{Percent: stats.Percent(), Quiet: quiet}
 			}
 		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(awaitPoll):
+		case <-time.After(AwaitPoll):
 		}
 	}
 }

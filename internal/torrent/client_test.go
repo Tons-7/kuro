@@ -461,9 +461,9 @@ func TestPauseUnfinishedLeavesCheckingTorrentsAlone(t *testing.T) {
 
 func fastPoll(t *testing.T) {
 	t.Helper()
-	was := awaitPoll
-	awaitPoll = time.Millisecond
-	t.Cleanup(func() { awaitPoll = was })
+	was := AwaitPoll
+	AwaitPoll = time.Millisecond
+	t.Cleanup(func() { AwaitPoll = was })
 }
 
 // Await is what makes the download queue serial: without it the queue only
@@ -497,8 +497,12 @@ func TestAwaitGivesUpOnAStalledSwarm(t *testing.T) {
 	})
 
 	err := c.Await(context.Background(), 1, 5*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "stalled") {
-		t.Errorf("got %v, want a stall", err)
+	var stall *StallError
+	if !errors.As(err, &stall) || !strings.Contains(err.Error(), "stalled at 33%") {
+		t.Errorf("got %v, want a stall at 33%%", err)
+	}
+	if stall != nil && stall.Quiet < 5*time.Millisecond {
+		t.Errorf("quiet = %s, want at least the stall window", stall.Quiet)
 	}
 }
 

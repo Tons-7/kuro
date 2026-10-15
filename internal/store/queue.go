@@ -23,12 +23,15 @@ type QueuedDownload struct {
 	// A release chosen by hand: the worker downloads this one instead of searching.
 	InfoHash string `json:"infoHash,omitempty"`
 	Release  string `json:"release,omitempty"`
+	// Tries that found a dead swarm, and when the next one is due (unix millis); Error says why it waits.
+	Attempts int   `json:"attempts,omitempty"`
+	RetryAt  int64 `json:"retryAt,omitempty"`
 }
 
 // SetQueuedRelease pins a queued episode to one release, by hash, with its name for the list.
 func (s *Store) SetQueuedRelease(ctx context.Context, animeID int, epKey, infoHash, name string) (bool, error) {
 	res, err := s.w.ExecContext(ctx, `
-		UPDATE download_queue SET info_hash = ?, release_name = ?, error = NULL,
+		UPDATE download_queue SET info_hash = ?, release_name = ?, error = NULL, attempts = 0, retry_at = NULL,
 		    state = CASE WHEN state = 'failed' THEN 'pending' ELSE state END
 		WHERE anime_id = ? AND ep_key = ?`, nullable(infoHash), nullable(name), animeID, epKey)
 	if err != nil {
@@ -61,7 +64,7 @@ func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int
 		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
 		    state = CASE WHEN download_queue.state IN ('failed','done')
 		                 THEN 'pending' ELSE download_queue.state END,
-		    error = NULL`)
+		    error = NULL, attempts = 0, retry_at = NULL`)
 	if err != nil {
 		return 0, err
 	}
@@ -87,15 +90,16 @@ func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	// One statement: a cancel between a read and the claim would otherwise be downloaded anyway.
 	var q QueuedDownload
 	var hash, name *string
+	now := time.Now()
 	err := s.w.QueryRowContext(ctx, `
 		UPDATE download_queue SET state = 'active', started_at = ?
 		WHERE state = 'pending' AND (anime_id, ep_key) = (
 		    SELECT anime_id, ep_key FROM download_queue
-		    WHERE state = 'pending'
+		    WHERE state = 'pending' AND (retry_at IS NULL OR retry_at <= ?)
 		    ORDER BY queued_at, episode
 		    LIMIT 1)
-		RETURNING anime_id, ep_key, episode, season, info_hash, release_name`,
-		time.Now().Unix()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &hash, &name)
+		RETURNING anime_id, ep_key, episode, season, info_hash, release_name, attempts`,
+		now.Unix(), now.UnixMilli()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &hash, &name, &q.Attempts)
 	q.InfoHash, q.Release = derefString(hash), derefString(name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
@@ -112,13 +116,36 @@ func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	q := QueuedDownload{State: "pending"}
 	err := s.r.QueryRowContext(ctx, `
 		SELECT anime_id, ep_key, episode, season FROM download_queue
-		WHERE state = 'pending'
+		WHERE state = 'pending' AND (retry_at IS NULL OR retry_at <= ?)
 		ORDER BY queued_at, episode
-		LIMIT 1`).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
+		LIMIT 1`, time.Now().UnixMilli()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
 	}
 	return q, err == nil, err
+}
+
+// Defer puts the episode downloading back in line for a later try: behind the rest, not before at, with
+// why it waits in Error. Its hold on a release stays, so the try resumes what is on disk.
+func (s *Store) Defer(ctx context.Context, animeID int, epKey string, cause error, at time.Time) error {
+	_, err := s.w.ExecContext(ctx, `
+		UPDATE download_queue
+		SET state = 'pending', started_at = NULL, attempts = attempts + 1, retry_at = ?, error = ?, queued_at = ?
+		WHERE state = 'active' AND anime_id = ? AND ep_key = ?`,
+		at.UnixMilli(), cause.Error(), time.Now().Unix(), animeID, epKey)
+	return err
+}
+
+// NextRetry is when the earliest deferred episode is due, if any is still waiting for its time.
+func (s *Store) NextRetry(ctx context.Context) (time.Time, bool, error) {
+	var at *int64
+	err := s.r.QueryRowContext(ctx, `
+		SELECT min(retry_at) FROM download_queue WHERE state = 'pending' AND retry_at > ?`,
+		time.Now().UnixMilli()).Scan(&at)
+	if err != nil || at == nil {
+		return time.Time{}, false, err
+	}
+	return time.UnixMilli(*at), true, nil
 }
 
 // FinishQueued records the outcome. A failure is kept rather than deleted: a
@@ -172,10 +199,11 @@ func (s *Store) promote(ctx context.Context, animeID int, epKey string, states .
 	for _, st := range states {
 		args = append(args, st)
 	}
+	// First in line now: a wait for a later try is over too.
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
-		SET queued_at = coalesce((SELECT min(queued_at) FROM download_queue), queued_at) - 1
+		SET queued_at = coalesce((SELECT min(queued_at) FROM download_queue), queued_at) - 1, retry_at = NULL
 		WHERE anime_id = ? AND ep_key = ? AND state IN (`+marks+`)`, args...)
 	if err != nil {
 		return false, err
@@ -189,7 +217,7 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT q.anime_id, q.ep_key, q.episode, q.season, q.state, q.error,
-		       a.title_romaji, a.title_english, a.cover_url, q.info_hash, q.release_name
+		       a.title_romaji, a.title_english, a.cover_url, q.info_hash, q.release_name, q.attempts, q.retry_at
 		FROM download_queue q
 		LEFT JOIN anime a ON a.id = q.anime_id
 		ORDER BY q.state = 'active' DESC, q.queued_at, q.episode
@@ -203,11 +231,15 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 	for rows.Next() {
 		var q QueuedDownload
 		var romaji, english, hash, name *string
+		var retryAt *int64
 		if err := rows.Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &q.State, &q.Error,
-			&romaji, &english, &q.Cover, &hash, &name); err != nil {
+			&romaji, &english, &q.Cover, &hash, &name, &q.Attempts, &retryAt); err != nil {
 			return nil, err
 		}
 		q.InfoHash, q.Release = derefString(hash), derefString(name)
+		if retryAt != nil {
+			q.RetryAt = *retryAt
+		}
 		if romaji != nil {
 			q.Title = PickTitle(mode, *romaji, english)
 		}

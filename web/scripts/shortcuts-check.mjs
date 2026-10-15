@@ -25,12 +25,15 @@ const cover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www
 const items = [
   download('a3', '[Group] Show One - 03 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '3', episodes: ['3'], pinned: true, cover }),
   download('a4', '[Group] Show One - 04 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '4', episodes: ['4'], percent: 20, bytesOnDisk: GB * 0.2, cover }),
+  // The queue gave up on this one: its entry below has failed, and this is what it got.
+  download('a9', '[Group] Show One - 09 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '9', episodes: ['9'], percent: 87, bytesOnDisk: GB * 0.87, paused: true, cover }),
   download('x1', '[Stray] Other Show - 01 [1080p].mkv', { percent: 5, bytesOnDisk: GB * 0.05, mbps: 0 }),
   download('b1', '[Group] Show Two - 01 [1080p].mkv', { animeId: 2, title: 'Show Two', episode: '1', episodes: ['1'], percent: 100, bytesOnDisk: GB }),
 ]
 const queued = [
   { animeId: 3, epKey: '7', episode: 7, state: 'failed', error: 'no release found', title: 'Show Three' },
   { animeId: 1, epKey: '5', episode: 5, state: 'pending', title: 'Show One', cover },
+  { animeId: 1, epKey: '9', episode: 9, state: 'failed', title: 'Show One', cover, error: 'no peers sent anything for 10 minutes; 87% is on disk' },
 ]
 
 const browser = await chromium.launch()
@@ -65,6 +68,8 @@ check(!/DOWNLOADING|WAITING|FAILED/.test(text), 'shows are the only grouping: no
 check((await panel.locator('img[src^="data:"]').count()) === 1, 'the card carries the show poster, once')
 check(/\[Stray\] Other Show - 01/.test(text), 'a download under no show is listed by its release name')
 check(/Show Three[ |]+Episode 7[ |]+no release found/.test(text), 'a failed one says why')
+check((text.match(/Episode 9/g) ?? []).length === 1 && /Episode 9[ |]+87% on disk[ |]+no peers sent anything/.test(text),
+  'a failed download is one line with what it got, not that and a paused one', text)
 check(!/Show Two/.test(text) && /1 on disk/.test(text), 'finished ones are counted, not listed')
 check(page.url().includes('/watch/'), 'the episode page is still open')
 check((await state()).paused === before.paused, 'opening it does not pause or start the video')
@@ -80,7 +85,7 @@ await page.keyboard.press('k')
 await panel.getByRole('button', { name: 'Copy details' }).click()
 await sleep(300)
 const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`)
-check(/Downloading \(3\)/.test(copied) && /Show One episode 3 — 40%/.test(copied) && /\[Stray\] Other Show/.test(copied) && /Failed \(1\)/.test(copied) && /On disk \(1\)/.test(copied),
+check(/Downloading \(3\)/.test(copied) && /Show One episode 3 — 40%/.test(copied) && /\[Stray\] Other Show/.test(copied) && /Failed \(2\)/.test(copied) && /episode 9 — 87% on disk — no peers/.test(copied) && /On disk \(1\)/.test(copied),
   'copy details puts the whole list on the clipboard as text', copied.replace(/\n/g, ' | ').slice(0, 300))
 
 await page.keyboard.press('d')

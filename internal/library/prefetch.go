@@ -547,7 +547,11 @@ func (p *Prefetcher) inEngine(ctx context.Context, animeID, episode int) bool {
 const fetchAttempts = 3
 
 // How long a queued download may take for its first bytes: a slow swarm's first big piece, not forever.
-const prefetchWarmCap = 5 * time.Minute
+// Shrunk in tests.
+var prefetchWarmCap = 5 * time.Minute
+
+// ErrSeedersSilent: peers answered the handshake and then sent nothing in all of prefetchWarmCap.
+var ErrSeedersSilent = errors.New("the seeders never answered")
 
 // fetch reports the torrent id it started and whether it started anything.
 // keep puts the episode in the kept tier, which the cache budget does not apply to.
@@ -677,7 +681,9 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 		return nil
 	}
 
-	start := func() error {
+	// keepDead records a torrent whose swarm gave nothing too, so the later try resumes it and the
+	// list shows it under its episode; false drops it, for a release the search is about to replace.
+	start := func(keepDead bool) error {
 		p.claim(best.Torrent.InfoHash)
 		p.setTorrent(flight, torrentRecord())
 		err := p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
@@ -686,9 +692,12 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			warm, cancel := context.WithTimeout(ctx, prefetchWarmCap)
 			err = p.torrent.Prewarm(warm, added.ID, index, 2<<20)
 			cancel()
+			if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+				err = fmt.Errorf("%w: %v", ErrSeedersSilent, err)
+			}
 		}
-		if err != nil && ctx.Err() != nil {
-			// Interrupted, not dead: recorded, kept if asked for, so the retry resumes this very
+		if err != nil && (ctx.Err() != nil || keepDead) {
+			// Interrupted, or dead for now: recorded, kept if asked for, so the retry resumes this very
 			// torrent instead of searching again while the sweep lists it under no show.
 			switch rerr := record(context.WithoutCancel(ctx)); {
 			case errors.Is(rerr, errOvertaken):
@@ -720,7 +729,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			return 0, false, err
 		}
 		if added != nil {
-			err := start()
+			err := start(false)
 			if err != nil && ctx.Err() != nil {
 				return 0, false, err
 			}
@@ -755,7 +764,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 		if added == nil {
 			return 0, false, lastErr
 		}
-		if err := start(); err != nil {
+		if err := start(true); err != nil {
 			return 0, false, err
 		}
 	}

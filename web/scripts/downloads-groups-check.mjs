@@ -26,6 +26,9 @@ let items = [
   download('b2', 2, 'Show One Season 2', ['2', '3'], { kept: true }),
   download('d5', 4, 'Still Coming', ['5'], { percent: 40, bytesOnDisk: GB * 0.4, state: 'live' }),
   download('d6', 4, 'Still Coming', ['6'], { percent: 10, bytesOnDisk: GB * 0.1, state: 'live' }),
+  // Stopped by the queue: one gave up (its entry failed), one waits for a later try (its entry pending).
+  download('e7', 5, 'Dead Swarm', ['7'], { percent: 87, bytesOnDisk: GB * 0.87, paused: true }),
+  download('e8', 5, 'Dead Swarm', ['8'], { percent: 30, bytesOnDisk: GB * 0.3, paused: true }),
 ]
 
 const browser = await chromium.launch()
@@ -39,11 +42,20 @@ let paused = false
 const queued = [
   { animeId: 9, epKey: '2', episode: 2, state: 'pending', title: 'Queued Show' },
   { animeId: 9, epKey: '3', episode: 3, state: 'failed', title: 'Queued Show', error: 'no release found' },
+  { animeId: 5, epKey: '7', episode: 7, state: 'failed', title: 'Dead Swarm', attempts: 2,
+    error: 'gave up after 3 tries: no peers sent anything for 10 minutes; 87% is on disk' },
+  { animeId: 5, epKey: '8', episode: 8, state: 'pending', title: 'Dead Swarm', attempts: 1,
+    error: 'the seeders never answered', retryAt: Date.now() + 5 * 60_000 },
 ]
 const queueCalls = []
 await page.route('**/api/download', (route) => {
   queueCalls.push(`retry ${route.request().postData()}`)
   return route.fulfill({ json: { queued: 1 } })
+})
+await page.route(/\/api\/download\/all\/\d+/, (route) => {
+  const u = new URL(route.request().url())
+  queueCalls.push(`cancel ${u.pathname.split('/').pop()} ${u.searchParams.get('episode')}`)
+  return route.fulfill({ json: { cancelled: 1 } })
 })
 await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: queued, waiting: {}, paused } }))
 await page.route(/\/api\/download\/queue\/(pause|resume|now)$/, (route) => {
@@ -129,6 +141,28 @@ check((await failed.count()) === 1, 'a failed episode shows its error')
 await failed.getByRole('button', { name: 'Try again' }).click()
 await page.waitForTimeout(500)
 check(queueCalls.length === 1 && /^retry .*"animeId":9.*"episode":3/.test(queueCalls[0]), 'try again queues that episode again', queueCalls.join(' | '))
+
+// A download the queue gave up on is one row, under Failed, with what it got; not that and a paused
+// torrent under Waiting. Removing it takes the bytes too, so it asks first.
+const dead7 = page.locator('li', { hasText: /Dead Swarm\s*episode 7/ })
+check((await dead7.count()) === 1, 'a failed download is one row', `${await dead7.count()} rows`)
+const dead7Text = (await dead7.first().innerText()).replace(/\n/g, ' | ')
+check(/87%/.test(dead7Text) && /gave up after 3 tries/.test(dead7Text) && !/Paused/.test(dead7Text), 'it shows what it got and why it stopped', dead7Text)
+check((await dead7.getByRole('button', { name: 'Try again' }).count()) === 1, 'and offers to try again')
+check((await dead7.getByRole('progressbar').count()) + (await dead7.locator('.bg-base-800').count()) >= 1, 'with its progress bar')
+queueCalls.length = 0
+calls.length = 0
+await dead7.getByRole('button', { name: 'Remove from queue' }).click()
+check(queueCalls.length === 0 && calls.length === 0, 'removing it asks first')
+await dead7.getByRole('button', { name: /^Delete / }).click()
+await page.waitForTimeout(500)
+check(queueCalls.join(' | ') === 'cancel 5 7' && calls.join(' | ') === 'DELETE e7', 'then takes the entry and the bytes', `${queueCalls.join(' | ')} / ${calls.join(' | ')}`)
+
+// One waiting for a later try says when, and is not called paused.
+const dead8 = page.locator('li', { hasText: /Dead Swarm\s*episode 8/ })
+const dead8Text = (await dead8.first().innerText()).replace(/\n/g, ' | ')
+check((await dead8.count()) === 1 && /tries again at \d/.test(dead8Text) && /the seeders never answered/.test(dead8Text) && !/Paused/.test(dead8Text),
+  'a download waiting for a later try says when and why', dead8Text)
 
 // Each download is its own outlined card, with a gap before the next.
 const cards = await page.locator('ul.space-y-2 > li').evaluateAll((rows) =>

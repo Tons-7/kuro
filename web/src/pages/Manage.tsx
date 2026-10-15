@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type DownloadFile, type Page } from '../lib/api'
-import { sortDownloads } from '../lib/downloads'
+import { retryNote, sortDownloads } from '../lib/downloads'
 import { bytes, cx, relativeTime } from '../lib/format'
 import {
   refreshDownloads,
@@ -535,6 +535,7 @@ export function Downloads() {
                   key={`q-${r.q.animeId}-${r.q.epKey}`}
                   q={r.q}
                   position={r.position}
+                  actions={actions}
                   onNow={() => now.mutate(r.q)}
                   onRetry={() => requeue.mutate(r.q)}
                   onRemove={() => dequeue.mutate(r.q)}
@@ -761,6 +762,7 @@ function DownloadRow({
 }) {
   const unfinished = d.percent < 100
   const chosen = actions.chosenFor(d)
+  const retry = retryNote(d.queued)
   // What follows "episode": "s 1, 2" for a pack.
   const numbers = d.episodes.length > 0 && `${d.episodes.length > 1 ? 's' : ''} ${d.episode}`
 
@@ -793,6 +795,11 @@ function DownloadRow({
           {chosen && (
             <p className="truncate text-xs text-accent-300" title={chosen.release}>
               Changing to: {chosen.release}
+            </p>
+          )}
+          {retry && (
+            <p className="truncate text-xs text-amber-300">
+              {retry} · {d.queued?.error}
             </p>
           )}
           {/* One line, left to right: how far, how big, how fast, how
@@ -903,10 +910,11 @@ function Group({ label, meta }: { label: string; meta?: string }) {
   )
 }
 
-// Queued but not started: there is no torrent yet, so nothing to pause or keep.
+// Queued but not started, so nothing to pause or keep; a failed one carries what its torrent got.
 function QueueRow({
   q,
   position,
+  actions,
   onNow,
   onRetry,
   onRemove,
@@ -914,13 +922,17 @@ function QueueRow({
 }: {
   q: Queued
   position?: number
+  actions: RowActions
   onNow: () => void
   onRetry: () => void
   onRemove: () => void
   onChangeRelease: () => void
 }) {
+  const key = `q-${q.animeId}-${q.epKey}`
+  const got = q.torrent
   return (
-    <li className={cx(card, 'group flex items-center gap-3 p-3')}>
+    <li className={cx(card, 'group p-3')}>
+      <div className="flex items-center gap-3">
       <Gutter>{position}</Gutter>
       {q.cover ? (
         <img src={q.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
@@ -933,13 +945,28 @@ function QueueRow({
           {q.title ?? `Anime ${q.animeId}`}
           <span className="ml-1.5 font-normal text-base-400">episode {q.episode}</span>
         </p>
-        {q.error && <p className="truncate text-xs text-recap">{q.error}</p>}
-        {q.release ? (
+        {q.error && q.state === 'failed' && <p className="truncate text-xs text-recap">{q.error}</p>}
+        {q.retryAt && (
+          <p className="truncate text-xs text-amber-300">
+            {retryNote(q)} · {q.error}
+          </p>
+        )}
+        {got ? (
+          <p className="truncate text-xs text-base-600" title={got.name}>
+            {got.name}
+          </p>
+        ) : q.release ? (
           <p className="truncate text-xs text-base-600" title={q.release}>
             Chosen: {q.release}
           </p>
         ) : (
           q.state === 'active' && <p className="text-xs text-base-400">Finding a release…</p>
+        )}
+        {got && (
+          <p className="mt-0.5 text-xs text-base-400">
+            <span className="font-medium text-base-100">{Math.round(got.percent)}% · </span>
+            {bytes(got.bytesOnDisk)} of {bytes(got.totalBytes)}
+          </p>
         )}
       </div>
 
@@ -966,14 +993,29 @@ function QueueRow({
             <FrontGlyph />
           </button>
         )}
-        <button
-          onClick={onRemove}
-          aria-label="Remove from queue"
-          className="grid size-7 shrink-0 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap"
-        >
-          ✕
-        </button>
+        {/* With a torrent behind it, removing takes the bytes too, so it asks first like any delete. */}
+        {got && actions.confirming === key ? (
+          <ConfirmDelete
+            size={got.bytesOnDisk}
+            actions={actions}
+            onDelete={() => {
+              onRemove()
+              actions.remove([got.infoHash])
+            }}
+          />
+        ) : (
+          <button
+            onClick={got ? () => actions.confirm(key) : onRemove}
+            aria-label="Remove from queue"
+            title={got ? 'Remove from the queue and delete what it got' : 'Remove from the queue'}
+            className={deleteButton}
+          >
+            ✕
+          </button>
+        )}
       </div>
+      </div>
+      {got && <ProgressBar value={got.percent} className="mt-2" />}
     </li>
   )
 }

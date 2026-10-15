@@ -223,12 +223,18 @@ func (d *Downloader) Wake() {
 	}
 }
 
-const (
+// Shrunk in tests.
+var (
 	queueIdle = 30 * time.Second
 
 	// A swarm with no seeders never finishes or errors. Ten idle minutes survives
 	// a bad patch on a slow line without a dead release holding up the queue.
 	queueStall = 10 * time.Minute
+
+	// A dead swarm is tried again later, twice, further apart each time: peers come and go, and a
+	// release that stalled at night often finishes in the morning.
+	queueRetries    = 2
+	queueRetryDelay = 5 * time.Minute
 )
 
 // Re-check cadence for torrents the engine was still verifying at startup.
@@ -328,9 +334,45 @@ func (d *Downloader) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-d.wake:
-		case <-time.After(queueIdle):
+		case <-time.After(d.idle(ctx)):
 		}
 	}
+}
+
+// idle is how long to wait when nothing is due: the usual pause, or until a deferred try comes round.
+func (d *Downloader) idle(ctx context.Context) time.Duration {
+	at, ok, err := d.store.NextRetry(ctx)
+	if err != nil || !ok {
+		return queueIdle
+	}
+	return max(time.Millisecond, min(queueIdle, time.Until(at)))
+}
+
+// swarmFailure: the release may be fine and its peers gone for now, which is what a later try is for.
+func swarmFailure(err error) bool {
+	var stall *torrent.StallError
+	return errors.Is(err, ErrSeedersSilent) || errors.As(err, &stall)
+}
+
+// describe says a failure in words the downloads list can show as they are.
+func describe(err error) error {
+	var stall *torrent.StallError
+	switch {
+	case errors.As(err, &stall):
+		minutes := max(1, int(stall.Quiet.Round(time.Minute).Minutes()))
+		return fmt.Errorf("no peers sent anything for %d minute%s; %.0f%% is on disk",
+			minutes, plural(minutes), stall.Percent)
+	case errors.Is(err, ErrSeedersSilent):
+		return ErrSeedersSilent
+	}
+	return err
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // Cancel drops a show's queued episodes and stops the one in flight; an empty
@@ -443,9 +485,22 @@ func (d *Downloader) step(parent context.Context) bool {
 			"anime", next.AnimeID, "episode", next.Episode)
 		err = nil
 
+	case err != nil && swarmFailure(err) && next.Attempts < queueRetries:
+		wait := queueRetryDelay * time.Duration(next.Attempts+1)
+		d.log.Info("the swarm gave nothing; trying again later",
+			"anime", next.AnimeID, "episode", next.Episode, "in", wait, "reason", err)
+		if err := d.store.Defer(parent, next.AnimeID, next.EpKey, describe(err), time.Now().Add(wait)); err != nil {
+			d.log.Warn("defer queued download", "err", err)
+		}
+		return true
+
 	case err != nil:
 		d.log.Warn("queued download failed",
 			"anime", next.AnimeID, "episode", next.Episode, "err", err)
+		err = describe(err)
+		if next.Attempts > 0 {
+			err = fmt.Errorf("gave up after %d tries: %w", next.Attempts+1, err)
+		}
 	}
 
 	if err := d.store.FinishQueued(parent, next.AnimeID, next.EpKey, err); err != nil {

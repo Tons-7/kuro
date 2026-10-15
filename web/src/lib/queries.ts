@@ -171,6 +171,8 @@ export interface Download {
   checking?: boolean
   mbps?: number
   peers?: number
+  /** The queue entry this torrent is the download of, paired client-side. */
+  queued?: Queued
 }
 
 export interface Queued {
@@ -184,6 +186,11 @@ export interface Queued {
   /** A release chosen by hand: downloaded instead of whatever the search would pick. */
   infoHash?: string
   release?: string
+  /** Tries that found a dead swarm, and when the next is due (unix ms); `error` says why it waits. */
+  attempts?: number
+  retryAt?: number
+  /** A failed entry's torrent, paired client-side: what it got before giving up. */
+  torrent?: Download
 }
 
 // Both are local, cheap reads: always fresh on arrival, polled fast while anything is moving.

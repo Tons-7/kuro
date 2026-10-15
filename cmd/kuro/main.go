@@ -373,7 +373,7 @@ func run(log *slog.Logger) error {
 	} else if matched+orphaned > 0 {
 		log.Info("torrents reconciled", "matched", matched, "orphaned", orphaned)
 	}
-	cache := library.NewCache(st, torrents, cfg.CacheDir, log)
+	cache := library.NewCache(st, torrents, cfg.CacheDir, log).WithClaimed(prefetcher.Claimed)
 	playback.WithCache(cache)
 	prefetcher.WithRoom(cache.MakeRoom)
 	scheduler.Add(jobs.Job{

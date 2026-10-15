@@ -29,8 +29,16 @@ type Cache struct {
 	absent map[string]*absence
 	// Unfinished downloads by their bytes, and when those last changed.
 	progress map[string]mark
+	// A torrent a fetch is still warming: its record comes once it starts, so it is not adopted first.
+	claimed func(hash string) bool
 
 	sweeping sync.Mutex
+}
+
+// WithClaimed tells adopt which torrents a fetch has in hand.
+func (c *Cache) WithClaimed(claimed func(hash string) bool) *Cache {
+	c.claimed = claimed
+	return c
 }
 
 type mark struct {
@@ -821,6 +829,10 @@ func (c *Cache) adopt(ctx context.Context) error {
 			continue
 		}
 		if _, ok := tracked[hash]; ok {
+			continue
+		}
+		// Adopted under no show while its fetch was still warming, it would stay nameless after a failure.
+		if c.claimed != nil && c.claimed(hash) {
 			continue
 		}
 		// Another install's or program's download would be swept as ours.

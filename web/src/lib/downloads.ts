@@ -14,17 +14,35 @@ export interface DownloadSections {
 }
 
 export function sortDownloads(items: Download[], queued: Queued[]): DownloadSections {
-  // A queue entry and its torrent are one download; the torrent wins.
-  const started = new Set(items.flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
+  // A queue entry and its torrent are one download: the torrent shows while the entry is alive; a failed
+  // entry shows instead, with the torrent's progress, rather than a red row plus a paused one under Waiting.
+  const entries = new Map(queued.map((q) => [`${q.animeId}-${q.epKey}`, q]))
+  const paired = items.map((d) => {
+    const q = d.episodes.map((e) => entries.get(`${d.animeId}-${e}`)).find(Boolean)
+    return q ? { ...d, queued: q } : d
+  })
+  const absorbed = (d: Download) => d.percent < 100 && !!d.paused && d.queued?.state === 'failed'
+  const started = new Set(paired.filter((d) => !absorbed(d)).flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
   const unstarted = (q: Queued) => !started.has(`${q.animeId}-${q.epKey}`)
   return {
-    active: items.filter((d) => d.percent < 100 && !d.paused),
-    held: items.filter((d) => d.percent < 100 && d.paused),
-    finished: items.filter((d) => d.percent >= 100),
+    active: paired.filter((d) => d.percent < 100 && !d.paused),
+    held: paired.filter((d) => d.percent < 100 && d.paused && !absorbed(d)),
+    finished: paired.filter((d) => d.percent >= 100),
     searching: queued.filter((q) => q.state === 'active' && unstarted(q)),
     waitingQueue: queued.filter((q) => q.state === 'pending' && unstarted(q)),
-    failed: queued.filter((q) => q.state === 'failed'),
+    failed: queued
+      .filter((q) => q.state === 'failed')
+      .map((q) => {
+        const torrent = paired.find((d) => absorbed(d) && d.queued === q)
+        return torrent ? { ...q, torrent } : q
+      }),
   }
+}
+
+/** "tries again at 03:41" for an entry waiting out a dead swarm, or nothing. */
+export function retryNote(q: Queued | undefined): string {
+  if (!q?.retryAt) return ''
+  return `tries again at ${new Date(q.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 }
 
 /** What a download is, for a person: the show and episode, or the release when no show is attached. */
@@ -49,10 +67,12 @@ export function downloadProgress(d: Download): string {
 
 /** The whole list as plain text, to paste into a bug report. */
 export function downloadsReport(s: DownloadSections): string {
+  const waiting = (q: Queued | undefined) => (q?.retryAt ? ` · ${retryNote(q)}: ${q.error}` : '')
   const queuedLine = (q: Queued) =>
-    `- ${q.title ?? `Anime ${q.animeId}`} episode ${q.episode}${q.error ? ` — ${q.error}` : ''}`
+    `- ${q.title ?? `Anime ${q.animeId}`} episode ${q.episode}` +
+    `${q.torrent ? ` — ${Math.round(q.torrent.percent)}% on disk` : ''}${q.error ? ` — ${q.error}` : ''}${waiting(q)}`
   const downloadLine = (d: Download) =>
-    `- ${downloadLabel(d)} — ${downloadProgress(d)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}` +
+    `- ${downloadLabel(d)} — ${downloadProgress(d)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}${waiting(d.queued)}` +
     // The release under the show; one under no show is already named by it.
     (d.title ? `\n  ${d.name}` : '')
   const section = (name: string, lines: string[]) => (lines.length ? [`${name} (${lines.length})`, ...lines, ''] : [])

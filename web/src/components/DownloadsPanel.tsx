@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { copyText, downloadProgress, downloadsReport, sortDownloads } from '../lib/downloads'
+import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads } from '../lib/downloads'
 import { cx } from '../lib/format'
 import { refreshDownloads, useDownloadQueue, useDownloads, type Download, type Queued } from '../lib/queries'
 import { ProgressBar, useDismiss } from './ui'
@@ -195,6 +195,7 @@ function ShowCard({ group }: { group: ShowGroup }) {
 // The episode and how it is doing; a release under no show has only the progress, its name being the card.
 function EpisodeLine({ d }: { d: Download }) {
   const label = d.title && d.episodes.length > 0 ? `Episode${d.episodes.length > 1 ? 's' : ''} ${d.episode}` : ''
+  const retry = retryNote(d.queued)
   return (
     <li title={d.name}>
       <p className="flex items-baseline gap-2 text-[11px]">
@@ -202,16 +203,23 @@ function EpisodeLine({ d }: { d: Download }) {
         {d.pinned && <span className="shrink-0 text-accent-300">playing</span>}
         <span className="min-w-0 truncate text-base-500">{downloadProgress(d)}</span>
       </p>
+      {retry && <p className="truncate text-[11px] text-amber-300">{retry} · {d.queued?.error}</p>}
       <ProgressBar value={d.percent} className="mt-1.5" />
     </li>
   )
 }
 
+// A failed entry carries what its torrent got before giving up.
 function QueuedLine({ q, note, failed }: Entry) {
+  const got = q!.torrent
   return (
-    <li className="flex items-baseline gap-2 text-[11px]">
-      <span className="shrink-0 font-medium text-base-200">Episode {q!.episode}</span>
-      {note && <span className={cx('min-w-0 truncate', failed ? 'text-recap' : 'text-base-500')}>{note}</span>}
+    <li>
+      <p className="flex items-baseline gap-2 text-[11px]">
+        <span className="shrink-0 font-medium text-base-200">Episode {q!.episode}</span>
+        {got && <span className="shrink-0 text-base-500">{Math.round(got.percent)}% on disk</span>}
+        {note && <span className={cx('min-w-0 truncate', failed ? 'text-recap' : 'text-base-500')}>{note}</span>}
+      </p>
+      {got && <ProgressBar value={got.percent} className="mt-1.5" />}
     </li>
   )
 }
