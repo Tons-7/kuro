@@ -1,8 +1,4 @@
-// Package proc ties the lifetime of spawned helpers to this process.
-//
-// kuro runs an ffmpeg per stream and mpv. A clean exit stops them, but a crash
-// or closing the window does not, and on Windows killing a parent leaves its
-// children running.
+// Package proc ties helpers' lifetime to kuro's: on Windows, killing a parent leaves its children running.
 package proc
 
 import (
@@ -37,8 +33,7 @@ func KillChildrenOnExit() error {
 		return err
 	}
 
-	// The handle is deliberately never closed: it has to outlive everything
-	// here, and the kernel drops it when the process goes.
+	// Never closed: it must outlive everything, and the kernel drops it with the process.
 	if err := windows.AssignProcessToJobObject(job, windows.CurrentProcess()); err != nil {
 		windows.CloseHandle(job)
 		return err

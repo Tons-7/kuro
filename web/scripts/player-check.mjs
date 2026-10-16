@@ -1,14 +1,10 @@
-// End-to-end check of the player fixes against a local-library episode:
-// subtitles keep filling, seeking past the produced segments keeps frames
-// coming, the scrubber drags, progress carries played time, a peek at the
-// ending does not count as watched, and the resume point survives it.
+// Player on a library episode: subtitles fill, far seeks play, scrubbing, played time, resume points.
 import { spawnSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
 const LIB = process.env.KURO_LIB
-// A real catalogue id, so the series page resolves; the file is assigned to it
-// as episode 1 for the duration of the run.
+// A real catalogue id, so the series page resolves; the file is its episode 1 for the run.
 const ANIME = Number(process.env.KURO_ANIME ?? 127230)
 const EP = 1
 const shots = process.env.SHOTS ?? '.'
@@ -65,8 +61,7 @@ const autoplay = await post('/api/prefs', { key: 'playback.autoplay', value: 'tr
 check(autoplay.ok, 'autoplay enabled for the run', JSON.stringify(autoplay.body))
 
 // ---------------------------------------------------------------- downloads
-// Seeded straight into the database, since nothing is really downloaded here.
-// Checked first: the sweep forgets rows the engine does not hold two minutes in.
+// Seeded into the database and checked first: the sweep forgets rows the engine lacks two minutes in.
 if (process.env.KURO_DB && process.env.KURO_REPO) {
   const seed = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.KURO_DB, '-anime', String(ANIME)], {
     cwd: process.env.KURO_REPO,
@@ -121,7 +116,8 @@ await page.screenshot({ path: `${shots}/downloads-kept.png` })
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('tab', { name: 'Quality' }).click()
 const autodelete = page.getByRole('combobox').filter({ has: page.locator('option[value="keep2"]') })
-check(await autodelete.isVisible().catch(() => false), 'auto-delete watched setting is offered')
+// The tab is in the URL now, so its panel renders a moment after the click.
+check(await autodelete.waitFor({ timeout: 5000 }).then(() => true, () => false), 'auto-delete watched setting is offered')
 check(!(await page.getByText('Also delete downloaded episodes').isVisible()), 'downloads toggle hidden while auto-delete is off')
 await autodelete.selectOption('keep2')
 const toggleShown = await page
@@ -136,8 +132,7 @@ await page.screenshot({ path: `${shots}/settings-cache.png` })
 await autodelete.selectOption('off')
 
 // ---------------------------------------------------------------- playback
-// Progress goes out by sendBeacon, whose body the request API cannot read;
-// record it at the source instead.
+// Progress goes by sendBeacon, whose body the request API can't read, so it is recorded at the source.
 await page.addInitScript(() => {
   window.__beacons = []
   const real = navigator.sendBeacon.bind(navigator)
@@ -211,6 +206,15 @@ s = await state()
 check(s.frames > f0, 'video frames advance while playing', `${f0} → ${s.frames}`)
 check(s.subCanvas >= 1, 'subtitle canvas attached', `canvases=${s.subCanvas}`)
 
+// The system's media controls (media keys, a headset, the lock screen) name the episode and know it plays.
+const session = await page.evaluate(() => ({
+  title: navigator.mediaSession?.metadata?.title ?? null,
+  artist: navigator.mediaSession?.metadata?.artist ?? null,
+  state: navigator.mediaSession?.playbackState ?? null,
+}))
+check(/^Episode \d/.test(session.title ?? '') && !!session.artist, 'the media controls name the episode and the show', JSON.stringify(session))
+check(session.state === 'playing', 'and know it is playing', String(session.state))
+
 // Dual-audio: the file has a Japanese and an English track. The server opens
 // on Japanese for a sub viewer, and switching re-encodes onto the other one.
 check(
@@ -266,9 +270,7 @@ const luminance = await page.evaluate(async () => {
 })
 check(luminance > 20, 'picture is not black after the seek', `mean luminance ${luminance.toFixed(1)}`)
 
-// Seek back near the start: the encoder is up near 2:30, so this is a backward
-// seek it must relaunch for rather than wait on the forward pass (the stall the
-// friend hit). It must deliver, not spin.
+// Back near the start, behind the encoder at 2:30: it must relaunch and deliver, not spin.
 await page.evaluate(() => {
   const v = document.querySelector('video')
   v.currentTime = 6
@@ -292,8 +294,7 @@ const bar = page.locator('.group\\/scrub')
 const box = await bar.boundingBox()
 check(!!box, 'scrubber present')
 
-// A library file is wholly on disk: the lighter, loaded part of the bar spans all of it, not just
-// the browser's window around the playhead.
+// A library file is all on disk, so the bar's loaded part spans it all, not just the playhead's window.
 const loadedBar = bar.locator('[data-loaded]').first()
 let loadedWidth = 0
 for (let i = 0; i < 30 && loadedWidth < 99; i++) {
@@ -375,9 +376,7 @@ check(
   JSON.stringify(detail.body.resume),
 )
 
-// Switching audio re-encodes onto the other track. Done last on this page: it
-// drops the session's segments, which the player recovers from by reloading
-// but a direct API poke does not, so nothing here demuxes the old stream after.
+// Switching audio drops the session's segments, so it goes last on this page.
 if (streamOpen?.id) {
   const sid = streamOpen.id
   const audio = (await api(`/api/stream/${sid}/audio?track=1`, { method: 'POST' })).body

@@ -27,7 +27,7 @@ func TestUnwatchRewindsProgressAndClearsLaterTicks(t *testing.T) {
 	}
 	for n := 1; n <= 5; n++ {
 		// One report may claim at most two minutes played; the flag needs half the episode.
-		for i := 0; i < 8; i++ {
+		for range 8 {
 			if _, err := s.SavePlayback(ctx, PlaybackState{AnimeID: 1, EpKey: epKey(n), Position: 1400, Duration: 1440, Played: 120}); err != nil {
 				t.Fatal(err)
 			}
@@ -189,17 +189,22 @@ func TestApplyRemoteCreatesAndUpdatesButNeverOverwritesLocalEdits(t *testing.T) 
 		t.Fatal("a remote change must be flagged for the other tracker")
 	}
 
-	// Unpushed: the remote must not roll it back.
-	changed, err = s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "CURRENT", Progress: 2})
-	if err != nil || changed {
-		t.Fatalf("changed=%v err=%v; a dirty row was overwritten", changed, err)
+	// Edited locally after the caller read the row: the remote must not roll it back.
+	read := entryOf(t, s, 1).Changed
+	if _, err := s.MarkWatched(ctx, 1, 5); err != nil {
+		t.Fatal(err)
 	}
-	if e := entryOf(t, s, 1); e.Progress != 4 {
+	changed, err = s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "CURRENT", Progress: 2, Since: read})
+	if err != nil || changed {
+		t.Fatalf("changed=%v err=%v; a later local edit was overwritten", changed, err)
+	}
+	if e := entryOf(t, s, 1); e.Progress != 5 {
 		t.Fatalf("progress = %d after refused apply", e.Progress)
 	}
 
-	s.ClearDirty(ctx, 1, 9, 1)
-	changed, err = s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "COMPLETED", Progress: 12, Score: 70, Repeat: 0})
+	// Still dirty for AniList, but read just now: the site's change lands.
+	changed, err = s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "COMPLETED", Progress: 12, Score: 70, Repeat: 0,
+		Since: entryOf(t, s, 1).Changed})
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
@@ -209,8 +214,7 @@ func TestApplyRemoteCreatesAndUpdatesButNeverOverwritesLocalEdits(t *testing.T) 
 	}
 
 	// Unknown vocabulary keeps the status rather than storing garbage.
-	s.ClearDirty(ctx, 1, 9, 2)
-	if _, err := s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "weird", Progress: 12, Score: 70}); err != nil {
+	if _, err := s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "weird", Progress: 12, Score: 70, Since: entryOf(t, s, 1).Changed}); err != nil {
 		t.Fatal(err)
 	}
 	if e := entryOf(t, s, 1); e.Status != "COMPLETED" {

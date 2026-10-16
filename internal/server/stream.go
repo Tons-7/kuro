@@ -88,10 +88,7 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		s.downloader.Hold(id)
 	}
 
-	// The track follows the sub/dub choice on a fresh session and when the
-	// choice changes; a reopen with the same choice keeps the track it is on so
-	// its segments are not dropped mid-load. The player's menu (?track=) always
-	// wins. Settled before the encoder starts, so it is not restarted.
+	// The sub/dub choice sets the track when new or changed; settled before encoding, and ?track= wins.
 	if want := r.URL.Query().Get("audio"); session.ApplyAudioPreference(want) {
 		session.SetAudioTrack(transcode.ChooseAudio(session.Info, want))
 	}
@@ -132,9 +129,7 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) prestart(session *transcode.Session, animeID, episode int) {
-	// A head start only: an already-open session is encoding for whoever holds
-	// it, and a pass aimed at a stale resume point must never displace the
-	// segment the player itself asks for next. Prestart refuses both.
+	// A head start only: Prestart never displaces an open session's pass or the player's next segment.
 	ctx, cancel := detached(30 * time.Second)
 	defer cancel()
 
@@ -196,8 +191,7 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 		ctx, cancel := detached(5 * time.Minute)
 		defer cancel()
 
-		// Same reason as subtitles: attachments are read by demuxing the file,
-		// which over the stream endpoint means downloading all of it.
+		// As with subtitles: demuxing attachments over the stream endpoint downloads the whole file.
 		found, err := s.subtitles.ExtractFonts(ctx, s.readable(ctx, session), s.streamDir(id), session.Info.Attachments)
 		if err != nil {
 			s.log.Warn("extract fonts", "session", id, "err", err)
@@ -210,8 +204,7 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 		}
 
 		s.fontsMu.Lock()
-		// The session closed while this ran, so its directory and these files
-		// are gone; recording them would serve paths that 404 for ever.
+		// The session closed meanwhile, taking these files; recording them would serve 404s.
 		if _, live := s.fontJobs[id]; live {
 			s.fonts[id] = fonts
 			delete(s.fontJobs, id)
@@ -510,9 +503,7 @@ func (s *Server) streamThumbnails(w http.ResponseWriter, r *http.Request) {
 
 	dir := s.thumbDir(r.Context(), session)
 	sheet, ready := s.thumbs.Read(dir, session.Info.Duration, aspectOf(session.Info))
-	// Only from the whole file on disk: sampling through the engine would fetch
-	// the episode, and a part-downloaded one is holes, which read as black.
-	// A library file is its own readable path; a torrent's is the cache file.
+	// Only from the whole file on disk: through the engine it would fetch, and holes read as black.
 	if !ready && s.sourceComplete(r.Context(), session) {
 		if local := s.readable(r.Context(), session); !isTorrentSource(local) {
 			s.thumbs.Generate(local, dir, session.Info.Duration, aspectOf(session.Info))
@@ -531,8 +522,6 @@ func (s *Server) streamThumbSheet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Content-addressed by session, and a session is one episode.
-	w.Header().Set("Cache-Control", "private, max-age=3600")
 	serveFile(w, r, path, "image/jpeg")
 }
 
@@ -657,8 +646,7 @@ func (s *Server) streamFont(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only a bare filename is accepted; anything with a path separator would
-	// let a request walk out of the font directory.
+	// A bare filename only, so no request walks out of the font directory.
 	name := r.PathValue("font")
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 		http.NotFound(w, r)
@@ -667,9 +655,22 @@ func (s *Server) streamFont(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, filepath.Join(s.streamDir(session.ID), "fonts", name), "font/ttf")
 }
 
-// SessionGone forgets what was extracted for a session the reaper removed:
-// its folder is deleted, and a rebuild under the same id must extract again
-// rather than serve font URLs that 404.
+// SessionIdle releases a session the reaper took, suspending the episode only if nothing else needs it.
+func (s *Server) SessionIdle(id string) {
+	s.downloader.Release(id)
+	s.SessionGone(id)
+	animeID, episode, ok := parseSessionID(id)
+	if !ok || s.playback == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if !s.stillReading(ctx, animeID, episode) && !s.downloader.Downloading(id) {
+		s.playback.Suspend(ctx, animeID, episode)
+	}
+}
+
+// SessionGone forgets a removed session's extractions, so a rebuild extracts again instead of serving 404s.
 func (s *Server) SessionGone(id string) {
 	s.fontsMu.Lock()
 	delete(s.fonts, id)
@@ -689,13 +690,10 @@ func (s *Server) streamClose(w http.ResponseWriter, r *http.Request) {
 
 	if closed {
 		s.downloader.Release(id)
-		// Closing removes the session directory, so the extracted fonts are gone
-		// and the next open has to find them again. Dropping the job marker too
-		// stops an extractor still running from writing the dead paths back.
+		// Closing removes the directory and its fonts; dropping the marker stops a running extractor too.
 		s.SessionGone(id)
 	}
-	// Not if the queue is fetching this same episode: closing the player is not
-	// a reason to stop a download that was asked for separately.
+	// Not if the queue fetches this episode: closing the player doesn't stop a separate download.
 	if animeID, episode, ok := parseSessionID(id); closed && ok && s.playback != nil &&
 		!s.stillReading(r.Context(), animeID, episode) && !s.downloader.Downloading(id) {
 		s.playback.Suspend(r.Context(), animeID, episode)
@@ -724,11 +722,7 @@ func (s *Server) stillReading(ctx context.Context, animeID, episode int) bool {
 	return false
 }
 
-// Session ids are "<anime>-<episode>". streamOpen builds them and
-// parseSessionID reads them back.
-// streamAudio switches the track of a running session: the player re-reads
-// the playlist from where it is, and the encoder resumes there with the other
-// track. Every segment already written carried the old one, so they go.
+// streamAudio switches a running session's track; segments written with the old one are dropped.
 func (s *Server) streamAudio(w http.ResponseWriter, r *http.Request) {
 	if s.streams == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "transcoder unavailable"})
@@ -782,6 +776,7 @@ func (s *Server) streamSound(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"sound": session.Sound(), "changed": changed})
 }
 
+// Session ids are "<anime>-<episode>"; parseSessionID reads them back.
 func sessionID(animeID, episode int) string {
 	return fmt.Sprintf("%d-%d", animeID, episode)
 }

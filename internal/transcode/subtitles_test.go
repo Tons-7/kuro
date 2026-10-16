@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// The renderer is libass. A .srt handed to it loads without error and draws
-// nothing, which looks exactly like having no subtitles.
+// libass loads a .srt without error and draws nothing, so everything becomes ASS.
 func TestEveryTextFormatIsWrittenAsASS(t *testing.T) {
 	for _, codec := range []string{
 		"ass", "ssa", "subrip", "srt", "webvtt", "mov_text",
@@ -23,8 +22,7 @@ func TestEveryTextFormatIsWrittenAsASS(t *testing.T) {
 	}
 }
 
-// Only ASS keeps its own styling; everything else is converted, so copying it
-// verbatim would write a file the renderer cannot read.
+// Only ASS is copied as it is; everything else is converted for the renderer.
 func TestOnlyASSIsCopiedVerbatim(t *testing.T) {
 	for _, codec := range []string{"ass", "ssa"} {
 		if !isASS(codec) {
@@ -38,8 +36,7 @@ func TestOnlyASSIsCopiedVerbatim(t *testing.T) {
 	}
 }
 
-// A picture of text cannot become text. Offering it as a track that renders
-// nothing is worse than saying it is not available.
+// Picture subtitles can't become text, so they're reported unavailable, not offered blank.
 func TestBitmapFormatsAreNotRenderable(t *testing.T) {
 	for _, codec := range []string{
 		"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvdsub", "dvb_subtitle", "xsub",
@@ -70,9 +67,7 @@ func TestForgetDropsOnlyThatSession(t *testing.T) {
 	}
 }
 
-// Closing a session removes its directory and the id is the episode, so the
-// next play looks up the same path. A remembered extraction must not hand back
-// a path whose file was deleted with the directory.
+// A remembered extraction must not hand back a path deleted with its session's directory.
 func TestExtractRedoesWorkWhenTheFileIsGone(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	clip := testMKV(t, ffmpeg, 6)

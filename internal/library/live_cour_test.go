@@ -19,9 +19,7 @@ import (
 	"kuro/internal/store"
 )
 
-// Currently airing, chosen for the shapes that break matching: long runs with
-// absolute numbering, later cours named by subtitle, numbered sequels, and
-// ordinary first cours as a control.
+// Airing shows in the shapes that break matching: absolute runs, subtitled cours, numbered sequels.
 var airing = []struct {
 	id      int
 	episode int
@@ -41,9 +39,7 @@ var airing = []struct {
 	{196187, 9, "Super no Ura de Yani Suu Futari"},
 }
 
-// TestLiveAiringShowsResolveARelease seeds each show through the same importer,
-// relation walk and enricher the app runs, then asks the real indexers. A pick
-// naming another cour counts as a miss, not a hit.
+// Each show, seeded as the app does, resolves a release of its own cour from the real indexers.
 // Opt-in: KURO_LIVE=1 go test ./internal/library -run LiveAiring -v
 func TestLiveAiringShowsResolveARelease(t *testing.T) {
 	if os.Getenv("KURO_LIVE") == "" {
@@ -94,8 +90,7 @@ func TestLiveAiringShowsResolveARelease(t *testing.T) {
 	}
 }
 
-// liveSources reads the sites to search from KURO_NYAA and KURO_TOKYOTOSHO, so
-// no site is named in the repository.
+// liveSources reads the sites from KURO_NYAA and KURO_TOKYOTOSHO, so none is named in the repo.
 func liveSources(t *testing.T) indexer.Source {
 	t.Helper()
 	var sites []indexer.Source

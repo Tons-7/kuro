@@ -1,10 +1,5 @@
-// Plays real releases of one show and reports what subtitles each carries and
-// whether any render. For "this show had no subtitles" reports.
-//
-//   KURO_EXTRA_CONFIG='[[indexer]] ...' KURO_SHOW='Some title' EPISODES=1,2 \
-//     node scripts/run-player-check.mjs subs-live-check.mjs
-//
-// Indexer sites come from the environment, never from this file.
+// Reports the subtitles each real release of a show carries and whether they render.
+//   KURO_EXTRA_CONFIG='[[indexer]] ...' KURO_SHOW='Some title' EPISODES=1,2 node scripts/run-player-check.mjs subs-live-check.mjs
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'

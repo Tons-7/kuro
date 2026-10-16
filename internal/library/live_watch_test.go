@@ -11,9 +11,7 @@ import (
 	"kuro/internal/anilist"
 )
 
-// TestLiveWatcherAnnouncesTheEpisodeThatAired follows Bleach TYBW: The Calamity
-// at progress 6 and polls the real indexers: episode 7 (aired) is announced
-// with a release of this cour, episode 8 (not yet) is not.
+// At progress 6 of TYBW: The Calamity, aired episode 7 is announced and episode 8 is not.
 // Opt-in: KURO_LIVE=1 KURO_NYAA=… go test ./internal/library -run LiveWatcher -v
 func TestLiveWatcherAnnouncesTheEpisodeThatAired(t *testing.T) {
 	if os.Getenv("KURO_LIVE") == "" {

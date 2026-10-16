@@ -56,8 +56,7 @@ func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 	if err := os.WriteFile(subPath, []byte(testASS), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// -shortest counts the subtitle track too, so a clip is only as long as
-	// its last dialogue line unless the track is padded out.
+	// -shortest counts subtitles too, so the track is padded or the clip ends at its last line.
 	if seconds > 10 {
 		pad := fmt.Sprintf("Dialogue: 0,0:00:%02d.00,0:00:%02d.00,Default,tail\n", seconds-2, seconds-1)
 		if err := os.WriteFile(subPath, []byte(testASS+pad), 0o644); err != nil {
@@ -157,8 +156,7 @@ func TestPlanCopiesPlayableStreams(t *testing.T) {
 }
 
 func TestPlanReEncodesUnplayableStreams(t *testing.T) {
-	// 10-bit H.264 has no hardware decoder on any GPU, and HEVC depends on a
-	// platform extension that cannot be assumed.
+	// No GPU decodes 10-bit H.264, and HEVC needs a platform extension that can't be assumed.
 	tests := []struct {
 		name  string
 		video Stream
@@ -205,8 +203,7 @@ func TestSegmentsAreProducedAndSeekable(t *testing.T) {
 	}
 	defer m.Close("test")
 
-	// The playlist covers the whole duration up front so the player has a real
-	// seek bar before anything has been encoded.
+	// The playlist covers the whole duration up front, so the seek bar is real at once.
 	playlist := session.Playlist()
 	if !strings.Contains(playlist, "#EXT-X-ENDLIST") {
 		t.Error("playlist is not marked complete")
@@ -226,8 +223,7 @@ func TestSegmentsAreProducedAndSeekable(t *testing.T) {
 		t.Fatal("segment or init file missing")
 	}
 
-	// Jumping ahead is the real test: the encoder has to restart at an offset
-	// rather than grind through everything in between.
+	// Jumping ahead: the encoder restarts at an offset instead of grinding through.
 	start := time.Now()
 	last := session.Segments - 1
 	if _, err := session.WaitSegment(ctx, last, 90*time.Second); err != nil {
@@ -258,8 +254,7 @@ func TestSubtitleAndFontExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Styling has to survive: converting to WebVTT would discard it, which is
-	// most of the point of anime subtitles.
+	// Styling survives, which WebVTT would discard.
 	for _, want := range []string{"[V4+ Styles]", "styled line one"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("extracted subtitle missing %q", want)
@@ -282,8 +277,7 @@ func TestSubtitleAndFontExtraction(t *testing.T) {
 	}
 }
 
-// Attachment names come from whoever made the release; one naming a path
-// outside the fonts folder must land inside it.
+// An attachment named for a path outside the fonts folder still lands inside it.
 func TestExtractFontsKeepsHostileNamesInside(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	root := t.TempDir()
@@ -376,8 +370,7 @@ func TestH264OutputIsAlwaysEightBit(t *testing.T) {
 	}
 }
 
-// Hardware encoders ignore -force_key_frames, so segment boundaries have to be
-// set with the GOP interval or they drift out of alignment.
+// Hardware encoders ignore -force_key_frames, so the GOP interval sets segment boundaries.
 func TestKeyframeFlagsMatchEncoderKind(t *testing.T) {
 	base := &Session{Info: &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10}}}
 

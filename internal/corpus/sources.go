@@ -1,13 +1,4 @@
-// Package corpus builds the local index of every anime and every name it goes
-// by, so a release can be matched offline.
-//
-// Three sources, each doing the one job it is best at:
-//
-//	manami     one-time seed, ~20,700 anime with ~9 synonyms each. Frozen since
-//	           July 2026, so it never learns about a new season.
-//	animeApi   daily rebuild, ids only. This is how new anime are discovered.
-//	AniList    authoritative titles, fetched 50 ids at a time for whatever the
-//	           other two do not already cover.
+// Package corpus indexes every anime's names for offline matching: manami seed, animeApi ids, AniList titles.
 package corpus
 
 import (
@@ -105,8 +96,7 @@ type manamiRecord struct {
 	} `json:"animeSeason"`
 }
 
-// Manami streams the seed database. Records without an AniList id are skipped,
-// since the app is keyed on AniList throughout.
+// Manami streams the seed database, skipping records without an AniList id.
 func (f *Fetcher) Manami(ctx context.Context, yield func(Entry) error) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()

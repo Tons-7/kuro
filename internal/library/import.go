@@ -1,5 +1,4 @@
-// Package library turns AniList responses into domain rows and hands them to
-// the store. It holds no SQL and no HTTP concerns.
+// Package library turns tracker and indexer answers into what the store keeps; no SQL, no HTTP.
 package library
 
 import (
@@ -18,8 +17,7 @@ type Importer struct {
 	log    *slog.Logger
 	recent recentIDs
 
-	// OnNewTitles runs when Remember adds anime the corpus lacked, so the
-	// matcher's index can be rebuilt to include them.
+	// OnNewTitles runs when Remember adds anime the corpus lacked, to rebuild the matcher's index.
 	OnNewTitles func()
 }
 
@@ -27,8 +25,7 @@ func NewImporter(s *store.Store, al *anilist.Client, log *slog.Logger) *Importer
 	return &Importer{store: s, al: al, log: log}
 }
 
-// Run mirrors the whole list locally. Remote state wins here; the mode decides
-// whether local-only entries survive.
+// Run mirrors the whole list, remote winning; the mode decides whether local-only entries survive.
 func (i *Importer) Run(ctx context.Context, userID int, mode store.ImportMode) (store.ImportResult, error) {
 	entries, err := i.al.List(ctx, userID)
 	if err != nil {
@@ -50,11 +47,9 @@ func (i *Importer) Run(ctx context.Context, userID int, mode store.ImportMode) (
 	return res, nil
 }
 
-// Hydrate fills in anime the graph references but nobody has imported, which
-// otherwise appear as rows with an id and no title.
+// Hydrate fills in anime the graph references but nobody imported, else rows with an id and no title.
 func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
-	// MediaByIDs takes one AniList page, and drops the rest without a word: a
-	// franchise of 61 films came back with 11 rows still bare.
+	// MediaByIDs takes one page and silently drops the rest, so this goes in chunks.
 	const perPage = 50
 
 	var saved int
@@ -99,8 +94,7 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 	return saved, nil
 }
 
-// Save stores media the caller already has, so viewing a page keeps the local
-// record current instead of refetching later.
+// Save stores media the caller has, so viewing a page keeps the record current without a refetch.
 func (i *Importer) Save(ctx context.Context, media []anilist.Media) (int, error) {
 	// A saved answer stamped synced-now would pass for current.
 	if len(media) == 0 || anilist.UsedSaved(ctx) {

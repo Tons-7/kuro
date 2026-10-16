@@ -8,7 +8,7 @@ import {
   useNavigate,
   useNavigationType,
 } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { api, LIST_STATUSES, statusLabel, type LibraryItem } from '../lib/api'
 import { cx } from '../lib/format'
 import { usePrefs, useSetPref, useSetup } from '../lib/queries'
@@ -31,8 +31,7 @@ const TABS = [
 ]
 
 export function Layout() {
-  // The watch page manages its own width so the player can run edge to edge on
-  // a phone; everything else gets the padded column.
+  // The watch page sets its own width, so the player runs edge to edge on a phone.
   const fullBleed = useMatch('/watch/:animeId/:episode') !== null
 
   // Keyed on the path so each page animates in. Short enough that navigation
@@ -48,9 +47,7 @@ export function Layout() {
     if (navigation !== 'POP') window.scrollTo(0, 0)
   }, [pathname, navigation])
 
-  // A fresh install has no torrent engine and no sites, so nudge to setup
-  // once — not on every route, or a local-only or failed install could reach
-  // nothing.
+  // A fresh install goes to setup once, not on every route, or a local-only install reaches nothing.
   const setup = useSetup()
   const navigate = useNavigate()
   const nudged = useRef(false)
@@ -74,7 +71,7 @@ export function Layout() {
         <Unpaired />
         <AccessRequests />
         {/* Keyed by page, so leaving a broken one clears it. */}
-        <ErrorBoundary key={pageKey}>
+        <ErrorBoundary key={pageKey} resetKey={pathname}>
           <Outlet />
         </ErrorBoundary>
       </main>
@@ -112,12 +109,10 @@ function Header() {
           <span className="size-1.5 rounded-full bg-accent-500 transition-colors group-hover:bg-accent-400" />
         </Link>
 
-        {/* A rule rather than more space. Set at the same weight as the links
-            and separated only by a gap, the name read as the first of six. */}
+        {/* A rule, or the name reads as the first of six links. */}
         <span className="hidden h-6 w-px shrink-0 bg-base-800 sm:block" />
 
-        {/* A solid, lighter surface: base-900/70 over base-950 is nearly the
-            background, so the group read as loose text rather than a control. */}
+        {/* A solid, lighter surface, so the group reads as a control, not loose text. */}
         <nav className="hidden items-center gap-0.5 rounded-full bg-base-800 p-1 ring-1 ring-white/5 sm:flex">
           <Tabs />
         </nav>
@@ -136,8 +131,7 @@ function Header() {
         <Shortcuts />
       </div>
 
-      {/* On a phone the links don't fit beside search, pushing everything to
-          their right off-screen. Below sm they get their own row. */}
+      {/* Below sm the links get their own row; beside search they push the rest off-screen. */}
       <nav className="no-scrollbar mx-4 mb-2 flex items-center gap-0.5 overflow-x-auto rounded-full bg-base-800 p-1 ring-1 ring-white/5 sm:hidden">
         <Tabs />
       </nav>
@@ -157,7 +151,7 @@ function BackButton() {
     </svg>
   )
   const cls =
-    'grid size-9 shrink-0 place-items-center rounded-full text-base-300 transition-colors hover:bg-base-800 hover:text-white disabled:opacity-25 disabled:hover:bg-transparent'
+    'tap relative grid size-9 shrink-0 place-items-center rounded-full text-base-300 transition-colors hover:bg-base-800 hover:text-white disabled:opacity-25 disabled:hover:bg-transparent'
   return (
     <div className="flex shrink-0 items-center">
       <button type="button" onClick={() => navigate(-1)} disabled={idx === 0} aria-label="Back" title="Back" className={cls}>
@@ -225,7 +219,7 @@ function SearchBox() {
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
   const close = useCallback(() => setOpen(false), [])
-  const box = useDismiss<HTMLFormElement>(close)
+  const box = useDismiss<HTMLFormElement>(close, open)
   const local = useQuery({
     enabled: q.length >= 2,
     queryKey: ['search', 'local', q],
@@ -303,7 +297,7 @@ function SearchBox() {
               setValue('')
               document.getElementById('kuro-search')?.focus()
             }}
-            className="absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded text-base-500 transition-colors hover:text-base-100"
+            className="tap absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded text-base-500 transition-colors hover:text-base-100"
           >
             <svg viewBox="0 0 20 20" aria-hidden className="size-3.5">
               <path
@@ -373,26 +367,17 @@ function SearchBox() {
   )
 }
 
-/**
- * English vs romaji titles — worth flipping mid-browse. Titles resolve
- * server-side, so every list has to be refetched.
- */
+/** English vs romaji titles; they resolve server-side, so every list is refetched. */
 function TitleLanguage() {
   const prefs = usePrefs()
   const setPref = useSetPref()
-  const qc = useQueryClient()
 
   const mode = prefs.data?.effective['display.titles'] ?? 'english'
 
   const choose = (next: string) => {
     if (next === mode) return
-    setPref.mutate(
-      { key: 'display.titles', value: next },
-      {
-        // Titles are picked server-side on nearly every list, so all of it.
-        onSuccess: () => void qc.invalidateQueries(),
-      },
-    )
+    // useSetPref refreshes every query for this key, as titles are picked server-side.
+    setPref.mutate({ key: 'display.titles', value: next })
   }
 
   return (
@@ -430,7 +415,7 @@ const MENU_ITEMS = [
 function ProfileMenu() {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
 
   return (
     <div className="relative shrink-0" ref={ref}>
@@ -440,7 +425,7 @@ function ProfileMenu() {
         aria-expanded={open}
         aria-label="Profile and settings"
         onClick={() => setOpen((v) => !v)}
-        className="grid size-9 place-items-center rounded-full bg-base-800 text-sm font-medium text-base-200 transition-colors hover:bg-base-700"
+        className="tap relative grid size-9 place-items-center rounded-full bg-base-800 text-sm font-medium text-base-200 transition-colors hover:bg-base-700"
       >
         <UserIcon />
       </button>
@@ -450,8 +435,7 @@ function ProfileMenu() {
           role="menu"
           className="absolute right-0 z-50 mt-2 w-64 origin-top-right animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1.5 shadow-panel"
         >
-          {/* The list statuses are the reason this menu exists, so they read as
-              a set rather than as eleven identical rows with the rest. */}
+          {/* The list statuses read as a set, the reason this menu exists. */}
           <p className="px-2 pt-1 pb-1.5 text-[11px] font-medium tracking-wide text-base-500 uppercase">
             My list
           </p>

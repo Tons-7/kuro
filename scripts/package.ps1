@@ -5,9 +5,11 @@ Builds the zips that get sent to someone else.
 .DESCRIPTION
 Two artifacts, because installing and updating want different things:
 
-  kuro-<version>.zip         kuro.exe and a README. First install.
-  kuro-<version>-update.zip  kuro.exe alone. What the in-app updater fetches.
-  SHA256SUMS.txt             The updater refuses a zip that does not match.
+  kuro-<version>.zip             kuro.exe and a README. First install.
+  kuro-<version>-update.zip      kuro.exe alone. What the in-app updater fetches.
+  kuro-<version>-<os>-<arch>.zip The macOS and Linux binaries, which their updaters fetch.
+  SHA256SUMS.txt                 The updater refuses a zip that does not match.
+  SHA256SUMS.txt.sig             Its ed25519 signature; the updater refuses a release without one.
 
 Neither carries bin/, cache/ or config.toml. bin/ is over half a gigabyte and
 the app downloads it itself on first run; cache/ is downloaded episodes; and
@@ -27,6 +29,11 @@ see it as newer.
 Creates the GitHub release (tag v<version>) with the zips attached, which is
 what every installed copy checks. Needs `gh auth login` once.
 
+.PARAMETER SigningKey
+The release key's file (a hex ed25519 seed), kept outside the repository.
+Default: %LOCALAPPDATA%\kuro-release\update-signing.key. Back it up: without it
+no installed copy will accept another update.
+
 .EXAMPLE
 ./scripts/package.ps1
 ./scripts/package.ps1 -Version 2026.08.27 -Publish
@@ -36,7 +43,8 @@ param(
     [string]$Version,
     [string]$OutDir,
     [switch]$Publish,
-    [string]$Notes
+    [string]$Notes,
+    [string]$SigningKey
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +52,11 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 if (-not $Version) { $Version = Get-Date -Format 'yyyy.MM.dd' }
 if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
+if (-not $SigningKey) { $SigningKey = Join-Path $env:LOCALAPPDATA 'kuro-release\update-signing.key' }
+if (-not (Test-Path $SigningKey)) { throw "release key not found at $SigningKey; every installed copy refuses an unsigned release" }
+
+# The platforms build.sh users run; their updaters look for these zips by name.
+$platforms = @('darwin/arm64', 'darwin/amd64', 'linux/amd64', 'linux/arm64')
 
 function Write-Step($message) { Write-Host "==> $message" -ForegroundColor Cyan }
 function Write-Note($message) { Write-Host "    $message" -ForegroundColor DarkGray }
@@ -109,27 +122,56 @@ try {
     Compress-Archive -Path $exe -DestinationPath $updateZip
     Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $updateZip -Leaf), ((Get-Item $updateZip).Length / 1MB))
 
+    $platformZips = @()
+    foreach ($platform in $platforms) {
+        $goos, $goarch = $platform -split '/'
+        Write-Step "$goos/$goarch"
+        $dir = Join-Path $staging "$goos-$goarch"
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        & (Join-Path $PSScriptRoot 'build.ps1') -SkipWeb -Target $platform -Version $Version -Out (Join-Path $dir 'kuro')
+        if ($LASTEXITCODE -ne 0) { throw "build for $platform failed" }
+        Set-Content -Path (Join-Path $dir 'README.txt') -Value $readme -Encoding utf8
+        Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $dir 'LICENSE.md')
+        $zip = Join-Path $OutDir "kuro-$Version-$goos-$goarch.zip"
+        Remove-Item $zip -ErrorAction SilentlyContinue
+        Compress-Archive -Path (Join-Path $dir '*') -DestinationPath $zip
+        Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
+        $platformZips += $zip
+    }
+
     Write-Step 'checksums'
     $sums = Join-Path $OutDir 'SHA256SUMS.txt'
-    $lines = foreach ($zip in @($fullZip, $updateZip)) {
+    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips) {
         "{0}  {1}" -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), (Split-Path $zip -Leaf)
     }
     # LF and no BOM: the updater reads it byte for byte.
     [IO.File]::WriteAllText($sums, ($lines -join "`n") + "`n")
     Write-Note (Split-Path $sums -Leaf)
+
+    Write-Step 'sign'
+    $sig = "$sums.sig"
+    go -C $root run ./scripts/signsums -key $SigningKey -sums $sums -out $sig
+    if ($LASTEXITCODE -ne 0) { throw 'signing failed' }
 } finally {
     Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
 }
 
-# A secret shipped by accident cannot be unshipped, so say plainly what went in.
+# A secret shipped by accident can't be unshipped: stop on any zip entry but the program, README, license.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 Write-Host ''
-Get-ChildItem $OutDir -Filter "kuro-$Version*.zip" | ForEach-Object {
-    Write-Host "  $($_.Name)" -ForegroundColor Green
-    Expand-Archive -Path $_.FullName -DestinationPath (Join-Path $staging 'verify') -Force
+$allowed = @('kuro.exe', 'kuro', 'README.txt', 'LICENSE.md')
+foreach ($zip in @($fullZip, $updateZip) + $platformZips) {
+    Write-Host "  $(Split-Path $zip -Leaf)" -ForegroundColor Green
+    $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        foreach ($entry in $archive.Entries) {
+            Write-Host "      $($entry.FullName)" -ForegroundColor DarkGray
+            if ($allowed -notcontains $entry.FullName) { throw "$(Split-Path $zip -Leaf) holds $($entry.FullName), which must not ship" }
+        }
+    } finally {
+        $archive.Dispose()
+    }
 }
-Get-ChildItem (Join-Path $staging 'verify') -Recurse -File -ErrorAction SilentlyContinue |
-    ForEach-Object { Write-Host "      $($_.Name)" -ForegroundColor DarkGray }
-Remove-Item -Recurse -Force (Join-Path $staging 'verify') -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host "out: $OutDir" -ForegroundColor DarkGray
@@ -137,7 +179,7 @@ Write-Host "out: $OutDir" -ForegroundColor DarkGray
 if ($Publish) {
     Write-Step "publish v$Version"
     if (-not $Notes) { $Notes = "kuro $Version" }
-    gh release create "v$Version" $fullZip $updateZip $sums `
+    gh release create "v$Version" $fullZip $updateZip @platformZips $sums $sig `
         --repo Tons-7/kuro --title "kuro $Version" --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
     Write-Host "published https://github.com/Tons-7/kuro/releases/tag/v$Version" -ForegroundColor Green

@@ -27,8 +27,7 @@ func packStore(t *testing.T) *Store {
 	return st
 }
 
-// Keeping one episode of a pack must not keep the other two, and the pack row
-// reads as kept while any of them is.
+// Keeping one episode of a pack keeps only it; the pack reads kept while any episode is.
 func TestKeepFileIsPerEpisode(t *testing.T) {
 	st := packStore(t)
 	ctx := context.Background()

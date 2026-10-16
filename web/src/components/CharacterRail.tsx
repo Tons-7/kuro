@@ -41,11 +41,11 @@ export function CharacterRail({
   title?: string
 }) {
   const { data, isPending } = useCharacters(animeId)
-  const prefs = usePrefs()
+  // The show's own sub/dub choice, over the global one.
+  const prefs = usePrefs(animeId)
   const [expanded, setExpanded] = useState(false)
 
-  // Follow whichever performance is being watched, falling back to the original
-  // cast — most shows were never dubbed at all.
+  // Follow the performance being watched, else the original cast (most shows were never dubbed).
   const dubbed = prefs.data?.effective['audio.prefer'] === 'dub'
   const voiceOf = (c: Character) => {
     const voices = c.voices ?? []
@@ -53,8 +53,7 @@ export function CharacterRail({
     return voices[0]
   }
 
-  // A long cast still needs a cap — Conan lists two thousand — but the rail
-  // scrolls, so the first pass can be generous.
+  // Capped (Conan lists two thousand), but generously, as the rail scrolls.
   const cast = data?.items ?? []
   const shown = expanded ? cast.slice(0, 120) : cast.slice(0, limit)
 
@@ -83,8 +82,7 @@ export function CharacterRail({
         )
       }
     >
-      {/* One portrait each, in the app's poster shape, with the actor's face as
-          a small avatar rather than a second full-height photo. */}
+      {/* One poster-shaped portrait each, the actor's face a small avatar on it. */}
       {shown.map((c) => {
         const voice = voiceOf(c)
         return (
@@ -95,8 +93,7 @@ export function CharacterRail({
               ) : (
                 <div className="h-[174px] w-[116px] bg-base-850" />
               )}
-              {/* Only "Main" earns a badge: SUPPORTING on nine cards in ten
-                  says nothing. */}
+              {/* Only "Main" earns a badge: SUPPORTING on nine cards in ten says nothing. */}
               {c.role?.toUpperCase() === 'MAIN' && (
                 <span className="absolute top-1.5 left-1.5 rounded-full bg-accent-500/85 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
                   Main

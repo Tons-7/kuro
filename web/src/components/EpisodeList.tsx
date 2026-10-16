@@ -4,15 +4,12 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { api, hasFiller, type Episode } from '../lib/api'
 import { clockTime, cx, relativeTime } from '../lib/format'
-import { refreshDownloads, useDownloadQueue, useDownloads } from '../lib/queries'
-import { Badge, useDismiss } from './ui'
+import { refreshDownloads, refreshListState, useDownloadQueue, useDownloads } from '../lib/queries'
+import { Badge, ConfirmInline, inputClass, TextInput, useDismiss } from './ui'
 
 const PAGE_SIZE = 50
 
-/**
- * Only filler and recap get a badge; marking canon too would bury the two rows
- * that matter. An episode can be both.
- */
+/** Only filler and recap get a badge (an episode can be both); a canon badge would bury them. */
 export function EpisodeKind({ episode }: { episode: Episode }) {
   const filler = hasFiller(episode)
   if (!filler && !episode.recap) return null
@@ -74,12 +71,17 @@ export function EpisodeList({
   const downloads = useDownloads()
   const busy = useMemo(() => {
     const set = new Set<number>()
-    for (const q of queue.data?.items ?? []) if (q.animeId === animeId) set.add(q.episode)
+    // A failed entry is not busy: its Download button retries it.
+    for (const q of queue.data?.items ?? []) if (q.animeId === animeId && q.state !== 'failed') set.add(q.episode)
     for (const d of downloads.data?.items ?? []) {
       if (d.animeId === animeId && d.percent < 100) for (const e of d.episodes) set.add(Number(e))
     }
     return set
   }, [queue.data, downloads.data, animeId])
+  const failedEps = useMemo(
+    () => new Set((queue.data?.items ?? []).filter((q) => q.animeId === animeId && q.state === 'failed').map((q) => q.episode)),
+    [queue.data, animeId],
+  )
 
   const download = useMutation({
     meta: { inline: true },
@@ -107,8 +109,7 @@ export function EpisodeList({
       return next
     })
 
-  // Only the next unaired episode is worth a row: it answers "when is the new
-  // one", which the rest of the schedule does not.
+  // Only the next unaired episode gets a row: it answers "when is the new one".
   const aired = useMemo(() => {
     const now = Date.now() / 1000
     const out: Episode[] = []
@@ -146,9 +147,13 @@ export function EpisodeList({
 
   // Ticking N marks everything before it too; the first unwatched one says how far back that reaches.
   const firstUnwatched = useMemo(() => aired.find((e) => !e.watched && !isUnaired(e)), [aired])
+  // Unticking N unwatches everything after it too, up to the last watched one.
+  const lastWatched = useMemo(() => [...aired].reverse().find((e) => e.watched), [aired])
 
   const pages = Math.ceil(filtered.length / PAGE_SIZE)
-  const paged = pages > 1 ? filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) : filtered
+  // Clamped: a narrower filter can leave fewer pages than the one open.
+  const at = Math.min(page, Math.max(0, pages - 1))
+  const paged = pages > 1 ? filtered.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE) : filtered
 
   // Open on the page holding the episode being watched, not on the first. Once
   // per episode: a refetch rebuilds `filtered` and would undo manual paging.
@@ -170,18 +175,15 @@ export function EpisodeList({
 
   const searchable = episodes.length > 12
 
-  // Nothing is known about these beyond how many there are supposed to be, and
-  // a row that looks like every other row does not say so.
+  // Only their count is known, so these rows look different and say so.
   const planned = episodes.length > 0 && episodes.every((e) => e.planned)
 
   return (
     <div className="space-y-3">
       {planned && (
         <p className="rounded-xl border border-base-800 bg-base-900/50 px-3 py-2 text-xs text-base-400">
-          No episode data for this show — the numbering comes from its episode
-          count, so an episode may not exist or may be numbered differently by
-          the release. Releases are being searched for; anything found stops
-          being marked expected.
+          No episode data for this show, so episodes are numbered from its count and may differ from
+          the releases. Episodes found in releases lose the "expected" mark.
         </p>
       )}
 
@@ -222,7 +224,7 @@ export function EpisodeList({
                 onChange={(e) => setTerm(e.target.value)}
                 placeholder={`Find an episode`}
                 aria-label="Search episodes"
-                className="w-full rounded-lg border border-base-800 bg-base-900 py-1.5 pr-3 pl-8 text-sm text-base-100 placeholder:text-base-500 focus:border-accent-500 focus:outline-none"
+                className={cx(inputClass, 'w-full pl-8')}
               />
             </div>
           )}
@@ -230,12 +232,12 @@ export function EpisodeList({
       )}
 
       {compact && searchable && (
-        <input
+        <TextInput
           value={term}
           onChange={(e) => setTerm(e.target.value)}
           placeholder={`Search ${episodes.length} episodes…`}
           aria-label="Search episodes"
-          className="w-full rounded-lg border border-base-800 bg-base-900 px-3 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:border-accent-500 focus:outline-none"
+          className="w-full"
         />
       )}
 
@@ -285,19 +287,17 @@ export function EpisodeList({
         </div>
       )}
 
-      {/* Above the list and grouped in the middle: paging from the bottom
-          means scrolling the whole page to move one page. */}
+      {/* Above the list: paging from the bottom means scrolling the whole page. */}
       {pages > 1 && (
         <div className="flex items-center justify-center gap-1.5">
           <PageStep
             label="Previous"
-            disabled={page === 0}
-            onClick={() => setPage((p) => p - 1)}
+            disabled={at === 0}
+            onClick={() => setPage(at - 1)}
           />
-          {/* A thousand-episode show is twenty pages; stepping to the end one
-              at a time is twenty clicks, so the range is a menu. */}
+          {/* A menu of ranges: a thousand episodes is twenty pages to step through. */}
           <RangeMenu
-            page={page}
+            page={at}
             pages={pages}
             total={filtered.length}
             rangeFor={(n) => {
@@ -310,8 +310,8 @@ export function EpisodeList({
           />
           <PageStep
             label="Next"
-            disabled={page >= pages - 1}
-            onClick={() => setPage((p) => p + 1)}
+            disabled={at >= pages - 1}
+            onClick={() => setPage(at + 1)}
           />
         </div>
       )}
@@ -334,6 +334,9 @@ export function EpisodeList({
                 ? firstUnwatched.display || firstUnwatched.number
                 : undefined
             }
+            unmarksTo={
+              lastWatched && lastWatched.number > episode.number ? lastWatched.display || lastWatched.number : undefined
+            }
             active={episode.number === current}
             upNext={episode.number === upNext}
             compact={compact}
@@ -341,6 +344,7 @@ export function EpisodeList({
             selected={picked.has(episode.number)}
             onToggle={selecting ? () => toggle(episode.number) : undefined}
             queued={busy.has(episode.number)}
+            failed={failedEps.has(episode.number)}
           />
         ))}
         {paged.length === 0 && (
@@ -399,7 +403,7 @@ function RangeMenu({
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
 
   const box = trigger.current?.getBoundingClientRect()
@@ -481,6 +485,7 @@ function EpisodeRow({
   episode,
   watched,
   marksFrom,
+  unmarksTo,
   active,
   upNext,
   compact,
@@ -488,12 +493,15 @@ function EpisodeRow({
   selected,
   onToggle,
   queued,
+  failed,
 }: {
   animeId: number
   episode: Episode
   watched: boolean
   /** Ticking this one also marks every episode from here. */
   marksFrom?: number
+  /** Unticking this one also unwatches every episode up to this one. */
+  unmarksTo?: number
   active: boolean
   upNext?: boolean
   compact?: boolean
@@ -503,12 +511,12 @@ function EpisodeRow({
   onToggle?: () => void
   /** Already in the queue or arriving, so not offered again. */
   queued?: boolean
+  /** The queue gave up on it; Download tries again. */
+  failed?: boolean
 }) {
   const row = useRef<HTMLLIElement>(null)
 
-  // The sidebar list scrolls, so the watched episode must be on screen on open.
-  // Scroll the nearest scrollable ancestor after a frame, not scrollIntoView
-  // (which drags the whole page).
+  // Bring the watched episode into view by scrolling the list, not scrollIntoView (which drags the page).
   useEffect(() => {
     if (!active || !compact) return
 
@@ -527,8 +535,7 @@ function EpisodeRow({
   const unaired = isUnaired(episode)
   const number = episode.display || episode.number
   const title = episode.titleEn || episode.titleJa || `Episode ${number}`
-  // By the server's rule, not the tick: an episode watched to the end and
-  // wound back to its middle is both watched and resumable.
+  // The server's rule, not the tick: a watched episode wound back is watched and resumable.
   const resumeAt = episode.resumable && typeof episode.position === 'number' && !unaired ? episode.position : undefined
   const played =
     resumeAt !== undefined && episode.duration ? Math.min(100, (resumeAt / episode.duration) * 100) : watched ? 100 : 0
@@ -542,9 +549,7 @@ function EpisodeRow({
     onSettled: () => {
       setConfirming(false)
       // Franchise too: marking the last one completes the show.
-      for (const key of ['episodes', 'anime', 'continue', 'library', 'history', 'franchise']) {
-        void qc.invalidateQueries({ queryKey: [key] })
-      }
+      refreshListState(qc)
     },
   })
 
@@ -631,15 +636,21 @@ function EpisodeRow({
             )}
             {episode.runtime ? <span>{episode.runtime} min</span> : null}
             {!compact && episode.airDate ? <span>{airDay(episode.airDate)}</span> : null}
-            {episode.onDisk && (
+            {episode.onDisk ? (
               <span className="flex items-center gap-1 text-emerald-300" title="On this machine">
                 <DiskGlyph />
                 {compact ? '' : 'Downloaded'}
               </span>
+            ) : (
+              episode.local && (
+                <span className="flex items-center gap-1 text-emerald-300" title="In one of your library folders">
+                  <DiskGlyph />
+                  {compact ? '' : 'In your library'}
+                </span>
+              )
             )}
-            {/* Nothing has been found for this one, so it is a number from the
-                episode count rather than an episode known to exist. */}
-            {episode.planned && !episode.onDisk && <Badge>Expected</Badge>}
+            {/* Nothing found: a number from the count, not an episode known to exist. */}
+            {episode.planned && !episode.onDisk && !episode.local && <Badge>Expected</Badge>}
           </>
         )}
         <EpisodeKind episode={episode} />
@@ -647,39 +658,40 @@ function EpisodeRow({
     </div>
   )
 
-  // Outside the link, or the tick would open the player. Marking past a gap
-  // marks the whole gap, and auto-delete can then remove those files, so a
-  // jump asks first.
+  // A tick reaching past this episode, either way, asks first: auto-delete and the trackers follow it.
+  const spans = watched ? unmarksTo !== undefined : marksFrom !== undefined
+  const tickLabel = watched
+    ? unmarksTo !== undefined
+      ? `Mark ${number} to ${unmarksTo} not watched`
+      : 'Mark not watched'
+    : marksFrom !== undefined
+      ? `Mark ${marksFrom} to ${number} watched`
+      : 'Mark watched'
+
+  // Outside the link, or the tick opens the player.
   const tick =
     !unaired &&
     !onToggle &&
     (confirming ? (
-      <span className="flex shrink-0 items-center gap-1 text-xs">
-        <button
-          type="button"
-          onClick={() => mark.mutate(true)}
-          disabled={mark.isPending}
-          className="rounded-md bg-accent-500/20 px-2 py-1 text-accent-200 hover:bg-accent-500/30"
-        >
-          Mark {marksFrom}–{number}
-        </button>
-        <button
-          type="button"
-          onClick={() => setConfirming(false)}
-          className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800"
-        >
-          Cancel
-        </button>
+      <span className="flex shrink-0 items-center gap-1">
+        <ConfirmInline
+          tone="accent"
+          size="sm"
+          label={watched ? `Unmark ${number}–${unmarksTo}` : `Mark ${marksFrom}–${number}`}
+          onConfirm={() => mark.mutate(!watched)}
+          onCancel={() => setConfirming(false)}
+          pending={mark.isPending}
+        />
       </span>
     ) : (
       <button
         type="button"
-        onClick={() => (!watched && marksFrom !== undefined ? setConfirming(true) : mark.mutate(!watched))}
+        onClick={() => (spans ? setConfirming(true) : mark.mutate(!watched))}
         disabled={mark.isPending}
-        aria-label={watched ? 'Mark not watched' : 'Mark watched'}
-        title={mark.isError ? (mark.error as Error).message : watched ? 'Mark not watched' : 'Mark watched'}
+        aria-label={tickLabel}
+        title={mark.isError ? (mark.error as Error).message : tickLabel}
         className={cx(
-          'grid size-8 shrink-0 place-items-center rounded-full transition-colors',
+          'grid size-8 shrink-0 place-items-center rounded-full transition-colors pointer-coarse:size-11',
           mark.isError
             ? 'text-recap'
             : watched
@@ -697,11 +709,17 @@ function EpisodeRow({
     mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: number }),
     onSuccess: () => refreshDownloads(qc),
   })
-  const isQueued = fetch.isSuccess || queued
+  // A click that queued it, until the queue says it failed.
+  const resetFetch = fetch.reset
+  useEffect(() => {
+    if (failed) resetFetch()
+  }, [failed, resetFetch])
+  const isQueued = (fetch.isSuccess && !failed) || queued
   const download =
     !unaired &&
     !onToggle &&
-    !episode.onDisk && (
+    !episode.onDisk &&
+    !episode.local && (
       <button
         type="button"
         onClick={() => fetch.mutate()}
@@ -709,11 +727,11 @@ function EpisodeRow({
         aria-label={isQueued ? `Episode ${number} queued` : `Download episode ${number}`}
         title={fetch.isError ? (fetch.error as Error).message : isQueued ? 'Queued' : 'Download'}
         className={cx(
-          'grid size-8 shrink-0 place-items-center rounded-full transition-colors',
+          'grid size-8 shrink-0 place-items-center rounded-full transition-colors pointer-coarse:size-11',
           fetch.isError ? 'text-recap' : isQueued ? 'text-emerald-300' : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
         )}
       >
-        {isQueued ? <WatchedTick /> : <DownloadArrow />}
+        {isQueued ? <QueuedGlyph /> : <DownloadArrow />}
       </button>
     )
 
@@ -785,6 +803,16 @@ function DownloadArrow() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+
+// A clock: queued is waiting, unlike the tick beside it, which means watched.
+function QueuedGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path d="M12 8v4l2.5 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }

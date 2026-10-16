@@ -63,7 +63,7 @@ func bleachStore(t *testing.T) *store.Store {
 	for i := 1; i < len(chain); i++ {
 		rels = append(rels, store.Relation{AnimeID: chain[i-1], RelatedID: chain[i], Kind: "SEQUEL"})
 	}
-	if err := st.SaveRelations(ctx, rels); err != nil {
+	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.RebuildFranchises(ctx); err != nil {
@@ -205,7 +205,7 @@ func TestASplitRunOffersNoCountedThroughNumber(t *testing.T) {
 	for i := 1; i < len(chain); i++ {
 		rels = append(rels, store.Relation{AnimeID: chain[i-1].ID, RelatedID: chain[i].ID, Kind: "SEQUEL"})
 	}
-	if err := st.SaveRelations(ctx, rels); err != nil {
+	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.RebuildFranchises(ctx); err != nil {

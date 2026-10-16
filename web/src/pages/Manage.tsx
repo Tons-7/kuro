@@ -21,9 +21,14 @@ import {
   ErrorState,
   FilterToggle,
   LinkButton,
+  ConfirmInline,
   PageHeader,
+  Pager,
   ProgressBar,
+  RefreshFailed,
   Skeleton,
+  TextInput,
+  useClampPage,
   useDebounced,
 } from '../components/ui'
 import { notificationTarget } from '../components/NotificationPanel'
@@ -48,7 +53,7 @@ export function Notifications() {
     },
   })
 
-  if (isError) return <ErrorState error={error} retry={() => refetch()} />
+  if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
   if (isPending) return <Skeleton className="h-64 w-full" />
   if (data.items.length === 0) {
     return (
@@ -66,45 +71,25 @@ export function Notifications() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="page-title">
-          Notifications
-          {data.unread > 0 && <span className="ml-2 text-sm text-accent-400">{data.unread} new</span>}
-        </h1>
-        <div className="flex gap-2">
-          {data.unread > 0 && !confirmClear && (
-            <button
-              onClick={() => markRead.mutate(undefined)}
-              className="rounded-md bg-base-850 px-3 py-1.5 text-sm text-base-200 hover:bg-base-750"
-            >
-              Mark all read
-            </button>
-          )}
-          {confirmClear ? (
-            <>
-              <button
-                onClick={() => remove.mutate(undefined)}
-                className="rounded-md bg-red-500/90 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500"
-              >
-                Delete all
-              </button>
-              <button
-                onClick={() => setConfirmClear(false)}
-                className="rounded-md px-3 py-1.5 text-sm text-base-400 hover:text-base-100"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => setConfirmClear(true)}
-              className="rounded-md bg-base-850 px-3 py-1.5 text-sm text-base-200 hover:bg-base-750"
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Notifications"
+        meta={data.unread > 0 && <span className="text-accent-400">{data.unread} new</span>}
+        actions={
+          <>
+            {data.unread > 0 && <Button onClick={() => markRead.mutate(undefined)}>Mark all read</Button>}
+            {confirmClear ? (
+              <ConfirmInline
+                label="Delete all"
+                onConfirm={() => remove.mutate(undefined)}
+                onCancel={() => setConfirmClear(false)}
+                pending={remove.isPending}
+              />
+            ) : (
+              <Button onClick={() => setConfirmClear(true)}>Clear all</Button>
+            )}
+          </>
+        }
+      />
 
       <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
         {data.items.map((n: Notification) => (
@@ -127,7 +112,7 @@ export function Notifications() {
             <button
               onClick={() => remove.mutate(n.id)}
               aria-label="Delete notification"
-              className="mr-2 rounded px-2 py-1 text-base-600 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-base-800 hover:text-base-200 max-sm:opacity-100"
+              className="tap relative mr-2 rounded px-2 py-1 text-base-600 transition-colors hover:bg-base-800 hover:text-base-200"
             >
               ✕
             </button>
@@ -232,8 +217,7 @@ function RetryGlyph() {
   )
 }
 
-// A pack's episodes, each with its own keep: the row's toggle moves all of
-// them, which is rarely what "keep episode 5" meant.
+// A pack's episodes, each with its own keep, since the row's toggle moves them all.
 function PackEpisodes({ hash }: { hash: string }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -315,8 +299,7 @@ export function Downloads() {
     refreshDownloads(qc)
   }
 
-  // Which episodes the queue is holding, so a download paused by the queue can
-  // say so rather than looking abandoned.
+  // Episodes the queue holds, so a download it paused says so instead of looking abandoned.
   const waitingKeys = new Set(
     (queue.data?.items ?? [])
       .filter((q) => q.state === 'pending')
@@ -384,26 +367,29 @@ export function Downloads() {
     onSuccess: done,
   })
   // Optimistic, so a click on a slightly stale list sends the right action.
+  // One mutation for a whole show's Keep all: one optimistic update and one refresh, not one per episode.
   const keep = useMutation({
     meta: { inline: true },
-    mutationFn: (d: Download) =>
-      api.post<{ infoHash: string; kept: boolean }>(
-        `/api/downloads/${d.infoHash}/${d.kept ? 'unkeep' : 'keep'}`,
+    mutationFn: (ds: Download[]) =>
+      Promise.all(
+        ds.map((d) =>
+          api.post<{ infoHash: string; kept: boolean }>(`/api/downloads/${d.infoHash}/${d.kept ? 'unkeep' : 'keep'}`),
+        ),
       ),
-    onMutate: async (d: Download) => {
+    onMutate: async (ds: Download[]) => {
       await qc.cancelQueries({ queryKey: ['downloads'] })
       const previous = qc.getQueryData<{ items: Download[]; count: number }>(['downloads'])
-      setKept(qc, d.infoHash, !d.kept)
+      for (const d of ds) setKept(qc, d.infoHash, !d.kept)
       return { previous }
     },
-    onError: (_err, _d, context) => {
+    onError: (_err, _ds, context) => {
       if (context?.previous) qc.setQueryData(['downloads'], context.previous)
     },
-    onSuccess: (res) => setKept(qc, res.infoHash, res.kept),
+    onSuccess: (res) => res.forEach((r) => setKept(qc, r.infoHash, r.kept)),
     onSettled: done,
   })
 
-  if (isError) return <ErrorState error={error} retry={() => refetch()} />
+  if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
 
   const items = data?.items ?? []
   const queued = queue.data?.items ?? []
@@ -439,7 +425,7 @@ export function Downloads() {
     confirm: setConfirmRemove,
     removing: remove.isPending,
     toggling: pause.isPending || resume.isPending,
-    keep: (d) => keep.mutate(d),
+    keep: (ds) => keep.mutate(ds),
     remove: (hashes) => remove.mutate(hashes),
     pauseResume: (d) => (d.paused ? resume : pause).mutate(d.infoHash),
   }
@@ -496,6 +482,7 @@ export function Downloads() {
         }
       />
 
+      {isError && data && <RefreshFailed retry={() => refetch()} />}
       {(remove.isError || clear.isError || keep.isError) && (
         <p className="text-xs text-recap">
           {((remove.error ?? clear.error ?? keep.error) as Error)?.message}
@@ -619,40 +606,37 @@ interface RowActions {
   confirm: (key: string | null) => void
   removing: boolean
   toggling: boolean
-  keep: (d: Download) => void
+  keep: (ds: Download[]) => void
   remove: (hashes: string[]) => void
   pauseResume: (d: Download) => void
 }
 
 function ConfirmDelete({ size, actions, onDelete }: { size: number; actions: RowActions; onDelete: () => void }) {
   return (
-    <span className="flex items-center gap-1 text-xs">
-      <button
-        onClick={onDelete}
-        disabled={actions.removing}
-        className="rounded-md bg-recap/80 px-2 py-1 font-medium text-white hover:bg-recap"
-      >
-        Delete {bytes(size)}
-      </button>
-      <button
-        onClick={() => actions.confirm(null)}
-        className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800"
-      >
-        Cancel
-      </button>
+    <span className="flex items-center gap-1">
+      <ConfirmInline
+        label={`Delete ${bytes(size)}`}
+        onConfirm={onDelete}
+        onCancel={() => actions.confirm(null)}
+        pending={actions.removing}
+        size="sm"
+      />
     </span>
   )
 }
 
-// The rail every row ends with: same-size labelled icons, so columns line up; hover only colours them.
+// The rail every row ends with: same-size labelled icons, so columns line up; 44px on touch screens.
 const iconButton =
-  'grid size-7 shrink-0 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white'
+  'grid size-7 shrink-0 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:size-11'
 
 const keepButton = (kept: boolean) =>
   cx(iconButton, kept && 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25 hover:text-accent-200')
 
 const deleteButton =
-  'grid size-7 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap'
+  'grid size-7 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-recap pointer-coarse:size-11'
+
+// Below sm the rail takes its own line, so the title keeps the row's width and a confirm has room.
+const rail = 'flex shrink-0 items-center gap-1.5 max-sm:w-full max-sm:justify-end'
 
 // Each download is its own card: rows sharing one surface ran into each other.
 const card = 'rounded-lg border border-white/[0.08] bg-base-900/60'
@@ -680,12 +664,12 @@ function ShowRows({
   return (
     // One card for the show; its episodes open inside it, so they read as its own.
     <li className={cx(card, 'overflow-hidden')}>
-      <div className="flex items-center gap-3 p-3">
+      <div className="flex items-center gap-3 p-3 max-sm:flex-wrap">
         <button
           onClick={onToggle}
           aria-expanded={open}
           aria-label={`${open ? 'Hide' : 'Show'} downloads of ${show.title ?? `Anime ${show.animeId}`}`}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-base-500 hover:bg-base-800 hover:text-white"
+          className="tap relative grid size-7 shrink-0 place-items-center rounded-md text-base-500 hover:bg-base-800 hover:text-white"
         >
           <svg viewBox="0 0 24 24" className={cx('size-4 transition-transform', open && 'rotate-90')} aria-hidden>
             <path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -702,13 +686,13 @@ function ShowRows({
             {episodes} episodes · {bytes(size)}
           </p>
         </button>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className={rail}>
           {show.items.some((d) => d.pinned) && <Badge tone="accent">Playing</Badge>}
           <Badge tone={allKept ? 'success' : 'neutral'}>
             {allKept ? 'Downloaded' : kept === 0 ? 'Cached' : `${kept} of ${show.items.length} kept`}
           </Badge>
           <button
-            onClick={() => show.items.filter((d) => d.kept === allKept).forEach(actions.keep)}
+            onClick={() => actions.keep(show.items.filter((d) => d.kept === allKept))}
             aria-pressed={allKept}
             aria-label="Keep all"
             title={allKept ? 'All kept. Click to let the cache evict these again' : 'Keep every episode: never evicted, outside the cache budget'}
@@ -768,7 +752,7 @@ function DownloadRow({
 
   return (
     <li className={cx('p-3', nested ? 'border-t border-white/[0.06] bg-base-950/30' : card)}>
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-3 max-sm:flex-wrap">
         {/* The place in line while waiting, the episode inside a group. */}
         <Gutter>{position ?? (nested ? d.episodes[0] : undefined)}</Gutter>
         {d.cover && !nested && (
@@ -777,8 +761,7 @@ function DownloadRow({
           </Link>
         )}
         <div className="min-w-0 flex-1">
-          {/* The show first: a release filename does not say what you
-              downloaded, which is the question this page answers. */}
+          {/* The show first: a release filename doesn't say what you downloaded. */}
           {nested ? (
             <p className="truncate text-sm font-medium text-base-100">{numbers ? `Episode${numbers}` : d.name}</p>
           ) : (
@@ -802,8 +785,7 @@ function DownloadRow({
               {retry} · {d.queued?.error}
             </p>
           )}
-          {/* One line, left to right: how far, how big, how fast, how
-              long. Speed and peers separate slow from stalled. */}
+          {/* How far, big, fast, long; speed and peers tell slow from stalled. */}
           <p className="mt-0.5 text-xs text-base-400">
             {unfinished && <span className="font-medium text-base-100">{Math.round(d.percent)}% · </span>}
             {unfinished ? `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}` : bytes(d.bytesOnDisk)}
@@ -812,16 +794,14 @@ function DownloadRow({
             {!d.paused && unfinished && d.mbps ? ` · ${timeLeft(d.totalBytes - d.bytesOnDisk, d.mbps)}` : ''}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className={rail}>
           {d.pinned && <Badge tone="accent">Playing</Badge>}
           {d.checking && <Badge>Checking file…</Badge>}
           {d.paused && unfinished && !actions.queueHeld(d) && <Badge tone="warning">Paused</Badge>}
-          {/* Cached is what watching leaves behind and the sweep may
-              take; Downloaded was asked for and stays. */}
+          {/* Cached may be swept; Downloaded was asked for and stays. */}
           {!unfinished && <Badge tone={d.kept ? 'success' : 'neutral'}>{d.kept ? 'Downloaded' : 'Cached'}</Badge>}
 
-          {/* Pausing keeps the file; removing does not. Finished ones
-              have nothing left to pause. */}
+          {/* Pausing keeps the file, removing doesn't; finished ones have nothing to pause. */}
           {unfinished && !d.checking && (
             <button
               onClick={() => actions.pauseResume(d)}
@@ -848,7 +828,7 @@ function DownloadRow({
 
           {/* The badge says kept (Downloaded), the fill repeats it; "✓ Kept" as a label was a third time. */}
           <button
-            onClick={() => actions.keep(d)}
+            onClick={() => actions.keep([d])}
             aria-pressed={d.kept}
             aria-label="Keep"
             title={
@@ -893,7 +873,8 @@ function Gutter({ children }: { children?: React.ReactNode }) {
     <span
       className={cx(
         'grid h-7 min-w-7 shrink-0 place-items-center self-center rounded-md px-1 text-xs tabular-nums text-base-400',
-        children != null && 'bg-white/[0.05]',
+        // Empty, it only aligns columns, which a phone can't spare the width for.
+        children != null ? 'bg-white/[0.05]' : 'max-sm:hidden',
       )}
     >
       {children}
@@ -1095,13 +1076,13 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
         </div>
       ) : (
         <>
-          <input
+          <TextInput
             value={term}
             onChange={(e) => setTerm(e.target.value)}
             placeholder="Search for the show…"
             aria-label="Search for the show"
             autoFocus
-            className="w-full rounded-md border border-base-800 bg-base-900 px-3 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:border-accent-500 focus:outline-none"
+            className="w-full"
           />
           {results.isPending && q.trim().length >= 3 && <Skeleton className="h-10 w-full" />}
           {results.data && results.data.results.length === 0 && (
@@ -1137,13 +1118,13 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
       <div className="flex items-center gap-2">
         <label className="flex items-center gap-1.5 text-xs text-base-400">
           Episode
-          <input
+          <TextInput
             type="number"
             min={1}
             value={episode}
             onChange={(e) => setEpisode(e.target.value)}
             aria-label="Episode number"
-            className="w-16 rounded-md border border-base-800 bg-base-900 px-2 py-1 text-sm text-base-100 focus:border-accent-500 focus:outline-none"
+            className="w-20"
           />
         </label>
         <button
@@ -1188,8 +1169,10 @@ export function LocalFiles() {
     },
   })
   const [assigning, setAssigning] = useState<number | null>(null)
+  // Assigning the last unmatched files of a later page empties it.
+  useClampPage(data?.items.length === 0, page, data?.total, 100, setPage)
 
-  if (isError) return <ErrorState error={error} retry={() => refetch()} />
+  if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
 
   return (
     <div className="space-y-4">
@@ -1271,17 +1254,7 @@ export function LocalFiles() {
               </li>
             ))}
           </ul>
-          {(page > 1 || data.hasMore) && (
-            <div className="flex items-center justify-center gap-2 pt-2">
-              <Button disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                Previous
-              </Button>
-              <span className="text-sm text-base-400">Page {page}</span>
-              <Button disabled={!data.hasMore} onClick={() => setPage(page + 1)}>
-                Next
-              </Button>
-            </div>
-          )}
+          <Pager page={page} hasMore={data.hasMore} onPage={setPage} />
         </>
       )}
     </div>

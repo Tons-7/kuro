@@ -1,13 +1,5 @@
-// Everything to run before a release that needs no release sites: the Go suite,
-// then each browser check against its own throwaway instance, a few at a time.
-//
-//   node scripts/release-check.mjs                  # all of it
-//   node scripts/release-check.mjs pip-check.mjs    # only these checks, no Go suite
-//
-// Env: LANES=4 checks at once, SKIP_BUILD=1 reuses the last build, SKIP_GO=1.
-// Logs land in %TEMP%/kuro-release-check. Not covered, run by hand with real
-// sites: subs-lag-probe, sources-check, autodelete-check, access-approval-check.
-// Nor subs-sync-check: Playwright's Chromium keeps drawing a hidden tab, so its scenario never starts.
+// Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/kuro-release-check.
+//   node scripts/release-check.mjs [only.mjs …]    env: LANES=4, SKIP_BUILD=1, SKIP_GO=1
 import { spawn, spawnSync } from 'node:child_process'
 import { createWriteStream, mkdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -19,11 +11,11 @@ const webDir = resolve(scriptDir, '..')
 const repo = resolve(webDir, '..')
 const logs = join(tmpdir(), 'kuro-release-check')
 
-// ALONE checks run one at a time: they load live catalogue pages, which AniList
-// throttles when several instances ask at once, or need the one foreground window.
+// ALONE checks run one at a time: AniList throttles parallel catalogue loads, or they need the foreground.
 const ALONE = true
 
-// [check, extra env, alone]. A check missing here is a tool or needs real sites.
+// [check, extra env, alone]. Missing ones are tools or need real sites (subs-lag-probe, sources-, autodelete-,
+// access-approval-check); subs-sync-check never starts under Playwright, which draws hidden tabs.
 const CHECKS = [
   ['player-check.mjs'],
   ['features-check.mjs'],
@@ -64,6 +56,7 @@ const CHECKS = [
   ['subtitle-look-check.mjs'],
   ['tour-check.mjs', {}, ALONE],
   ['ui-bits-check.mjs'],
+  ['ui-shared-check.mjs'],
   ['vlc-check.mjs'],
   ['sound-check.mjs'],
 ]
@@ -104,12 +97,17 @@ rmSync(logs, { recursive: true, force: true })
 mkdirSync(logs, { recursive: true })
 
 if (!only.length && process.env.SKIP_GO !== '1') step('go vet', 'go vet ./...', repo) && step('go test', 'go test ./...', repo)
+if (!only.length) step('format helpers', 'node scripts/format-check.mjs', webDir)
+if (!only.length) step('release notes', 'node scripts/notes-check.mjs', webDir)
 
 let built = process.env.SKIP_BUILD === '1'
 if (!built) {
   const exe = join(tmpdir(), 'kuro-e2e-bin', process.platform === 'win32' ? 'kuro.exe' : 'kuro')
   built = step('web build', 'npm run build', webDir) && step('server build', `go build -o "${exe}" ./cmd/kuro`, repo)
 }
+
+// The updater end to end on two real builds; its own ports, so it never meets a lane.
+if (built && !only.length) step('self-update', 'node scripts/update-check.mjs', webDir)
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)

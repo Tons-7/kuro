@@ -37,8 +37,7 @@ type Config struct {
 
 func (c Config) ConfigPath() string { return filepath.Join(c.root, "config.toml") }
 
-// StrayConfig is a "config.toml.txt" beside the real file: what Notepad's
-// Save As produces, and what kuro will never read.
+// StrayConfig is a "config.toml.txt" from Notepad's Save As, which kuro never reads.
 func (c Config) StrayConfig() string {
 	p := c.ConfigPath() + ".txt"
 	if exists(p) {
@@ -47,8 +46,7 @@ func (c Config) StrayConfig() string {
 	return ""
 }
 
-// Temporary reports a root inside the OS temp directory: an exe run from
-// inside a zip lands there, and nothing written beside it survives.
+// Temporary: the root is in the temp directory (an exe run from a zip), where nothing written survives.
 func (c Config) Temporary() bool { return c.temporary }
 
 // Indexer is one torrent search site. None ship with kuro.
@@ -113,9 +111,14 @@ func exists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// ResolveDataDir is where a data_dir setting points: AppData when empty,
-// otherwise the path, relative to the exe folder.
+// ResolveDataDir is where data_dir points: AppData when empty, else the path, relative to the exe.
 func (c Config) ResolveDataDir(dir string) string { return c.resolve(dir, dataDir()) }
+
+// within reports dir at or under parent.
+func within(parent, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(dir))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
 // resolve reads a folder setting; relative paths are beside the exe.
 func (c Config) resolve(dir, fallback string) string {
@@ -128,9 +131,7 @@ func (c Config) resolve(dir, fallback string) string {
 	return filepath.Join(c.root, dir)
 }
 
-// SetDataDir writes data_dir into config.toml, replacing the line if there is
-// one and otherwise placing it before the first table, where a top-level key
-// has to be. Takes effect on the next start.
+// SetDataDir writes data_dir into config.toml (before the first table, as a top-level key); used next start.
 func (c Config) SetDataDir(dir string) error {
 	raw, err := os.ReadFile(c.ConfigPath())
 	if err != nil {
@@ -181,8 +182,7 @@ func (c Config) Path(name string) string {
 	return filepath.Join(c.BinDir, name)
 }
 
-// ExeName is the platform's filename for an executable base name: kuro fetches
-// "ffmpeg" as ffmpeg.exe on Windows, ffmpeg elsewhere.
+// ExeName is the platform's filename for an executable: ffmpeg.exe on Windows, ffmpeg elsewhere.
 func ExeName(base string) string {
 	if runtime.GOOS == "windows" {
 		return base + ".exe"
@@ -190,9 +190,7 @@ func ExeName(base string) string {
 	return base
 }
 
-// Tool resolves an engine binary by base name: the one kuro downloaded into
-// bin/ if it is there, otherwise one the OS provides on PATH (a brew/apt/pacman
-// install), falling back to the bin/ path so an error names where it looked.
+// Tool finds a binary: kuro's bin/ copy, else one on PATH, else the bin/ path so an error says where.
 func (c Config) Tool(base string) string {
 	// ffprobe from the same install as ffmpeg: a mixed pair disagrees on streams and codecs.
 	if base == "ffprobe" {
@@ -214,8 +212,7 @@ func (c Config) Tool(base string) string {
 // Served by the main listener so there is no second server to coordinate.
 func (c Config) RedirectURI() string { return c.redirect("/callback") }
 
-// MyAnimeList registers its own redirect URL, on a separate path so one
-// callback handler does not have to guess which provider answered.
+// MyAnimeList's redirect URL, on its own path so the callback knows which provider answered.
 func (c Config) MALRedirectURI() string { return c.redirect("/mal/callback") }
 
 func (c Config) redirect(path string) string {
@@ -226,9 +223,7 @@ func (c Config) redirect(path string) string {
 	return "http://localhost:" + port + path
 }
 
-// Load reads config.toml from the executable's directory, writing a template on
-// first run. Secrets live here rather than in the database so the file can stay
-// out of version control.
+// Load reads config.toml beside the exe, writing a template on first run; secrets live here, not the DB.
 func Load() (Config, error) {
 	root, err := rootDir()
 	if err != nil {
@@ -244,13 +239,19 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 	case err != nil:
-		return Config{}, err
+		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 
 	cfg.root, cfg.temporary = root, underTemp(root)
 	cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
 	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(root, "cache"))
 	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(root, "bin"))
+	// The orphan cleanup deletes whatever sits in cache_dir that is not a download: kuro's own folders must not.
+	for _, dir := range []string{root, cfg.dataDir, cfg.BinDir} {
+		if within(cfg.CacheDir, dir) {
+			return Config{}, fmt.Errorf("cache_dir %s holds %s; downloads need a folder of their own", cfg.CacheDir, dir)
+		}
+	}
 	for _, dir := range []string{cfg.dataDir, cfg.CacheDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Config{}, err
@@ -259,8 +260,7 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// Root is where config.toml, bin/ and cache/ live: normally beside the
-// executable, overridable with KURO_ROOT.
+// Root holds config.toml, bin/ and cache/: beside the executable, or KURO_ROOT.
 func rootDir() (string, error) {
 	if root := os.Getenv("KURO_ROOT"); root != "" {
 		return root, nil
@@ -272,8 +272,7 @@ func rootDir() (string, error) {
 	}
 	dir := filepath.Dir(exe)
 
-	// `go run` and `go test` build into the system temp directory, where a
-	// config file would vanish. Fall back to the working tree instead.
+	// `go run` and `go test` build into temp, where a config would vanish; use the working tree.
 	if underTemp(dir) {
 		return os.Getwd()
 	}
@@ -293,9 +292,7 @@ func underTemp(dir string) bool {
 	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
-// os.UserConfigDir resolves to Roaming on Windows, where a live WAL database
-// would be synced across machines. Local is the correct home for it.
-// DefaultDataDir is where the data lives when data_dir is empty.
+// DefaultDataDir is where the data lives when data_dir is empty: Local, since Roaming would sync the DB.
 func DefaultDataDir() string { return dataDir() }
 
 func dataDir() string {

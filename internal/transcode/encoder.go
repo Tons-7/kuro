@@ -12,14 +12,10 @@ import (
 // Hardware encoders, fastest first. Only H.264: it is the one codec every browser decodes.
 var hardwareEncoders = []string{"h264_nvenc", "h264_qsv", "h264_amf"}
 
-// IsHardwareEncoder reports whether a DetectEncoder result is a GPU encoder, so
-// callers can tell a machine that transcodes in real time from one that will
-// stall on HEVC/10-bit.
+// IsHardwareEncoder: a GPU encoder, which transcodes HEVC/10-bit in real time.
 func IsHardwareEncoder(codec string) bool { return usesHardware(codec) }
 
-// DetectEncoder picks the first hardware encoder that actually encodes on this
-// machine, or libx264. Listing is not enough: every build lists h264_nvenc
-// whatever GPU is fitted, and the wrong one fails at the first frame.
+// DetectEncoder picks the first hardware encoder that really encodes here (all builds list nvenc), or libx264.
 func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string {
 	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders").Output()
 	if err != nil {
@@ -40,9 +36,7 @@ func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string 
 	return softwareEncoder
 }
 
-// CanEncode reports whether ffmpeg can make the H.264 kuro streams: libx264,
-// or a hardware encoder that works here. Some builds (Fedora's ffmpeg-free)
-// ship without libx264.
+// CanEncode: ffmpeg has libx264 (Fedora's ffmpeg-free lacks it) or a working hardware encoder.
 func CanEncode(ctx context.Context, ffmpeg string) bool {
 	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders").Output()
 	if err != nil {
@@ -74,9 +68,7 @@ func Version(ctx context.Context, binary string) string {
 	return ""
 }
 
-// trialEncode runs a second of 10-bit frames through the encoder with a
-// session's arguments. 10-bit is the source that needs re-encoding most, and
-// the input conversion is where it fails.
+// trialEncode runs a second of 10-bit frames through the encoder: the input most likely to fail.
 func trialEncode(ctx context.Context, ffmpeg, codec string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

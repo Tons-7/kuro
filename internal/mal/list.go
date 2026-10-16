@@ -3,6 +3,7 @@ package mal
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -35,8 +36,7 @@ var toAniList = map[string]string{
 	StatusPlanToWatch: "PLANNING",
 }
 
-// Status maps a kuro status onto MAL's vocabulary. Rewatching is not a status
-// on MAL, only a flag, so it reports as watching.
+// Status maps a kuro status to MAL's; rewatching is only a flag there, so it reports as watching.
 func Status(status string) string {
 	if s, ok := fromAniList[strings.ToUpper(status)]; ok {
 		return s
@@ -91,8 +91,7 @@ type listPage struct {
 		ListStatus struct {
 			Status string `json:"status"`
 			Score  int    `json:"score"`
-			// Note the asymmetry: reads use num_episodes_watched, writes use
-			// num_watched_episodes. Mixing them up fails silently.
+			// Reads use num_episodes_watched, writes num_watched_episodes; mixing them fails silently.
 			NumEpisodesWatched int       `json:"num_episodes_watched"`
 			IsRewatching       bool      `json:"is_rewatching"`
 			NumTimesRewatched  int       `json:"num_times_rewatched"`
@@ -104,8 +103,7 @@ type listPage struct {
 	} `json:"paging"`
 }
 
-// List pulls the whole authenticated user's anime list, following MAL's paging
-// links rather than computing offsets.
+// List pulls the user's whole list, following MAL's paging links rather than offsets.
 func (c *Client) List(ctx context.Context) ([]Entry, error) {
 	q := url.Values{
 		"fields": {"list_status{status,score,num_episodes_watched,is_rewatching,num_times_rewatched,updated_at},num_episodes"},
@@ -139,10 +137,7 @@ func (c *Client) List(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
-// SetProgress updates one entry; an empty status leaves MAL's. A rewatch is
-// "watching" plus is_rewatching. The rewatch count and score (0-100) are sent
-// only when non-zero, so a fresh local row can't wipe the site's;
-// clearScore sends a deliberate 0.
+// SetProgress sends score (0-100) and rewatch count only when non-zero, so a local row can't wipe the site's.
 func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status string, rewatched, score int, clearScore bool) error {
 	if animeID <= 0 {
 		return fmt.Errorf("mal: invalid anime id %d", animeID)
@@ -162,6 +157,16 @@ func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status s
 
 	endpoint := fmt.Sprintf("%s/anime/%d/my_list_status", c.api, animeID)
 	return c.do(ctx, "PATCH", endpoint, form, nil)
+}
+
+// DeleteEntry takes an anime off the user's MAL list; one already gone (404) counts as done.
+func (c *Client) DeleteEntry(ctx context.Context, animeID int) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/anime/%d/my_list_status", c.api, animeID), nil, nil)
+	var e *Error
+	if asError(err, &e) && e.Status == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
 type viewer struct {

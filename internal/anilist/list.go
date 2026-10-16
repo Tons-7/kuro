@@ -2,6 +2,7 @@ package anilist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -41,8 +42,7 @@ type ListEntry struct {
 	Media       Media     `json:"media"`
 }
 
-// score takes an explicit format because a bare `score` field inherits the
-// format of any preceding aliased score in the same selection set.
+// An explicit score format: a bare `score` inherits an earlier aliased score's format.
 const listQuery = `query List($userId: Int!) {
   MediaListCollection(userId: $userId, type: ANIME) {
     hasNextChunk
@@ -95,10 +95,7 @@ const saveQuery = `mutation Save($mediaId: Int!, $progress: Int, $status: MediaL
   }
 }`
 
-// SetProgress upserts by mediaId. Only set fields are sent: a null clears the
-// field server-side. Repeat and score travel only when non-zero, so a row
-// created locally cannot wipe what the site holds; clearScore sends a 0 that
-// was meant. scoreRaw is always 0-100.
+// Only set fields go, and score (0-100) and repeat only when non-zero, so a local row can't wipe the site's.
 func (c *Client) SetProgress(ctx context.Context, mediaID, progress int, status string, completed *FuzzyDate, repeat, score int, clearScore bool) (ListEntry, error) {
 	vars := map[string]any{"mediaId": mediaID, "progress": progress}
 	if repeat > 0 {
@@ -121,4 +118,23 @@ func (c *Client) SetProgress(ctx context.Context, mediaID, progress int, status 
 	}
 	err := c.Query(ctx, saveQuery, vars, &out)
 	return out.SaveMediaListEntry, err
+}
+
+const deleteQuery = `mutation Delete($id: Int!) {
+  DeleteMediaListEntry(id: $id) { deleted }
+}`
+
+// DeleteEntry takes a MediaList entry off the account; one already gone (404) counts as done.
+func (c *Client) DeleteEntry(ctx context.Context, entryID int) error {
+	var out struct {
+		DeleteMediaListEntry struct {
+			Deleted bool `json:"deleted"`
+		} `json:"DeleteMediaListEntry"`
+	}
+	err := c.Query(ctx, deleteQuery, map[string]any{"id": entryID}, &out)
+	var errs Errors
+	if errors.As(err, &errs) && errs.NotFound() {
+		return nil
+	}
+	return err
 }

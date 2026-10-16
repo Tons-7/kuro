@@ -34,8 +34,7 @@ const (
 
 	scoreEpisodeOutOfRange = -6.0
 
-	// Enough to settle an exact tie between franchise entries, never enough to
-	// overturn a genuinely better title match.
+	// Settles a tie between franchise entries, never overturns a better title match.
 	BoostWatching  = 4.0
 	BoostPlanned   = 2.0
 	BoostCompleted = 1.0
@@ -92,8 +91,7 @@ type Decision string
 const (
 	// Confident enough to start playing without asking.
 	Auto Decision = "auto"
-	// A real candidate, but close enough to the runner-up that acting risks the
-	// wrong show — surface the options instead.
+	// Too close to the runner-up to act on, so the options are surfaced.
 	Ask Decision = "ask"
 )
 
@@ -113,8 +111,7 @@ type key struct {
 	main   bool
 }
 
-// Index holds the searchable corpus. Building it is O(titles); afterwards a
-// lookup touches well under one percent of it.
+// Index holds the searchable corpus: built in O(titles), a lookup then touches under 1% of it.
 type Index struct {
 	media   []indexed
 	byToken map[string][]int32
@@ -223,8 +220,7 @@ func (ix *Index) Rank(q Query, n int) []Result {
 	return results
 }
 
-// candidates unions the posting lists of the query's tokens. An empty union is
-// a genuine miss, not a reason to scan the whole corpus.
+// candidates unions the query tokens' posting lists; empty is a miss, not a reason for a full scan.
 func (ix *Index) candidates(tokens []string) []int32 {
 	seen := make(map[int32]struct{}, 256)
 	out := make([]int32, 0, 256)
@@ -310,8 +306,7 @@ func score(q Query, qn, qf string, qt []string, entry indexed) (Result, bool) {
 		}
 	}
 
-	// An episode number beyond what a season contains rules it out, which is
-	// what separates franchise entries sharing one English title.
+	// An episode past a season's count rules it out, separating entries sharing an English title.
 	if q.Episode > 0 && m.Episodes > 0 && q.Episode > m.Episodes {
 		r.Score += scoreEpisodeOutOfRange
 		r.Reasons = append(r.Reasons, "episode number exceeds this entry")
@@ -341,8 +336,7 @@ func titleScore(rawQuery, qn, qf string, qt []string, k key) (float64, string) {
 	case cover == 1 && len(qt) == len(k.tokens) && len(qt) > 0:
 		return scoreTokenPerfect + complexity(qt), "every word matches"
 	case cover == 1:
-		// Scaled by coverage: a flat score ties every franchise entry, e.g.
-		// "Boku wa Hero" and "Boku no Hero Academia".
+		// Scaled by coverage, or "Boku wa Hero" ties "Boku no Hero Academia".
 		ratio := float64(min(len(qt), len(k.tokens))) / float64(max(len(qt), len(k.tokens)))
 		return scoreTokenComplete * ratio, "all words present"
 	case shared >= thresholdTokenHigh:
@@ -361,8 +355,7 @@ func titleScore(rawQuery, qn, qf string, qt []string, k key) (float64, string) {
 	}
 }
 
-// Longer titles matching in full is far stronger evidence than a single word,
-// so length is rewarded rather than treated as neutral.
+// A long title matching in full is far stronger evidence than one word, so length is rewarded.
 func complexity(tokens []string) float64 {
 	switch {
 	case len(tokens) >= 3:

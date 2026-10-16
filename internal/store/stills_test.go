@@ -64,8 +64,7 @@ func TestEpisodesStaleFinishedAndComplete(t *testing.T) {
 	}
 }
 
-// A show the source does not cover stores nothing; that answer is kept for the
-// refresh window instead of re-asked on every page load.
+// A show the source lacks stores nothing, an answer kept for the refresh window.
 func TestEmptyEpisodeFetchIsRemembered(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -122,8 +121,7 @@ func TestStillGapsAndFill(t *testing.T) {
 	}
 }
 
-// Rows invented from an episode count are offered as something to play, but
-// they are not evidence the episode exists and must say so.
+// Rows from an episode count are playable but say they're no proof the episode exists.
 func TestPlannedEpisodesAreMarked(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

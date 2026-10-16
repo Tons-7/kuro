@@ -1,28 +1,21 @@
 @import 'tailwindcss';
-/* Bundled, not fetched: kuro runs offline, and without them the UI fell back
-   to Segoe UI while asking for Inter. Outfit is the display face for titles. */
+/* Bundled, as kuro runs offline; Outfit is the display face for titles. */
 @import '@fontsource-variable/inter';
 @import '@fontsource-variable/outfit';
 
-/* Dark, but not black: a true black background makes poster art look like it
-   is floating and crushes the shadows the cards rely on for depth. */
+/* Dark, not black: true black floats the art and crushes the cards' shadows. */
 @theme {
   --font-sans: 'Inter Variable', 'Inter', -apple-system, 'Segoe UI', Roboto, system-ui, sans-serif;
   --font-display: 'Outfit Variable', 'Inter Variable', system-ui, sans-serif;
 
-  /* Surfaces a step further apart than before: panels, cards and controls
-     read as layers instead of one grey. */
+  /* Surfaces a step apart, so panels, cards and controls read as layers. */
   --color-base-950: #08090d;
   --color-base-900: #0f1117;
   --color-base-850: #151822;
   --color-base-800: #1c202b;
   --color-base-750: #252a37;
   --color-base-700: #2f3545;
-  /* 600 and 500 carry the small print — a character's role, an episode count, a
-     release filename — and against this background they measured 1.96:1 and
-     3.27:1, which is text you have to go looking for. Raised to 3:1 and 4.5:1
-     against the card surface, keeping the same blue-grey. Anything below 600 is
-     a surface rather than a colour to read, so the rest of the scale stands. */
+  /* 600 and 500 carry small print, raised to 3:1 and 4.5:1 against the card surface, same blue-grey. */
   --color-base-600: #55627e;
   --color-base-500: #717e97;
   --color-base-400: #8891a5;
@@ -35,16 +28,13 @@
   --color-accent-500: #6f5cff;
   --color-accent-600: #5a45f0;
 
-  /* Episode kinds. Filler and recap have to be told apart at a glance in a
-     list of fifty rows, so they get hue rather than a label alone. */
+  /* Episode kinds: filler and recap get a hue, to tell apart at a glance in a long list. */
   --color-filler: #f59e0b;
   --color-recap: #ef4444;
 
   --radius-card: 0.9rem;
 
-  /* Depth comes from shadow rather than borders. A hairline on every surface
-     draws a grid over the page and flattens it; a shadow lets art sit on top
-     of the background instead of being fenced off from it. */
+  /* Depth from shadow, not borders: hairlines everywhere draw a grid and flatten the page. */
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.7);
   --shadow-lift: 0 4px 12px rgb(0 0 0 / 0.45), 0 24px 48px -20px rgb(0 0 0 / 0.85);
   --shadow-panel: 0 1px 3px rgb(0 0 0 / 0.35), 0 12px 32px -16px rgb(0 0 0 / 0.6);
@@ -77,9 +67,7 @@
   }
 }
 
-/* Opacity only. A page that slides in also moves everything already on screen
-   — the header, the tabs — which reads as the layout shaking rather than as a
-   page arriving. Menus and popovers can move because nothing else does. */
+/* Opacity only: a sliding page moves the header too, which reads as shaking. Menus can move. */
 @keyframes enter {
   from {
     opacity: 0.4;
@@ -89,8 +77,7 @@
   }
 }
 
-/* A sweep rather than a pulse: a pulsing block reads as a broken image, a
-   moving highlight reads as loading. */
+/* A sweep, not a pulse: a pulsing block reads as a broken image. */
 @keyframes shimmer {
   from {
     background-position: 200% 0;
@@ -103,31 +90,31 @@
 @layer base {
   html {
     color-scheme: dark;
-    /* Reserve the scrollbar's width whether or not the page needs one. A short
-       page has no scrollbar and a long one does, so navigating between them
-       shifted everything sideways. */
+    /* The scrollbar's width is always reserved, or pages shift sideways between short and long. */
     scrollbar-gutter: stable;
   }
 
   body {
     @apply bg-base-950 font-sans text-base-100 antialiased;
     font-feature-settings: 'cv11', 'ss01';
-    /* Playback controls and card overlays are tap targets; the highlight flash
-       on mobile makes every press look like a mis-tap. */
+    /* No tap highlight: on mobile it makes every press look like a mis-tap. */
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* clip, not hidden: overflow-x:hidden makes body a scroll container of its
-     own, which on top of the gutter above produced two scrollbars. clip stops
-     a rail from bouncing the page sideways without creating one. */
+  /* No lone word on a paragraph's last line; browsers without it wrap as before. */
+  p,
+  li {
+    text-wrap: pretty;
+  }
+
+  /* clip, not hidden, which makes body a scroll container and gave two scrollbars. */
   body,
   #root {
     @apply min-h-dvh;
     overflow-x: clip;
   }
 
-  /* A faint accent glow at the top so the page has an atmosphere rather than
-     being a flat slab; fixed, so it stays put as the page scrolls. */
+  /* A faint fixed accent glow at the top, so the page isn't a flat slab. */
   body::before {
     content: '';
     position: fixed;
@@ -168,8 +155,7 @@
     display: none;
   }
 
-  /* A section heading should be readable at a glance from across the row it
-     labels; tiny uppercase grey is legible only if you go looking for it. */
+  /* Readable at a glance across the row it labels, unlike tiny uppercase grey. */
   .section-title {
     @apply flex items-center gap-2.5 font-display text-xl font-semibold tracking-tight text-white;
   }
@@ -179,12 +165,10 @@
     @apply h-5 w-1 shrink-0 rounded-full bg-gradient-to-b from-accent-400 to-accent-600;
   }
 
-  /* One card surface for every panel and list, so pages share a depth. The
-     top edge catches a little light, which is what makes it read as raised. */
+  /* One card surface for every panel, its top edge catching light so it reads raised. */
   .surface {
     @apply rounded-2xl bg-base-900/75;
-    /* The ring is in here too: Tailwind draws rings with box-shadow, which this
-       would otherwise replace. */
+    /* The ring is in here too: Tailwind draws rings with box-shadow, which this would replace. */
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.04),
       0 0 0 1px rgb(255 255 255 / 0.06),
@@ -195,8 +179,7 @@
     @apply font-display text-3xl font-bold tracking-tight text-white;
   }
 
-  /* Every anime carries its own dominant colour. Using it as a wash behind the
-     art ties a page to what is on it, instead of the same grey everywhere. */
+  /* The anime's own colour as a wash behind the art, tying the page to it. */
   .tinted {
     background-image: radial-gradient(
       120% 80% at 50% 0%,
@@ -206,8 +189,7 @@
   }
 }
 
-/* Respect the system setting rather than animating regardless: the rotating
-   hero and the card lifts are exactly what this preference is about. */
+/* Respect the system setting: the rotating hero and card lifts are what it's about. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -218,11 +200,24 @@
   }
 }
 
-/* Rounded corners belong to the player sitting in a page. Filling a screen or a
-   floating window, they only shave slivers off the picture — and the rounding
-   is keyed to viewport width, which says nothing about either state. */
+/* Rounded corners only in a page: fullscreen or floating, they shave the picture. */
 :fullscreen,
 :fullscreen video,
 :fullscreen canvas {
   border-radius: 0;
+}
+
+/* A 44px touch hit area around a small control, its look and place unchanged; the control must be positioned. */
+@utility tap {
+  @media (pointer: coarse) {
+    &::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
 }

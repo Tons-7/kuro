@@ -11,9 +11,7 @@ import (
 	"golang.org/x/text/width"
 )
 
-// Normalise never alters spelling, so two titles cannot collapse into one.
-// Step order matters: macrons expand to digraphs before the diacritic strip,
-// or "Sōsō" becomes "soso" while "Sousou" stays "sousou".
+// Normalise never alters spelling. Macrons expand before the diacritic strip, or "Sōsō" isn't "sousou".
 func Normalise(s string) string {
 	s = width.Fold.String(strings.TrimSpace(s))
 	s = strings.ToLower(s)

@@ -11,8 +11,7 @@ var subtitleMarkers = []struct {
 	lang string
 	re   *regexp.Regexp
 }{
-	// "Multi-Subs" without a list of languages effectively always includes
-	// English, which is the only reason a group advertises it.
+	// A bare "Multi-Subs" effectively always includes English.
 	{"en", regexp.MustCompile(`(?i)\b(?:eng(?:lish)?)[\s._-]*(?:sub(?:s|bed|title)?s?)\b` +
 		`|\bsub(?:s|title)?s?[\s._-]*\(?\s*eng?\b` +
 		`|\[eng?(?:lish)?\]` +
@@ -39,8 +38,7 @@ var subtitleMarkers = []struct {
 // 内嵌 and 硬字幕 mean burnt into the picture; "hardsub" is the western spelling of the same thing.
 var hardSubbed = regexp.MustCompile(`内嵌|硬字幕|(?i)\bhard[\s._-]?sub(?:bed|s)?\b`)
 
-// detectSubtitles returns the languages a release name claims to carry, in the
-// order listed above rather than the order they appear.
+// detectSubtitles returns the languages a name claims, in the order above, not as written.
 func detectSubtitles(name string) ([]string, bool) {
 	var out []string
 	for _, m := range subtitleMarkers {

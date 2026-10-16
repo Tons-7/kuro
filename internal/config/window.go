@@ -13,9 +13,11 @@ import (
 type Window struct {
 	// Profile is the browser profile directory; empty means AppData.
 	Profile string
-	// Maximized opens a maximized window instead of fullscreen. Read at each
-	// open, so the setting applies from the next launch.
+	// Maximized opens maximized instead of fullscreen, read at each open.
 	Maximized func() bool
+
+	// handoff: a second launch, whose browser exits clean at once because the running window took the URL.
+	handoff bool
 
 	mu  sync.Mutex
 	run *launched
@@ -33,12 +35,12 @@ type launched struct {
 	exited chan struct{}
 }
 
-// OpenApp shows the interface without keeping a handle to it.
-func OpenApp(ctx context.Context, url string) { (&Window{}).Open(ctx, url) }
+// OpenApp, from a second launch, hands the URL to the running kuro's window (a clean quick exit).
+func OpenApp(ctx context.Context, url, profile string) {
+	(&Window{Profile: profile, handoff: true}).Open(ctx, url)
+}
 
-// Open shows the interface. Chromium's app mode gives a chrome-less window
-// that passes for native with no cgo or bundled runtime. Failing to show
-// anything is not acceptable, so every step is best-effort.
+// Open shows the interface in Chromium's app mode (native-looking, no cgo); every step is best-effort.
 func (w *Window) Open(ctx context.Context, url string) {
 	// The server has only just bound its port; a window that opens first shows a connection error.
 	select {
@@ -47,8 +49,7 @@ func (w *Window) Open(ctx context.Context, url string) {
 	case <-time.After(250 * time.Millisecond):
 	}
 
-	// Twice: right after an update the old window still holds the profile, and
-	// a browser that cannot take it exits showing nothing.
+	// Twice: right after an update the old window still holds the profile.
 	for attempt := range 2 {
 		if attempt > 0 {
 			select {
@@ -58,7 +59,7 @@ func (w *Window) Open(ctx context.Context, url string) {
 			}
 		}
 		maximized := w.Maximized != nil && w.Maximized()
-		if l := showWindow(ctx, url, w.profile(), maximized); l != nil {
+		if l := showWindow(ctx, url, w.profile(), maximized, w.handoff); l != nil {
 			w.mu.Lock()
 			w.run = l
 			w.mu.Unlock()
@@ -92,10 +93,8 @@ var (
 	showTab    = openBrowser
 )
 
-// appWindow starts the chrome-less window and reports what stayed up; one that
-// cannot take the profile exits at once showing nothing. A hand-off to a window
-// another process owns is reported without a command to close.
-func appWindow(ctx context.Context, url, profile string, maximized bool) *launched {
+// appWindow starts the window and reports what stayed up (no close command for a hand-off).
+func appWindow(ctx context.Context, url, profile string, maximized, handoff bool) *launched {
 	browser := findChromium()
 	if browser == "" {
 		return nil
@@ -116,7 +115,7 @@ func appWindow(ctx context.Context, url, profile string, maximized bool) *launch
 	case <-exited:
 		// Off Windows the window outlives kuro, so a relaunch hands the URL
 		// to it and exits clean at once; that is the window, not a failure.
-		if runtime.GOOS != "windows" && cmd.ProcessState.Success() {
+		if (runtime.GOOS != "windows" || handoff) && cmd.ProcessState.Success() {
 			return &launched{}
 		}
 		return nil

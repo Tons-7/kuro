@@ -17,8 +17,7 @@ func TestBareNumberBeforeTheQualityRun(t *testing.T) {
 		// A version still rides along.
 		{"[Group] Some Show 08v2 1080p", "Some Show", 8},
 
-		// Not episodes: a year, a title that is itself a number, a single
-		// digit, and a number with no quality run after it.
+		// Not episodes: a year, a numeric title, one digit, a number with no quality run after.
 		{"[NoobSubs] your name. 2016 (1080p Blu-ray Dual Audio 8bit AC3)", "your name. 2016", 0},
 		{"[Group] 86 1080p", "86", 0},
 		{"[Group] Show 8 1080p", "Show 8", 0},
@@ -52,8 +51,7 @@ func TestCodecIsNotABareEpisode(t *testing.T) {
 	}
 }
 
-// A number before " - EE" is the title's or the season's, not the start of a
-// range: these are single episodes.
+// A number before " - EE" is the title's or season's, not a range start: single episodes.
 func TestTitleNumberBeforeTheEpisodeIsNotARange(t *testing.T) {
 	cases := []struct {
 		name    string

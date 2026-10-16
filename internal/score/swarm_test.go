@@ -117,8 +117,7 @@ func TestPickDoesNotDependOnOrder(t *testing.T) {
 	}
 }
 
-// A dead .avi naming the episode used to win on that alone, over the complete
-// Blu-ray, because nothing else stated the episode.
+// A dead .avi naming the episode must not beat the complete Blu-ray on that alone.
 func TestUnlabelledEpisodeLosesToALabelledPack(t *testing.T) {
 	prefs := DefaultPreferences()
 	avi := Candidate{

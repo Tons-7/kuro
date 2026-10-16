@@ -71,8 +71,7 @@ func TestMarkSyncedClearsARowThatDidNotMove(t *testing.T) {
 	}
 }
 
-// A sync that changes nothing must not touch the rows: the favourites page
-// orders by updated_at, and every sync used to shuffle it.
+// A sync that changes nothing leaves the rows, or the favourites page (by updated_at) shuffles.
 func TestMergeLeavesSettledRowsAlone(t *testing.T) {
 	st := favouriteStore(t)
 	ctx := context.Background()

@@ -6,9 +6,7 @@ import (
 	"testing"
 )
 
-// Sukebei serves the same feed under its own XML namespace, so a namespace-
-// qualified struct tag silently yields items with no info hash.
-// Opt-in: KURO_LIVE=1 KURO_SUKEBEI=<site url> go test ./internal/indexer -run Sukebei
+// Sukebei's XML namespace still yields hashes. Opt-in: KURO_LIVE=1 KURO_SUKEBEI=<url> go test -run Sukebei
 func TestSukebeiReturnsUsableTorrents(t *testing.T) {
 	base := os.Getenv("KURO_SUKEBEI")
 	if os.Getenv("KURO_LIVE") == "" || base == "" {

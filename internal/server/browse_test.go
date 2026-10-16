@@ -9,8 +9,7 @@ import (
 	"kuro/internal/config"
 )
 
-// The Browse page puts its filters in the query string, so the sort the user
-// picked has to survive the whole way to the AniList request.
+// The sort picked on Browse survives the query string all the way to AniList.
 func TestBrowseSortReachesAniList(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

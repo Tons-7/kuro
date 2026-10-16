@@ -136,8 +136,7 @@ type CacheUsage struct {
 	Entries   []CacheEntry `json:"entries,omitempty"`
 }
 
-// torrent_file is joined loosely: only downloads that went through playback
-// have one, and requiring it hid the rest from the budget.
+// torrent_file is joined loosely: only played downloads have one.
 const cacheListQuery = `
 SELECT c.info_hash, c.file_index, t.engine_id, c.bytes_on_disk, c.complete, c.pinned, c.kept,
        CASE WHEN e.status IN ('CURRENT','REPEATING') THEN 1 ELSE 0 END,
@@ -246,8 +245,7 @@ func (s *Store) DownloadFiles(ctx context.Context, infoHash string) ([]DownloadF
 	return out, rows.Err()
 }
 
-// KeepDownload moves a whole torrent between the cache tier and the kept tier,
-// whole because eviction deletes whole torrents.
+// KeepDownload moves a whole torrent between the cache and kept tiers, as eviction is per torrent.
 func (s *Store) KeepDownload(ctx context.Context, infoHash string, kept bool) (bool, error) {
 	res, err := s.w.ExecContext(ctx,
 		`UPDATE cache_entry SET kept = ? WHERE info_hash = ?`, boolInt(kept), infoHash)
@@ -258,8 +256,7 @@ func (s *Store) KeepDownload(ctx context.Context, infoHash string, kept bool) (b
 	return n > 0, nil
 }
 
-// Superseded lists releases another one replaced for the episode: every file of
-// theirs is deselected, so nothing plays from them any more.
+// Superseded lists an episode's replaced releases, whose files are all deselected.
 func (s *Store) Superseded(ctx context.Context, animeID int, epKey string) ([]string, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT DISTINCT f.info_hash FROM torrent_file f
@@ -311,11 +308,16 @@ func (s *Store) WatchedEpisodes(ctx context.Context, animeID int) (map[int]bool,
 		return nil, err
 	}
 
+	// A finished show played again is a rewatch: its count covers every episode, not what was seen this time.
 	var progress int
+	var status sql.NullString
 	err = s.r.QueryRowContext(ctx,
-		`SELECT coalesce(progress, 0) FROM list_entry WHERE anime_id = ?`, animeID).Scan(&progress)
+		`SELECT coalesce(progress, 0), status FROM list_entry WHERE anime_id = ?`, animeID).Scan(&progress, &status)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
+	}
+	if status.String == "COMPLETED" {
+		progress = 0
 	}
 	for n := 1; n <= progress; n++ {
 		if !played[n] {
@@ -341,16 +343,13 @@ func (s *Store) PinCache(ctx context.Context, infoHash string, fileIndex int, pi
 	return err
 }
 
-// UnpinAll runs at startup: a pin left behind by a crash would otherwise be
-// permanent and slowly fill the cache with unevictable files.
+// UnpinAll runs at startup, or a crash's leftover pin makes files unevictable for good.
 func (s *Store) UnpinAll(ctx context.Context) error {
 	_, err := s.w.ExecContext(ctx, `UPDATE cache_entry SET pinned = 0`)
 	return err
 }
 
-// PinOnly marks one file as the thing being watched and clears every other
-// pin. Only one episode plays at a time, so the pin belongs to whatever last
-// started streaming.
+// PinOnly pins the file being watched and clears every other pin: one episode plays at a time.
 func (s *Store) PinOnly(ctx context.Context, infoHash string, fileIndex int) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -372,8 +371,7 @@ func (s *Store) PinOnly(ctx context.Context, infoHash string, fileIndex int) err
 	return tx.Commit()
 }
 
-// CachedFile finds the file holding one episode, so playback can release its
-// pin without tracking the hash itself.
+// CachedFile finds an episode's file, so playback can unpin it without tracking the hash.
 func (s *Store) CachedFile(ctx context.Context, animeID int, epKey string) (string, int, error) {
 	var hash string
 	var index int
@@ -387,8 +385,7 @@ func (s *Store) CachedFile(ctx context.Context, animeID int, epKey string) (stri
 	return hash, index, nil
 }
 
-// FileComplete answers from the sweeper's record, which outlives the engine
-// session an episode was downloaded in.
+// FileComplete answers from the sweeper's record, which outlives engine sessions.
 func (s *Store) FileComplete(ctx context.Context, infoHash string, fileIndex int) bool {
 	var complete int
 	err := s.r.QueryRowContext(ctx,

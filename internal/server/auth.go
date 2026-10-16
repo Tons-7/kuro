@@ -65,9 +65,8 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	s.anilist.SetToken(token.AccessToken)
-
-	viewer, err := s.anilist.Viewer(ctx)
+	// Installed only once saved: a failure on the way leaves the previous login, or none, in force.
+	viewer, err := s.anilist.ViewerWith(ctx, token.AccessToken)
 	if err != nil {
 		s.log.Error("viewer", "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -86,6 +85,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.anilist.SetToken(token.AccessToken)
 
 	s.log.Info("anilist connected", "user", viewer.Name, "id", viewer.ID)
 	http.Redirect(w, r, "/settings?connected=anilist", http.StatusFound)

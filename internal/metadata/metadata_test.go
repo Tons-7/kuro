@@ -19,8 +19,7 @@ func testClient(t *testing.T, name string, h http.HandlerFunc) *Client {
 	return c
 }
 
-// ani.zip emits both airDate and airdate for the same value, and keys specials
-// "S1".."Sn" alongside numbered episodes.
+// ani.zip emits both airDate and airdate, and keys specials "S1".."Sn" among episodes.
 const anizipJSON = `{
   "titles": {"en": "Frieren", "x-jat": "Sousou no Frieren"},
   "mappings": {"mal_id": 52991, "anidb_id": 17617, "thetvdb_id": 424536},
@@ -131,8 +130,7 @@ func TestFillersParsesAllCategories(t *testing.T) {
 	}
 }
 
-// A missing bulk dataset is a broken URL, not an empty result. Treating a 404
-// as success reports a successful load of nothing.
+// A missing bulk dataset is a broken URL, not a successful load of nothing.
 func TestFillersTreatsMissingFileAsError(t *testing.T) {
 	c := testClient(t, "filler", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -283,8 +281,7 @@ func TestParseDate(t *testing.T) {
 	}
 }
 
-// Jikan has spent days answering 504 on every endpoint, so the flags fetch
-// leads with Tenrai and keeps Jikan only as a second chance.
+// Jikan 504s for days at a time, so the flags fetch leads with Tenrai.
 func TestFlagsFallsBackWhenThePrimaryIsDown(t *testing.T) {
 	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[{"mal_id":7,"filler":true,"recap":false}],
@@ -368,8 +365,7 @@ func TestFillerSiteEpisodesParsesRows(t *testing.T) {
 	}
 }
 
-// Titles differ in punctuation and often carry the romanisation in brackets,
-// so both halves have to resolve to the same show.
+// Titles differ in punctuation and bracket the romanisation; both halves resolve to one show.
 func TestFillerSiteShowsMatchesEitherTitle(t *testing.T) {
 	c := testClient(t, "fillersite", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `

@@ -25,9 +25,7 @@ param(
     [string]$Version
 )
 
-# Native tools write progress and warnings to stderr, which Windows PowerShell
-# turns into terminating errors under Stop. Exit codes are what actually say
-# whether a step failed, and every step below checks one.
+# Under Stop, stderr output becomes a terminating error; exit codes say whether a step failed.
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 
@@ -44,9 +42,9 @@ if (-not $SkipWeb) {
         # -b, not --noEmit: the root tsconfig is a solution file with no files
         # of its own, so --noEmit checked nothing and exited 0 on anything.
         npx tsgo -b --force
-        if ($LASTEXITCODE -ne 0) { Pop-Location; Fail 'type check failed' }
+        if ($LASTEXITCODE -ne 0) { Fail 'type check failed' }
         npx vite build
-        if ($LASTEXITCODE -ne 0) { Pop-Location; Fail 'frontend build failed' }
+        if ($LASTEXITCODE -ne 0) { Fail 'frontend build failed' }
     } finally {
         Pop-Location
     }
@@ -62,22 +60,29 @@ if ($Target) {
 }
 
 if (-not $Out) {
-    $name = if ($goos -eq 'windows' -or (-not $goos)) { 'kuro.exe' } else { 'kuro' }
+    # The name from its parts: a regex on 'kuro.exe' matched twice and gave kuro-windows-arm64.exe-windows-arm64.
+    $targetOS = if ($goos) { $goos } else { go env GOOS }
+    $ext = if ($targetOS -eq 'windows') { '.exe' } else { '' }
     $suffix = if ($Target) { "-$goos-$goarch" } else { '' }
-    $Out = Join-Path $root ($name -replace '(\.exe)?$', "$suffix`$1")
+    $Out = Join-Path $root "kuro$suffix$ext"
 }
+# go -C resolves a relative -o against the repo, not where this was run from; say the same path it will use.
+$Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
 
+# Set for the build and put back after: the caller's shell keeps its own values.
+$was = @{ CGO_ENABLED = $env:CGO_ENABLED; GOOS = $env:GOOS; GOARCH = $env:GOARCH }
 $env:CGO_ENABLED = '0'
 if ($goos) { $env:GOOS = $goos; $env:GOARCH = $goarch }
 try {
-    # Trimming the symbol table roughly halves the binary; nothing here needs
-    # a Go stack trace in production.
+    # Trimming the symbol table roughly halves the binary; nothing needs a Go stack trace in production.
     $ldflags = '-s -w'
     if ($Version) { $ldflags += " -X kuro/internal/update.Version=$Version" }
     go -C $root build -trimpath -ldflags $ldflags -o $Out ./cmd/kuro
     if ($LASTEXITCODE -ne 0) { Fail 'go build failed' }
 } finally {
-    Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+    foreach ($name in $was.Keys) {
+        if ($null -eq $was[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue } else { Set-Item "Env:$name" $was[$name] }
+    }
 }
 
 $size = [math]::Round((Get-Item $Out).Length / 1MB, 1)

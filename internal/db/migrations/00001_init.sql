@@ -100,8 +100,7 @@ CREATE TABLE episode (
 
 CREATE INDEX episode_air ON episode(air_date) WHERE air_date IS NOT NULL;
 
--- kind: manga-canon | anime-canon | mixed | filler | recap
--- user_kind wins when set, so a wrong upstream classification stays corrected.
+-- kind: manga-canon | anime-canon | mixed | filler | recap; user_kind, when set, overrides upstream.
 CREATE TABLE filler (
     mal_id    INTEGER NOT NULL,
     number    INTEGER NOT NULL,
@@ -123,9 +122,7 @@ CREATE TABLE skip_time (
     PRIMARY KEY (mal_id, number, kind)
 ) STRICT;
 
--- Mirrors the AniList list. id is MediaList.id, which is what mutations take.
--- One row per anime: AniList returns an entry once per custom list it belongs to,
--- and those duplicate references all share this id.
+-- Mirrors the AniList list; id is MediaList.id, one row per anime even when it sits on several custom lists.
 CREATE TABLE list_entry (
     id                INTEGER PRIMARY KEY,
     anime_id          INTEGER NOT NULL UNIQUE REFERENCES anime(id) ON DELETE CASCADE,
@@ -185,8 +182,7 @@ CREATE TABLE torrent (
     added_at    INTEGER NOT NULL
 ) STRICT;
 
--- Only files we actually mapped to an episode are downloaded; the rest of a
--- season batch is never fetched.
+-- Only files mapped to an episode are downloaded; the rest of a season batch is never fetched.
 CREATE TABLE torrent_file (
     info_hash  TEXT    NOT NULL REFERENCES torrent(info_hash) ON DELETE CASCADE,
     file_index INTEGER NOT NULL,

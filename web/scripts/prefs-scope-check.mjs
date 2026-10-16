@@ -1,5 +1,4 @@
-// The player's toggles must change the value they show. Reading the per-show
-// value while writing the global one makes them disagree.
+// The player's toggles change the value they show: the per-show one, not the global.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -104,8 +103,7 @@ check(
   'the global setting was left alone',
 )
 
-// A key with no override still edits the global, so the player keeps setting
-// the default for every other show.
+// A key with no override still edits the global, the default for every other show.
 await page.getByRole('switch', { name: 'Auto play' }).click()
 check(
   await until(async () => (await state('Auto play')) === 'false'),

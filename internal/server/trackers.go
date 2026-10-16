@@ -58,6 +58,8 @@ func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
 		mal.HasSecret = secret != ""
 		mal.Configured = s.mal.Configured()
 		mal.Connected = s.mal.Authenticated()
+		malError, _ := s.store.Setting(ctx, library.MALAuthErrorSetting)
+		mal.Reconnect = mal.Connected && malError != ""
 		mal.User, _ = s.store.Setting(ctx, "mal.user_name")
 	}
 	list = append(list, mal)

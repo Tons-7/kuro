@@ -20,8 +20,7 @@ func entry(hash string, bytes int64, lastPlayed int64, pinned, protected bool) s
 	}
 }
 
-// One of the pinned files is playing right now, so it can never be a
-// candidate no matter how the budget looks.
+// A pinned file is playing now, so it is never a candidate, whatever the budget.
 func TestEvictionOrderNeverOffersPinned(t *testing.T) {
 	got := evictionOrder([]store.CacheEntry{
 		entry("pinned", 1<<30, 100, true, false),
@@ -81,8 +80,7 @@ func TestEvictionOrderEmptyAndAllPinned(t *testing.T) {
 	}
 }
 
-// Eviction deletes the torrent, not the file, so an idle episode sharing a
-// batch with the one playing would take it down mid-scene.
+// Eviction deletes a torrent, so an idle episode in the playing one's batch would take it down.
 func TestPinCoversEverySiblingOfTheSameTorrent(t *testing.T) {
 	playing := entry("batch", 1<<30, 900, true, false)
 	playing.FileIndex = 3
@@ -213,10 +211,7 @@ func TestEvictionOrderNeverOffersKept(t *testing.T) {
 	}
 }
 
-// A kept download is outside the budget: it neither fills the cache nor is taken
-// to make room, however large it is.
-// A slow download left running is the oldest entry there is, so it used to be
-// evicted first — deleted mid-transfer, on the connection least able to redo it.
+// A slow download still arriving is the oldest entry, yet must not be evicted mid-transfer.
 func TestSweepSparesADownloadStillArriving(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -373,8 +368,7 @@ func TestAutoDeleteNowTakesOnlyWatchedCachedEpisodes(t *testing.T) {
 	}
 }
 
-// "keep2": an episode goes only once the two after it are watched, so the one
-// before the current stays for going back.
+// "keep2": an episode goes once the two after it are watched, so the one before stays.
 func TestAutoDeleteKeep2WaitsForTwoMore(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()

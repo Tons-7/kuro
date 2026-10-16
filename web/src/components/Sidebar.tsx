@@ -109,8 +109,7 @@ export function ScheduleWidget() {
         <Skeleton className="h-56 w-full" />
       ) : (
         <>
-          {/* A fixed grid rather than a scroller: seven tabs in a narrow
-              column were overflowing, leaving Saturday sliced in half. */}
+          {/* A fixed grid, or seven tabs overflow the narrow column. */}
           <div className="mb-3 grid grid-cols-7 gap-0.5">
             {days.map((day, i) => (
               <button
@@ -142,10 +141,7 @@ function DayList({ day }: { day?: ScheduleDay }) {
   // Before the early returns: a hook that only sometimes runs crashes the render the moment the day changes.
   const now = useNow() / 1000
 
-  // The next episode to air is the one worth looking at, so the column opens
-  // on it rather than at 5am. Measured against the list's own box: offsetTop is
-  // relative to the nearest positioned ancestor, which is the page here, and
-  // scrolling by that lands at the bottom every time.
+  // Opens on the next episode to air, measured against the list's box (offsetTop is the page's).
   useEffect(() => {
     const el = upcoming.current
     const box = list.current
@@ -179,8 +175,7 @@ function DayList({ day }: { day?: ScheduleDay }) {
               isNext && 'bg-accent-500/10 ring-1 ring-accent-500/40',
             )}
           >
-            {/* Small enough not to crowd the column, large enough to be
-                recognised faster than the title can be read. */}
+            {/* Small enough for the column, big enough to recognise before the title. */}
             {item.thumb ?? item.cover ? (
               <img
                 src={item.thumb ?? item.cover}

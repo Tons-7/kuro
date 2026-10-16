@@ -19,8 +19,7 @@ func rawResult(title string) score.Result {
 	return score.Rank([]score.Candidate{c}, score.DefaultPreferences())[0]
 }
 
-// A just-aired episode is normally raw for a few hours. Reporting that as
-// "nothing found" reads as a failure when the truth is "not yet".
+// A just-aired episode is raw for hours: that's "not yet", not "nothing found".
 func TestNoReleaseSinglesOutARawOnlyEpisode(t *testing.T) {
 	raw := rawResult("[Ohys-Raws] Show - 07 (TX 1280x720 x264 AAC).mp4")
 	if !raw.RejectedOnlyAsRaw() {

@@ -2,6 +2,7 @@ package anilist
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -109,5 +110,25 @@ func TestRejectionIsNotReplacedBySavedAnswer(t *testing.T) {
 	}
 	if UsedSaved(page) {
 		t.Error("marked saved without using it")
+	}
+}
+
+// "Try now" asks AniList at once, even inside the window that would otherwise serve saved answers.
+func TestRecheckAsksDespiteTheDownWindow(t *testing.T) {
+	asked := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		asked++
+		io.WriteString(w, `{"data":{"Page":{"pageInfo":{"total":1}}}}`)
+	})
+	c.markDown()
+
+	if err := c.Recheck(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 {
+		t.Fatalf("%d requests, want the one live question", asked)
+	}
+	if c.isDown() {
+		t.Error("a live answer left the client marked down")
 	}
 }

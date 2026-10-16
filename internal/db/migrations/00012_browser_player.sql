@@ -1,9 +1,6 @@
 -- +goose Up
 
--- Migration 00005 seeded mpv as the player, from before the browser player
--- existed. mpv cannot be used from a phone or a TV, which is most of why
--- anyone runs this on the network, so the default moves to the one that works
--- everywhere. mpv stays available globally or per show.
+-- The default player moves from mpv to the browser, which works on phones and TVs too.
 UPDATE setting SET value = 'browser' WHERE key = 'playback.player' AND value = 'mpv';
 
 -- +goose Down

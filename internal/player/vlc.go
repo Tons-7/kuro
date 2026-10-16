@@ -18,8 +18,7 @@ import (
 	"time"
 )
 
-// VLC is the other desktop player, driven through its HTTP interface on a
-// loopback port the way mpv is driven through its socket.
+// VLC is the other desktop player, driven through its loopback HTTP interface.
 type VLC struct {
 	binary string
 	log    *slog.Logger
@@ -236,8 +235,7 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 					if err := v.seek(ctl, r.End); err != nil {
 						v.log.Warn("VLC seek", "err", err)
 					} else {
-						// An ending skip lands on the last second and VLC stops
-						// before the next poll; that is the end, not a stop.
+						// An ending skip stops VLC before the next poll: the end, not a stop.
 						lastPos = r.End
 					}
 				}

@@ -19,8 +19,7 @@ func TestCleanQueryStripsWhatNoFilenameContains(t *testing.T) {
 	}
 }
 
-// A first season is almost never labelled as one in a release name, so keeping
-// the marker only narrows the search to nothing.
+// Release names rarely label a first season, so keeping the marker narrows the search to nothing.
 func TestCleanQueryDropsSeasonOne(t *testing.T) {
 	for _, in := range []string{
 		"Some Show Season 1",

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -45,12 +46,20 @@ func DualListener(ln net.Listener, cfg *tls.Config) net.Listener {
 	return d
 }
 
+// accept keeps going after an error, as Serve asks again; only the listener closing ends it.
 func (d *dualListener) accept() {
 	for {
 		conn, err := d.Listener.Accept()
 		if err != nil {
-			d.errs <- err
-			return
+			select {
+			case d.errs <- err:
+			case <-d.done:
+				return
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			continue
 		}
 		// Sniffed off the accept loop: a client that connects and says nothing holds up no one.
 		go d.sniff(conn)

@@ -1,8 +1,6 @@
 -- +goose Up
 
--- Private trackers publish no usable infohash, so several curated releases for
--- one anime share an empty hash and collided under the old primary key. The
--- release group is what distinguishes them.
+-- Private-tracker releases share an empty infohash, so the release group is part of the key.
 DROP TABLE IF EXISTS seadex;
 
 CREATE TABLE seadex (

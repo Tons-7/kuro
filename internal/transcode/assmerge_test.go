@@ -7,8 +7,7 @@ import (
 
 const mergeHead = "[Script Info]\nScriptType: v4.00+\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 
-// Reads from the start and around the playhead recover different stretches;
-// the track is both, once each, in time order.
+// Reads from the start and the playhead merge, each line once, in time order.
 func TestMergeASSUnionsInTimeOrder(t *testing.T) {
 	start := mergeHead +
 		"Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,one\n" +

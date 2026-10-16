@@ -1,5 +1,4 @@
-// Package jobs runs the recurring background work through one scheduler, so each
-// task's last run, failure, and status are observable.
+// Package jobs runs recurring work through one scheduler, so each task's runs and failures show.
 package jobs
 
 import (
@@ -26,9 +25,9 @@ type Status struct {
 	Name     string    `json:"name"`
 	Every    string    `json:"every"`
 	Running  bool      `json:"running"`
-	LastRun  time.Time `json:"lastRun,omitempty"`
-	LastOK   time.Time `json:"lastOk,omitempty"`
-	NextRun  time.Time `json:"nextRun,omitempty"`
+	LastRun  time.Time `json:"lastRun"`
+	LastOK   time.Time `json:"lastOk"`
+	NextRun  time.Time `json:"nextRun"`
 	Runs     int       `json:"runs"`
 	Failures int       `json:"failures"`
 	LastErr  string    `json:"lastError,omitempty"`
@@ -125,11 +124,9 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 
 func backoff(base time.Duration, failures int) time.Duration {
 	capped := math.Min(float64(failures), 5)
+	// Capped, but never under the job's own interval: a daily job that fails must not run four times a day.
 	wait := time.Duration(float64(base) * math.Pow(2, capped))
-	if wait > 6*time.Hour {
-		return 6 * time.Hour
-	}
-	return wait
+	return max(min(wait, 6*time.Hour), base)
 }
 
 func (s *Scheduler) execute(ctx context.Context, e *entry) error {
@@ -184,8 +181,7 @@ func safely(log *slog.Logger, name string, ctx context.Context, run Func) (err e
 	return run(ctx)
 }
 
-// Trigger starts a job now, in the background, without disturbing its
-// schedule. ErrRunning when it already is.
+// Trigger starts a job now in the background, schedule untouched; ErrRunning if it already is.
 func (s *Scheduler) Trigger(name string) error {
 	return s.RunAs(name, nil)
 }

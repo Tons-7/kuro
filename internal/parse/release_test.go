@@ -154,8 +154,7 @@ func TestRemuxOutranksBluRay(t *testing.T) {
 	}
 }
 
-// Hi10P names H.264 High 10 Profile, so it settles both codec and bit depth
-// even when the release never writes "x264".
+// Hi10P is H.264 High 10, settling codec and bit depth without "x264".
 func TestHi10PImpliesH264(t *testing.T) {
 	got := Parse("[Group] Some Show - 07 [1080p Hi10P AAC].mkv")
 	if got.Codec != "H264" {

@@ -1,22 +1,5 @@
-// Runs player-check.mjs end to end against a throwaway kuro instance: builds
-// the app, generates a test episode, starts an isolated server, drives the
-// browser check, then tears it all down. One command, repeatable.
-//
-//   node scripts/run-player-check.mjs
-//
-// Env:
-//   PORT=4399        which port the throwaway server listens on; another port
-//                    gets its own scratch dir and peer port, so runs can overlap
-//                    (build once first, then SKIP_BUILD=1 for each)
-//   KURO_ANIME=…     catalogue id the test file is assigned to (needs network
-//                    the first time, to fetch that show's metadata)
-//   SKIP_BUILD=1     reuse the current web/dist and a prebuilt kuro.exe
-//   KEEP=1           leave the scratch dir and its logs in place afterwards
-//   BIN_ONLY=a,b     a bin holding only these programs (none: empty)
-//   ANILIST_LIVE=1   ask AniList directly instead of through the day-long cache
-//
-// Requires a network connection the first time each day: the series page fetches
-// real metadata from AniList/MAL; AniList's answers are then reused (anilist-cache.mjs).
+// Builds, then runs a browser check (player-check.mjs by default) on a throwaway kuro, and tears it down.
+// Env: PORT=4399 (own scratch), KURO_ANIME=id, SKIP_BUILD=1, KEEP=1, BIN_ONLY=a,b|none, ANILIST_LIVE=1.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -54,9 +37,9 @@ const isolated = {
 const lib = join(scratch, 'lib')
 const shots = join(scratch, 'shots')
 const serverLog = join(scratch, 'server.log')
-// The binary lives outside the scratch that is wiped each run, so SKIP_BUILD
-// has something to reuse.
-const binCache = join(tmpdir(), 'kuro-e2e-bin')
+// The binary lives outside the scratch wiped each run, so SKIP_BUILD has something to reuse.
+// KURO_BIN_DIR: a build of its own, while another run still has the shared binary open.
+const binCache = process.env.KURO_BIN_DIR ?? join(tmpdir(), 'kuro-e2e-bin')
 const kuroExe = join(binCache, exe('kuro'))
 
 let server
@@ -128,8 +111,7 @@ ${cues.join('\n')}
   )
 
   const out = join(lib, 'Kuro Test Show - 01.mkv')
-  // Two audio tracks (a low tone for Japanese, a high one for English) so the
-  // dub/sub track switch has something real to choose between.
+  // Two audio tracks (low tone Japanese, high English) for the sub/dub switch to choose between.
   run(ffmpeg, [
     '-y', '-hide_banner', '-loglevel', 'error',
     '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
@@ -150,9 +132,7 @@ ${cues.join('\n')}
   return out
 }
 
-// Episode 3: a subtitle track of 90 position-coded markers, cue i a block at
-// x = 40 + 12i shown from 2i to 2i+1.9s, so a check can read which cue is
-// painted and compare it with the clock.
+// Episode 3's subtitles: cue i is a block at x = 40 + 12i from 2i to 2i+1.9s, readable against the clock.
 function makeMarkerEpisode() {
   const cues = []
   for (let i = 0; i < 90; i++) {
@@ -214,8 +194,7 @@ try {
   stage(`scratch instance at ${scratch}`)
   rmSync(scratch, { recursive: true, force: true })
   for (const d of [scratch, root, appdata, lib, shots]) mkdirSync(d, { recursive: true })
-  // BIN_ONLY=a,b links only those, the install of someone who skipped the rest;
-  // BIN_ONLY=none links nothing.
+  // BIN_ONLY=a,b links only those (someone who skipped the rest); none links nothing.
   linkBin(join(repo, 'bin'), join(root, 'bin'), process.env.BIN_ONLY ? process.env.BIN_ONLY.split(',') : null)
   // A port nothing listens on, so searches fail fast and the first-run nudge stays off; e2e-swarm answers
   // there when a check starts it. The peer port is off the app's own.
@@ -226,8 +205,7 @@ try {
 
   if (!SKIP_BUILD) {
     stage('building web (vite)')
-    // A single string under shell:true so a .cmd shim runs on Windows without
-    // the args-with-shell deprecation.
+    // One string under shell:true, so a .cmd shim runs without the args-with-shell warning.
     run('npm run build', [], { cwd: webDir, shell: true })
     stage('building server (go)')
     mkdirSync(binCache, { recursive: true })
@@ -248,8 +226,7 @@ try {
   const logFd = openSync(serverLog, 'w')
   server = spawn(kuroExe, [], {
     cwd: root,
-    // No app window: Playwright is the browser, and the window's Chromium
-    // profile outlives taskkill and blocks the scratch cleanup.
+    // No app window: Playwright is the browser, and the window's profile blocks cleanup.
     env: { ...process.env, ...isolated, ...upstream, ...binOnlyPath() },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
@@ -277,8 +254,7 @@ try {
   if (KEEP) {
     console.log(`\nscratch kept at ${scratch} (server log: ${serverLog})`)
   } else {
-    // Windows keeps the killed server's files locked a moment; a failed
-    // cleanup must not overwrite the check's verdict.
+    // Windows holds the killed server's files a moment; a failed cleanup can't change the verdict.
     try {
       rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
     } catch (err) {

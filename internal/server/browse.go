@@ -49,8 +49,7 @@ func browseFilter(q url.Values) anilist.Browse {
 	}
 }
 
-// browse is search with the full filter set: genres, tags, year, season,
-// format, status, score and episode count.
+// browse is search with every filter: genres, tags, year, season, format, status, score, episodes.
 func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if studio, _ := strconv.Atoi(q.Get("studio")); studio > 0 {
@@ -199,8 +198,7 @@ func (s *Server) remember(r *http.Request, media []anilist.Media) {
 	}
 }
 
-// decorate turns AniList media into cards: resolved title plus whether it is
-// already on the user's list, which every grid in the UI needs.
+// decorate turns AniList media into cards: the resolved title, and whether it's on the list.
 func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem {
 	s.remember(r, media)
 	onList, err := s.store.ListEntries(r.Context())
@@ -256,8 +254,7 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 	return items
 }
 
-// recommend is "more like this". AniList's recommendations are community
-// submitted, so a show with none falls back to a genre match.
+// recommend is "more like this", falling back to a genre match when the community gave none.
 func (s *Server) recommend(w http.ResponseWriter, r *http.Request) {
 	animeID, _ := strconv.Atoi(r.URL.Query().Get("anime"))
 	if animeID <= 0 {

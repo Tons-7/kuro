@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// "Download next" on a waiting episode: it goes to the front, the rest keep
-// their order, and the one already downloading is not disturbed.
+// "Download next" moves a waiting episode to the front, the rest in order, the running one untouched.
 func TestPrioritiseMovesAnEpisodeToTheFront(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -160,8 +159,7 @@ func TestPromoteReachesTheEpisodeDownloading(t *testing.T) {
 	}
 }
 
-// A failure is kept and reported rather than disappearing, which would be
-// indistinguishable from having worked.
+// A failure is kept and reported, not vanished as if it worked.
 func TestFailedQueueEntryIsKept(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -270,8 +268,7 @@ func TestResetActiveRequeues(t *testing.T) {
 	}
 }
 
-// A failed entry is the one most likely to be dismissed by hand, so the remove
-// button has to work on it directly, not only after a retry.
+// Remove works on a failed entry directly, the one most often dismissed by hand.
 func TestDequeueRemovesAFailedEntry(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

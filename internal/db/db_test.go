@@ -89,8 +89,7 @@ func TestConnectionPoolShape(t *testing.T) {
 	}
 }
 
-// query_only makes the split structural: a write routed to the read handle
-// fails instead of silently contending with the writer.
+// query_only makes the split structural: a write on the read handle fails, not contends.
 func TestReadHandleRejectsWrites(t *testing.T) {
 	conn := migrated(t)
 

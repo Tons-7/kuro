@@ -1,8 +1,6 @@
 -- +goose Up
 
--- Files the user already has on disk. anime_id has no foreign key: a scan can
--- match against the corpus, which holds anime that were never imported into
--- the anime table, including MyAnimeList-only ids that are negative.
+-- Files already on disk. No foreign key: a scan matches corpus anime the anime table may not hold.
 CREATE TABLE local_file (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     path          TEXT    NOT NULL UNIQUE,

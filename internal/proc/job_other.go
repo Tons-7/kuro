@@ -2,6 +2,5 @@
 
 package proc
 
-// Elsewhere the helpers are killed on a clean exit and reparented to init
-// otherwise, so there is nothing equivalent to arrange.
+// Elsewhere helpers die on a clean exit and go to init otherwise: nothing to arrange.
 func KillChildrenOnExit() error { return nil }

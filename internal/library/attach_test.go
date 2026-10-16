@@ -24,8 +24,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// fakeEngine is enough of the engine to drive attach: add a torrent, report its
-// state, stream from it, delete it.
+// fakeEngine is enough engine for attach: add, report state, stream, delete.
 type fakeEngine struct {
 	mu       sync.Mutex
 	dead     map[string]bool          // by info hash
@@ -37,8 +36,7 @@ type fakeEngine struct {
 	deleted  []string
 	next     int
 
-	// trickle: connected peers and bytes arriving, the head only after this long.
-	// stuck: connected peers that never send a byte.
+	// trickle: peers and bytes, the head only after this long; stuck: peers that never send a byte.
 	trickle map[string]time.Duration
 	stuck   map[string]bool
 	addedAt map[string]time.Time
@@ -147,8 +145,7 @@ func (f *fakeEngine) handler() http.Handler {
 		})
 	})
 
-	// A dead swarm delivers nothing: the connection drops rather than serving
-	// bytes, which is how Prewarm learns the release is no good.
+	// A dead swarm drops the connection instead of serving bytes, which tells Prewarm it's no good.
 	mux.HandleFunc("GET /torrents/{id}/stream/{file}", func(w http.ResponseWriter, r *http.Request) {
 		var id int
 		fmt.Sscanf(r.PathValue("id"), "%d", &id)
@@ -227,11 +224,11 @@ var magnetName = regexp.MustCompile(`[?&]dn=([^&"\s]+)`)
 
 func hashOf(magnet string) string {
 	const marker = "urn:btih:"
-	i := strings.Index(magnet, marker)
-	if i < 0 {
+	_, after, ok := strings.Cut(magnet, marker)
+	if !ok {
 		return ""
 	}
-	rest := magnet[i+len(marker):]
+	rest := after
 	if cut := strings.IndexByte(rest, '&'); cut >= 0 {
 		rest = rest[:cut]
 	}
@@ -377,8 +374,7 @@ func TestDiscardKeepsADownloadOnRecordForAnEpisode(t *testing.T) {
 	}
 }
 
-// Deleting is only safe for what this attempt started; a hash the engine already
-// held belongs to a finished download.
+// Only what this attempt started may be deleted; a hash already held is a finished download.
 func TestAttachKeepsReleasesTheEngineAlreadyHeld(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	engine.ids[99] = deadHash
@@ -494,9 +490,7 @@ func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {
 	}
 }
 
-// Resolving a release for a series-page open must add nothing to the engine: it
-// is cached in memory and the download starts only when play does, so browsing
-// never fills the Downloads tab.
+// Resolving a release on a series-page open adds nothing to the engine, so browsing never fills Downloads.
 func TestPrepareResolvesWithoutTouchingTheEngine(t *testing.T) {
 	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
@@ -540,9 +534,7 @@ func TestPrepareResolvesWithoutTouchingTheEngine(t *testing.T) {
 	}
 }
 
-// Play uses the release resolved ahead of time and does not search again: here
-// the finder has nothing, so a fresh search would fail — success proves the
-// prepared release was used.
+// Play uses the prepared release: the finder here has nothing, so a fresh search would fail.
 func TestAttachUsesThePreparedRelease(t *testing.T) {
 	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)

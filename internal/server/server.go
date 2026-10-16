@@ -1,5 +1,4 @@
-// Package server exposes the HTTP API. Handlers parse requests, delegate, and
-// write JSON; they contain no SQL and no external API calls.
+// Package server is the HTTP API: handlers parse, delegate and write JSON, with no SQL or outside calls.
 package server
 
 import (
@@ -53,10 +52,11 @@ type Server struct {
 	deps       *deps.Manager
 	downloader *library.Downloader
 	updater    *update.Updater
-	log        *slog.Logger
+	// relaunch restarts kuro, for a change that needs one.
+	relaunch func()
+	log      *slog.Logger
 
-	// Extracted embedded fonts, keyed by stream session. Populated in the
-	// background so opening a stream does not wait on ffmpeg.
+	// Extracted fonts per stream session, filled in the background so a stream needn't wait.
 	fontsMu  sync.Mutex
 	fonts    map[string][]transcode.FontFile
 	fontJobs map[string]struct{}
@@ -79,8 +79,7 @@ type Server struct {
 	// Rotated from a handler while the guard reads it.
 	tokenMu sync.RWMutex
 	token   string
-	// Set by main, which owns the listener. Nil in tests and in any build that
-	// does not serve, where switching networks is meaningless.
+	// Set by main, which owns the listener; nil in tests.
 	rebind func(addr string) error
 	// HTTPS certificates; nil in tests and builds that do not serve.
 	certs      *certs.Source
@@ -118,6 +117,7 @@ type Deps struct {
 	Deps       *deps.Manager
 	Downloader *library.Downloader
 	Updater    *update.Updater
+	Relaunch   func()
 	Token      string
 	Log        *slog.Logger
 }
@@ -127,8 +127,7 @@ func New(d Deps) *Server {
 		cfg: d.Config, store: d.Store, anilist: d.AniList,
 		importer: d.Importer, ingester: d.Ingester,
 		indexer: d.Indexer, log: d.Log,
-		// Built once by the caller: a second one here quietly lacked whatever
-		// the real one had been configured with.
+		// Built once by the caller; a second one here lacked the real one's configuration.
 		finder:     d.Finder,
 		playback:   d.Playback,
 		watcher:    d.Watcher,
@@ -148,6 +147,7 @@ func New(d Deps) *Server {
 		deps:       d.Deps,
 		downloader: d.Downloader,
 		updater:    d.Updater,
+		relaunch:   d.Relaunch,
 		token:      d.Token,
 		fonts:      map[string][]transcode.FontFile{},
 		fontJobs:   map[string]struct{}{},
@@ -198,7 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/corpus/refresh", s.corpusRefresh)
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("GET /api/trackers", s.trackers)
-	mux.HandleFunc("POST /api/trackers", s.setTracker)
+	mux.HandleFunc("POST /api/trackers", hostOnly(s.setTracker))
 	mux.HandleFunc("GET /api/setup", s.setup)
 	mux.HandleFunc("POST /api/setup/install/{name}", s.installComponent)
 	mux.HandleFunc("POST /api/setup/data-dir", hostOnly(s.setDataDir))
@@ -206,7 +206,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update/check", s.updateCheck)
 	mux.HandleFunc("POST /api/update/apply", s.updateApply)
 	mux.HandleFunc("GET /api/auth/login", hostOnly(s.authLogin))
-	mux.HandleFunc("POST /api/auth/logout", s.authLogout)
+	mux.HandleFunc("POST /api/auth/logout", hostOnly(s.authLogout))
 	mux.HandleFunc("GET /callback", hostOnly(s.authCallback))
 	mux.HandleFunc("POST /api/sync", s.sync)
 	mux.HandleFunc("POST /api/play", s.play)
@@ -217,6 +217,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/episode/skips", s.skips)
 	mux.HandleFunc("POST /api/watched", s.setWatched)
 	mux.HandleFunc("POST /api/status", s.setStatus)
+	mux.HandleFunc("DELETE /api/status/{id}", s.removeStatus)
+	mux.HandleFunc("POST /api/anilist/recheck", s.anilistRecheck)
 	mux.HandleFunc("POST /api/score", s.setScore)
 	mux.HandleFunc("POST /api/continue/dismiss", s.dismissResume)
 	mux.HandleFunc("POST /api/download", s.download)
@@ -274,7 +276,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/mal", s.malStatus)
 	mux.HandleFunc("GET /api/mal/auth/login", hostOnly(s.malLogin))
-	mux.HandleFunc("POST /api/mal/auth/logout", s.malLogout)
+	mux.HandleFunc("POST /api/mal/auth/logout", hostOnly(s.malLogout))
 	mux.HandleFunc("GET /mal/callback", hostOnly(s.malCallback))
 	mux.HandleFunc("POST /api/mal/import", s.malImport)
 	mux.HandleFunc("POST /api/mal/favourites/import", s.malFavouritesImport)
@@ -377,9 +379,7 @@ func (s *Server) libraryCounts(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, counts)
 }
 
-// searchLocal answers from the shows kuro already holds — the list and anything
-// opened — so typing gets results at once and offline. AniList is the slow,
-// rate-limited path behind it.
+// searchLocal answers from shows kuro holds, at once and offline; AniList is the slow path behind it.
 func (s *Server) searchLocal(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	results, err := s.store.SearchLocal(r.Context(), r.URL.Query().Get("q"), limit)

@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// A trimmed copy of a real rss.php response: hash in base32 inside the
-// description, size without a space, no peer counts anywhere.
+// A trimmed real rss.php response: base32 hash in the description, unspaced size, no peer counts.
 const tokyoFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>
 <title>SubsPlease - Tokyo Toshokan</title>

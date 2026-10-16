@@ -16,9 +16,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// End-to-end: torrent stream over HTTP into mpv, position read back over IPC.
-// Only the join of these proven parts is new, so only a real run exercises it.
-// Big Buck Bunny, Creative Commons Attribution 3.0.
+// End to end: torrent stream over HTTP into mpv, position back over IPC. Big Buck Bunny, CC BY 3.0.
 const testMagnet = "magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Big+Buck+Bunny"
 
 func magnetWithTrackers() string {

@@ -19,13 +19,24 @@ import {
   type Season,
 } from '../lib/queries'
 import { CharacterRail } from '../components/CharacterRail'
-import { ShowExtra } from '../components/ShowExtra'
+import { ShowExtra, useAnimeExtra } from '../components/ShowExtra'
 import { EpisodeList, isUnaired } from '../components/EpisodeList'
 import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
 import { Rail, RailItem } from '../components/Rail'
 import { StatusMenu } from '../components/StatusMenu'
-import { TrailerOverlay } from '../components/TrailerOverlay'
-import { Badge, ErrorState, LinkButton, Skeleton, useDismiss, useDocumentTitle } from '../components/ui'
+import { TrailerOverlay, youtubeID } from '../components/TrailerOverlay'
+import {
+  Badge,
+  Button,
+  ErrorState,
+  inputClass,
+  LinkButton,
+  SaveHint,
+  Skeleton,
+  TextInput,
+  useDismiss,
+  useDocumentTitle,
+} from '../components/ui'
 
 /** AniList and Jikan describe an anime differently; only the overlap is used. */
 interface AnimeDetail {
@@ -201,10 +212,7 @@ function Studios({
   )
 }
 
-/**
- * The synopsis, clamped but openable. The toggle appears only when there is
- * more to read — a button that expands nothing is worse than none.
- */
+/** The synopsis, clamped, with a toggle only when there is more to read. */
 function Synopsis({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   const [clamped, setClamped] = useState(false)
@@ -253,13 +261,14 @@ export function Anime() {
   })
 
   const episodes = useEpisodes(id)
+  // The one trailer entry point is the hero's: AniList's, else MyAnimeList's.
+  const extra = useAnimeExtra(id)
   const franchise = useFranchise(id !== 0 ? id : undefined)
   const recommended = useRecommendations(id > 0 ? id : undefined)
 
   const qc = useQueryClient()
 
-  // Episodes join a queue worked one at a time, so the button reports how many
-  // of this show are still waiting rather than just "queued".
+  // The queue works one at a time, so the button counts this show's waiting episodes.
   const queue = useDownloadQueue()
   const waiting = queue.data?.waiting?.[String(id)] ?? 0
   // Polled while anything downloads, so episodes finishing here get their on-disk mark.
@@ -267,10 +276,9 @@ export function Anime() {
 
   const refreshQueue = () => refreshDownloads(qc)
 
-  // Exactly the aired episodes not already on disk: the server alone could only
-  // count to a total, which an airing show often does not have.
+  // Exactly the aired episodes not on disk or in a library folder, as an airing show often has no total.
   const toDownload = (episodes.data?.items ?? [])
-    .filter((e) => !isUnaired(e) && !e.onDisk)
+    .filter((e) => !isUnaired(e) && !e.onDisk && !e.local)
     .map((e) => e.number)
   const downloadAll = useMutation({
     meta: { inline: true },
@@ -305,20 +313,23 @@ export function Anime() {
       : unaired
         ? { kind: 'wait' as const, label: `Episode ${next!.display} airs ${relativeTime(next!.airDate!)}` }
         : { kind: 'play' as const, label: `${progress > 0 ? 'Continue' : 'Watch'} episode ${firstLabel}` }
-  const ready = detail.isSuccess && episodes.isSuccess
+  // Settled, not succeeded: a failed episode list still leaves Play (episode 1) and the list controls.
+  const ready = detail.isSuccess && !episodes.isPending
 
   const navigate = useNavigate()
   useDocumentTitle(detail.data?.title)
   const rewatch = useSetStatus()
-  const startRewatch = () =>
+  // Rewatching resets progress and ticks, so it asks once, as the status menu does.
+  const [confirmRewatch, setConfirmRewatch] = useState(false)
+  const startRewatch = () => {
+    if (!confirmRewatch) return setConfirmRewatch(true)
     rewatch.mutate(
       { animeId: id, status: 'REPEATING' },
       { onSuccess: () => navigate(`/watch/${id}/1`) },
     )
+  }
 
-  // Finding a release is the slow half of play, so prefetch while the page is
-  // read (server ignores it if already held). Above the early returns, since a
-  // hook can't be conditional.
+  // Finding a release is play's slow half, so it starts while the page is read; above the early returns.
   useEffect(() => {
     if (!ready || !Number.isFinite(id) || !id || !first || action.kind !== 'play') return
     void api.post('/api/prepare', { animeId: id, episode: first }).catch(() => {})
@@ -343,17 +354,13 @@ export function Anime() {
       <section
         className={cx(
           'tinted relative -mx-4 overflow-visible bg-base-950 sm:mx-0 sm:rounded-xl',
-          // The banner is a fixed-height layer and the section doesn't clip, so
-          // a short synopsis left it hanging over the heading below.
+          // Clipped, or the fixed-height banner hangs over the heading below a short synopsis.
           banner && 'min-h-[26rem]',
         )}
         style={colour ? ({ '--tint': tint(colour, 0.22) } as React.CSSProperties) : undefined}
       >
-        {/* Its own layer so the section stays overflow-visible (menus were
-            clipped by the banner's corners); fixed height, not inset-0, so
-            expanding the synopsis doesn't re-crop the image. */}
-        {/* The banner, or the cover blurred into one: a page with neither
-            read as a plain grey slab. */}
+        {/* Its own fixed-height layer: menus aren't clipped, and the synopsis can't re-crop it. */}
+        {/* The banner, or the cover blurred into one. */}
         {(banner || cover) && (
           <div className="absolute inset-x-0 top-0 h-[26rem] overflow-hidden sm:rounded-t-2xl">
             <img
@@ -393,7 +400,7 @@ export function Anime() {
             {media && <FactChips media={media} />}
             {detail.data?.source === 'corpus' && (
               <p className="mt-2">
-                <Badge>Limited info — MyAnimeList unreachable</Badge>
+                <Badge>Limited info: MyAnimeList unreachable</Badge>
               </p>
             )}
 
@@ -420,37 +427,40 @@ export function Anime() {
             {media && <FactGrid media={media} />}
 
             <div className="mt-5 flex flex-wrap items-center gap-2">
-              {/* Until the list and episodes are in, the right button is not
-                  known; guessing "Watch episode 1" then swapping misled. */}
+              {/* The right button is unknown until the list and episodes are in. */}
               {!ready ? (
                 <>
-                  <Skeleton className="h-9 w-52 rounded-md" />
-                  <Skeleton className="h-9 w-28 rounded-md" />
+                  <Skeleton className="h-10 w-52 rounded-xl" />
+                  <Skeleton className="h-9 w-28" />
                 </>
               ) : action.kind === 'play' ? (
-                <Link
+                <LinkButton
                   to={`/watch/${id}/${first}`}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-accent-400 to-accent-500 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_24px_-8px_rgb(111_92_255/0.7)] transition-[transform,filter] hover:scale-[1.02] hover:brightness-110 active:scale-95"
+                  variant="primary"
+                  size="lg"
+                  className="gap-2 font-semibold"
                   style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
                 >
                   <PlayIcon />
                   {action.label}
-                </Link>
+                </LinkButton>
               ) : action.kind === 'rewatch' ? (
-                <button
+                <Button
                   onClick={startRewatch}
                   disabled={rewatch.isPending}
                   title="Marks the show as rewatching, which counts progress from the start again"
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-accent-400 to-accent-500 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_24px_-8px_rgb(111_92_255/0.7)] transition-[transform,filter] hover:scale-[1.02] hover:brightness-110 active:scale-95 disabled:opacity-60"
+                  variant="primary"
+                  size="lg"
+                  className="gap-2 font-semibold"
                   style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
                 >
                   <RewatchIcon />
-                  {rewatch.isPending ? 'Starting…' : 'Rewatch from episode 1'}
-                </button>
+                  {rewatch.isPending ? 'Starting…' : confirmRewatch ? 'Restart from ep 1? Ticks reset' : 'Rewatch from episode 1'}
+                </Button>
               ) : (
                 <span
                   title="You are caught up. The next episode has not aired yet."
-                  className="flex items-center gap-2 rounded-md bg-base-800/90 px-4 py-2 text-sm font-medium text-base-200 backdrop-blur-sm"
+                  className="flex items-center gap-2 rounded-lg bg-base-800/90 px-4 py-2 text-sm font-medium text-base-200 ring-1 ring-white/[0.07] backdrop-blur-sm"
                 >
                   <ClockIcon />
                   {action.label}
@@ -466,33 +476,32 @@ export function Anime() {
               {(detail.data?.repeat ?? 0) > 0 && (
                 <span
                   title="Completed rewatches, as counted on your list"
-                  className="rounded-md bg-base-800/90 px-3 py-1.5 text-sm text-base-300 backdrop-blur-sm"
+                  className="rounded-lg bg-base-800/90 px-4 py-2 text-sm text-base-300 ring-1 ring-white/[0.07] backdrop-blur-sm"
                 >
                   Rewatched ×{detail.data!.repeat}
                 </span>
               )}
 
               {waiting > 0 ? (
-                <button
+                <Button
                   onClick={() => cancelAll.mutate()}
                   disabled={cancelAll.isPending}
-                  title="Removes what is still waiting; the episode downloading now is left alone"
-                  className="flex items-center gap-2 rounded-md bg-base-800/90 px-4 py-2 text-sm font-medium text-base-100 backdrop-blur-sm transition-colors hover:bg-base-700 disabled:opacity-50"
+                  title="Stops this show's downloads, the one in progress included"
+                  className="gap-2"
                 >
                   <span className="size-2 animate-pulse rounded-full bg-accent-400" />
                   {waiting} queued · stop
-                </button>
+                </Button>
               ) : toDownload.length > 0 ? (
-                <button
+                <Button
                   onClick={() => downloadAll.mutate()}
                   disabled={downloadAll.isPending}
                   title={`Queues episodes ${toDownload[0]}–${toDownload[toDownload.length - 1]}, one at a time`}
-                  className="rounded-md bg-base-800/90 px-4 py-2 text-sm font-medium text-base-100 backdrop-blur-sm transition-colors hover:bg-base-700 disabled:opacity-50"
                 >
                   {downloadAll.isPending
                     ? 'Queuing…'
                     : `Download ${toDownload.length === 1 ? '1 episode' : `all ${toDownload.length}`}`}
-                </button>
+                </Button>
               ) : null}
             </div>
 
@@ -508,7 +517,9 @@ export function Anime() {
                 anilist={detail.data.source === 'anilist' ? id : undefined}
                 mal={detail.data.malId}
                 trailer={
-                  media?.trailer?.site?.toLowerCase() === 'youtube' ? media.trailer.id : undefined
+                  (media?.trailer?.site?.toLowerCase() === 'youtube' ? media.trailer.id : undefined) ??
+                  youtubeID(extra.data?.trailer) ??
+                  undefined
                 }
               />
             )}
@@ -536,6 +547,8 @@ export function Anime() {
 
         {episodes.isPending ? (
           <Skeleton className="h-80 w-full" />
+        ) : episodes.isError && !episodes.data ? (
+          <ErrorState error={episodes.error} retry={() => void episodes.refetch()} />
         ) : list.length === 0 ? (
           <div className="surface p-6 text-center">
             <p className="text-sm text-base-400">No episode list for this show yet.</p>
@@ -554,8 +567,7 @@ export function Anime() {
         )}
       </section>
 
-      {/* Below the episodes: the list is why the page was opened, and the cast
-          is something you browse afterwards. */}
+      {/* Below the episodes, which are why the page was opened. */}
       <CharacterRail animeId={id} />
       <ShowExtra animeId={id} />
 
@@ -596,8 +608,7 @@ function ClockIcon() {
   )
 }
 
-// Per show, not per account: overrides the global default either way, so one
-// series can auto-download without turning it on for everything.
+// Per show, overriding the global default, so one series can auto-download alone.
 function AutoDownload({ animeId }: { animeId: number }) {
   const prefs = usePrefs(animeId)
   const setPref = useSetPref()
@@ -607,6 +618,8 @@ function AutoDownload({ animeId }: { animeId: number }) {
 
   return (
     <button
+      role="switch"
+      aria-checked={on}
       onClick={() =>
         setPref.mutate({ animeId, key: 'autodownload.enabled', value: String(!on) })
       }
@@ -626,7 +639,8 @@ function AutoDownload({ animeId }: { animeId: number }) {
           )}
         />
       </span>
-      {on ? 'Auto-downloading new episodes' : 'Auto-download new episodes'}
+      {/* One fixed label; the switch says on or off. */}
+      Auto-download new episodes
     </button>
   )
 }
@@ -677,15 +691,16 @@ function ShowGroups({ animeId }: { animeId: number }) {
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-400">
       <label htmlFor={`groups-${animeId}`}>Prefer for this show</label>
-      <input
+      <TextInput
         id={`groups-${animeId}`}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         placeholder={inherited.length > 0 ? inherited.join(', ') : 'SubsPlease'}
-        className="w-48 rounded-md border border-base-800 bg-base-900 px-2 py-1 text-xs text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none"
+        className="w-48"
       />
+      <SaveHint state={setPref} />
       {own.length > 0 && (
         <button
           onClick={() => {
@@ -744,7 +759,7 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
   // Not a native select: the OS paints those white on white here.
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
   const box = trigger.current?.getBoundingClientRect()
 
@@ -758,7 +773,7 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
         aria-label="Your score"
         onClick={() => setOpen((v) => !v)}
         className={cx(
-          'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium backdrop-blur-sm transition-colors',
+          'flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors',
           tens > 0
             ? 'bg-accent-500/20 text-accent-400 hover:bg-accent-500/30'
             : 'bg-base-800/90 text-base-200 hover:bg-base-700',
@@ -828,7 +843,7 @@ function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bo
       aria-pressed={on}
       title={on ? 'Remove from favourites' : 'Add to favourites'}
       className={cx(
-        'rounded-md px-3 py-1.5 text-sm backdrop-blur-sm transition-colors',
+        'rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors',
         on ? 'bg-accent-500/20 text-accent-300' : 'bg-base-800/90 text-base-200 hover:bg-base-700',
       )}
     >
@@ -837,8 +852,7 @@ function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bo
   )
 }
 
-// A private note, saved when the field loses focus. Only the note is sent, so
-// a Favourite click landing with the blur cannot revert it.
+// A private note saved on blur, sent alone so a Favourite click with the blur can't revert it.
 function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const set = useSetBookmark(animeId)
   const [text, setText] = useState(bookmark?.note ?? '')
@@ -856,16 +870,20 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
     )
   }
   return (
-    <textarea
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
-        if (text !== (bookmark?.note ?? '')) set.mutate({ note: text })
-      }}
-      placeholder="Your note — only you see it"
-      rows={2}
-      className="mt-3 w-full max-w-xl rounded-md border border-base-800 bg-base-950/60 px-3 py-2 text-sm text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none"
-    />
+    <div className="mt-3 max-w-xl space-y-1">
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          if (text !== (bookmark?.note ?? '')) set.mutate({ note: text })
+        }}
+        aria-label="Note"
+        placeholder="Your note (only you see it)"
+        rows={2}
+        className={cx(inputClass, 'block w-full')}
+      />
+      <SaveHint state={set} />
+    </div>
   )
 }
 
@@ -896,11 +914,7 @@ function rank(kind: string): number {
   return i === -1 ? KIND_ORDER.length : i
 }
 
-/**
- * Films, OVAs and spin-offs: the same franchise, but not seasons of it. A show
- * with a handful gets one rail; a franchise like Conan gets one per kind, since
- * sixty entries in a single strip say nothing about what is in them.
- */
+/** Films, OVAs and spin-offs: one rail for a handful, one per kind for a franchise like Conan. */
 function RelatedRails({ entries }: { entries: RelatedEntry[] }) {
   if (entries.length === 0) return null
 
@@ -927,8 +941,7 @@ function RelatedRails({ entries }: { entries: RelatedEntry[] }) {
   )
 }
 
-// No Show all: the rail scrolls, and thirty-five films are thirty-five chips
-// either way. The heading carries the count.
+// No Show all: the rail scrolls, and the heading carries the count.
 function RelatedRail({
   title,
   entries,
@@ -952,8 +965,7 @@ function plural(kind: string): string {
   return kind === 'Alternative' ? 'Alternatives' : `${kind}s`
 }
 
-// A film says "Movie"; the edge type only earns its place when the format does
-// not already say what the entry is.
+// A film says "Movie"; the edge type shows only when the format doesn't say what it is.
 function label(e: RelatedEntry): string {
   if (e.format === 'MOVIE') return 'Movie'
   if (e.kind === 'SUMMARY') return 'Recap'
@@ -972,8 +984,7 @@ function SeasonChip({
   current: boolean
   kind?: string
 }) {
-  // What it was tagged first: marking a season completed does not set a
-  // progress count, so inferring the label from progress left it blank.
+  // The tag first, as a season marked completed has no progress count to infer from.
   const tag = statusLabel(season.listStatus)
   const watched =
     season.progress > 0
@@ -1005,7 +1016,7 @@ function SeasonChip({
           {season.english || season.romaji || `Anime ${season.id}`}
         </p>
         <p className="mt-0.5 text-[11px] text-base-500">
-          {season.year ?? '—'}
+          {season.year ?? 'TBA'}
           {season.episodes ? ` · ${season.episodes} ep` : ''}
         </p>
         {(tag || watched) && (
@@ -1023,7 +1034,7 @@ function SyncNote({ sync }: { sync?: { anilist: boolean; mal: boolean } }) {
 
   const targets = [sync.anilist && 'AniList', sync.mal && 'MyAnimeList'].filter(Boolean)
   if (targets.length === 0) {
-    return <p className="mt-3 text-xs text-base-500">Not on either tracker — progress stays in kuro.</p>
+    return <p className="mt-3 text-xs text-base-500">Not on either tracker, so progress stays in kuro.</p>
   }
 
   return (

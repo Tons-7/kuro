@@ -1,8 +1,6 @@
 -- +goose Up
 
--- AniList models each season as its own entry linked by PREQUEL/SEQUEL edges.
--- Walking those edges is what turns four rows into one franchise with a season
--- selector, and what lets an absolute episode number find its season.
+-- PREQUEL/SEQUEL edges between seasons: walked, they make one franchise and place absolute episode numbers.
 CREATE TABLE relation (
     anime_id   INTEGER NOT NULL,
     related_id INTEGER NOT NULL,
@@ -13,8 +11,7 @@ CREATE TABLE relation (
 CREATE INDEX relation_related ON relation(related_id);
 CREATE INDEX relation_kind    ON relation(anime_id, kind);
 
--- Resolved franchise membership, recomputed whenever relations change. Storing
--- it avoids walking the graph on every page load.
+-- Franchise membership, recomputed when relations change instead of walked per page load.
 CREATE TABLE franchise (
     anime_id INTEGER PRIMARY KEY,
     root_id  INTEGER NOT NULL,

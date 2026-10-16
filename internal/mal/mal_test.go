@@ -86,8 +86,7 @@ func TestVerifierMeetsPKCELength(t *testing.T) {
 	}
 }
 
-// MAL supports only the plain challenge method, so the challenge is the
-// verifier verbatim. Sending S256 would make every exchange fail.
+// MAL takes only the plain challenge method, so the challenge is the verifier (S256 fails).
 func TestAuthURLUsesPlainChallenge(t *testing.T) {
 	c, srv := newClient(t, nil)
 	raw := c.AuthURL("verifier-value", "state-value", "http://localhost:4321/mal/callback")
@@ -156,8 +155,7 @@ func TestExchangeStoresTokenAndNotifies(t *testing.T) {
 	}
 }
 
-// MAL may omit refresh_token on a refresh; the old one stays valid and losing
-// it would silently end the connection an hour later.
+// A refresh may omit refresh_token; the old one stays valid and must be kept.
 func TestRefreshKeepsExistingRefreshToken(t *testing.T) {
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"token_type":"Bearer","expires_in":3600,"access_token":"acc-2"}`)
@@ -304,8 +302,7 @@ func TestListFollowsPaging(t *testing.T) {
 	}
 }
 
-// Reads return num_episodes_watched, writes take num_watched_episodes; the read
-// spelling returns 200 and changes nothing.
+// Writes take num_watched_episodes; the read spelling returns 200 and changes nothing.
 func TestSetProgressUsesTheWriteSpelling(t *testing.T) {
 	var form url.Values
 	var method, path string
@@ -411,8 +408,7 @@ func TestStatusMapping(t *testing.T) {
 		}
 	}
 
-	// Rewatching collapses into watching, so it cannot round-trip on the
-	// status alone; the is_rewatching flag carries it back.
+	// Rewatching collapses into watching; the is_rewatching flag carries it back.
 	for _, s := range []string{"CURRENT", "COMPLETED", "PAUSED", "DROPPED", "PLANNING"} {
 		if got := StatusToAniList(Status(s)); got != s {
 			t.Errorf("round trip of %s produced %s", s, got)

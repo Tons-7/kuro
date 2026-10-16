@@ -144,3 +144,14 @@ func (c *Client) fromArchive(ctx context.Context, key string, out any) bool {
 	served.noteSaved(at)
 	return true
 }
+
+const recheckQuery = `query Recheck { Page(perPage: 1) { pageInfo { total } } }`
+
+// Recheck asks AniList once now, past the down window: a person pressing "Try now" means now.
+func (c *Client) Recheck(ctx context.Context) error {
+	c.mu.Lock()
+	c.downUntil = time.Time{}
+	c.mu.Unlock()
+	var out struct{}
+	return c.QueryFresh(ctx, recheckQuery, nil, &out)
+}

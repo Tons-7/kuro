@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"slices"
 	"time"
 )
 
@@ -50,7 +51,7 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 		        WHEN list_entry.status IN ('COMPLETED','REPEATING') THEN list_entry.status
 		        ELSE 'CURRENT' END,
 		    started_at = coalesce(list_entry.started_at, excluded.started_at),
-		    local_updated_at = excluded.local_updated_at,
+		    local_updated_at = max(excluded.local_updated_at, list_entry.local_updated_at + 1),
 		    dirty = CASE WHEN excluded.progress > list_entry.progress THEN 1 ELSE list_entry.dirty END
 		WHERE excluded.progress > list_entry.progress
 		   OR list_entry.status IS NULL`,
@@ -59,9 +60,7 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 		return false, err
 	}
 
-	// Finishing the last episode completes the entry. AniList applies no such
-	// rule server-side, so every client has to do it. Finishing a rewatch also
-	// counts it, which is what the trackers' "rewatched N times" is.
+	// Finishing the last episode completes the entry (AniList won't) and counts a rewatch.
 	if _, err := s.w.ExecContext(ctx, `
 		UPDATE list_entry SET
 		    repeat_count = repeat_count + CASE WHEN status = 'REPEATING' THEN 1 ELSE 0 END,
@@ -88,17 +87,10 @@ const (
 )
 
 func ValidStatus(status string) bool {
-	for _, s := range ListStatuses {
-		if s == status {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ListStatuses, status)
 }
 
-// Its own flag, not watched: dismissing is not a claim the episode was seen.
-// The episode may never have been played, so the row may not exist; zero
-// last_played_at keeps the marker out of history and recent.
+// DismissResume sets its own flag (dismissing is not watching); a new row's zero time keeps it out of history.
 func (s *Store) DismissResume(ctx context.Context, animeID int, epKey string) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO playback (anime_id, ep_key, last_played_at, dismissed)
@@ -124,7 +116,7 @@ func (s *Store) Unwatch(ctx context.Context, animeID, episode int) error {
 		    progress = min(progress, ?2),
 		    completed_at = CASE WHEN status = 'COMPLETED' THEN NULL ELSE completed_at END,
 		    status = CASE WHEN status = 'COMPLETED' THEN 'CURRENT' ELSE status END,
-		    local_updated_at = ?3, dirty = 1
+		    local_updated_at = max(?3, local_updated_at + 1), dirty = 1
 		WHERE anime_id = ?1 AND (progress > ?2 OR status = 'COMPLETED')`,
 		animeID, episode-1, time.Now().Unix()); err != nil {
 		return err
@@ -152,7 +144,7 @@ func (s *Store) SetScore(ctx context.Context, animeID, score int) error {
 		ON CONFLICT(anime_id) DO UPDATE SET
 		    score = excluded.score,
 		    score_cleared = CASE WHEN excluded.score = 0 THEN 1 ELSE 0 END,
-		    local_updated_at = excluded.local_updated_at,
+		    local_updated_at = max(excluded.local_updated_at, list_entry.local_updated_at + 1),
 		    dirty = 1`,
 		animeID, score, time.Now().Unix())
 	return err
@@ -165,10 +157,11 @@ type RemoteEntry struct {
 	Progress int
 	Score    int
 	Repeat   int
+	// Since is the row's local_updated_at when the caller read it: an edit made after that wins.
+	Since int64
 }
 
-// ApplyRemote records a tracker-side change as a local edit (dirty), so the
-// other tracker gets it. An unpushed local edit wins and is left alone.
+// ApplyRemote records a tracker-side change as a local edit for the other tracker; a newer local edit wins.
 func (s *Store) ApplyRemote(ctx context.Context, r RemoteEntry) (bool, error) {
 	if r.AnimeID == 0 {
 		return false, nil
@@ -192,9 +185,9 @@ func (s *Store) ApplyRemote(ctx context.Context, r RemoteEntry) (bool, error) {
 		    status = coalesce(nullif(?2, ''), list_entry.status),
 		    progress = ?3, score = ?4, repeat_count = max(list_entry.repeat_count, ?5),
 		    completed_at = coalesce(?6, list_entry.completed_at),
-		    local_updated_at = ?7, dirty = 1
-		WHERE list_entry.dirty = 0`,
-		r.AnimeID, r.Status, r.Progress, r.Score, r.Repeat, completed, time.Now().Unix())
+		    local_updated_at = max(?7, list_entry.local_updated_at + 1), dirty = 1
+		WHERE list_entry.local_updated_at <= ?8`,
+		r.AnimeID, r.Status, r.Progress, r.Score, r.Repeat, completed, time.Now().Unix(), r.Since)
 	if err != nil {
 		return false, err
 	}
@@ -221,9 +214,7 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 		completed = today
 	}
 
-	// A rewatch starts over: progress back to zero, so "continue" offers
-	// episode 1 and the count climbs again; the finish date of the first watch
-	// stays. Only on entering the status — re-choosing it mid-rewatch is a no-op.
+	// Entering a rewatch resets progress to zero but keeps the first finish date; re-choosing it is a no-op.
 	var previous sql.NullString
 	if err := s.r.QueryRowContext(ctx,
 		`SELECT status FROM list_entry WHERE anime_id = ?`, animeID).Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -242,7 +233,7 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 		    score = CASE WHEN ?3 < 0 THEN list_entry.score ELSE ?3 END,
 		    score_cleared = CASE WHEN ?3 = 0 THEN 1 WHEN ?3 > 0 THEN 0 ELSE list_entry.score_cleared END,
 		    completed_at = coalesce(excluded.completed_at, list_entry.completed_at),
-		    local_updated_at = excluded.local_updated_at,
+		    local_updated_at = max(excluded.local_updated_at, list_entry.local_updated_at + 1),
 		    dirty = 1`,
 		animeID, status, score, completed, now, starting)
 	if err != nil {
@@ -267,7 +258,7 @@ func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, erro
 		FROM list_entry e
 		LEFT JOIN anime a ON a.id = e.anime_id
 		WHERE e.dirty = 1 AND e.anime_id > 0
-		ORDER BY e.local_updated_at
+		ORDER BY e.anilist_failed_at, e.local_updated_at
 		LIMIT ?`, clampLimit(limit, 25, 200))
 	if err != nil {
 		return nil, err
@@ -299,13 +290,23 @@ func (s *Store) ClearDirtyAt(ctx context.Context, animeID, remoteID, remoteUpdat
 		UPDATE list_entry
 		SET dirty = CASE WHEN local_updated_at <= ?1 THEN 0 ELSE dirty END,
 		    score_cleared = CASE WHEN local_updated_at <= ?1 THEN 0 ELSE score_cleared END,
+		    anilist_failed_at = 0,
 		    remote_updated_at = ?2, id = coalesce(nullif(?3, 0), id)
 		WHERE anime_id = ?4`, changed, remoteUpdatedAt, remoteID, animeID)
 	return err
 }
 
-// ListProgress maps anime to watched episode count for everything on the
-// user's list, so a schedule can mark what is already seen.
+// PushFailed sends the entry to the back of tracker's push line ("anilist" or "mal") until a push succeeds.
+func (s *Store) PushFailed(ctx context.Context, tracker string, animeID int) error {
+	column := "anilist_failed_at"
+	if tracker == "mal" {
+		column = "mal_failed_at"
+	}
+	_, err := s.w.ExecContext(ctx, `UPDATE list_entry SET `+column+` = ? WHERE anime_id = ?`, time.Now().Unix(), animeID)
+	return err
+}
+
+// ListProgress maps each listed anime to its watched count, so a schedule marks what's seen.
 func (s *Store) ListProgress(ctx context.Context) (map[int]int, error) {
 	entries, err := s.ListEntries(ctx)
 	if err != nil {
@@ -359,4 +360,25 @@ func (s *Store) ListEntry(ctx context.Context, animeID int) (DirtyEntry, error) 
 		return DirtyEntry{}, nil
 	}
 	return d, err
+}
+
+// RemoveListEntry takes a show off the list: its entry, what each tracker was last told, and its follow.
+func (s *Store) RemoveListEntry(ctx context.Context, animeID int) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM list_entry WHERE anime_id = ?`,
+		`DELETE FROM tracker_push WHERE anime_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, animeID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.SetFollow(ctx, animeID, false)
 }

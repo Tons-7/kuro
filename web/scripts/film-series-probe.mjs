@@ -1,6 +1,5 @@
-// What kuro offers for each film of a series, and which file it starts for one of them.
+// Reports what kuro offers for each film of a series, and which file it starts for one.
 //   KURO_EXTRA_CONFIG='[[indexer]] ...' FILMS=5204,5205 PLAY=5204 node scripts/run-player-check.mjs film-series-probe.mjs
-// Reports only. Indexers come from the environment.
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
 const FILMS = (process.env.FILMS ?? '').split(',').filter(Boolean).map(Number)
 const PLAY = Number(process.env.PLAY ?? 0)

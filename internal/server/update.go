@@ -22,8 +22,7 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, st)
 }
 
-// updateApply starts the download and returns; the page polls updateStatus and
-// reloads once the new version answers.
+// updateApply starts the download; the page polls updateStatus and reloads on the new version.
 func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 	if s.updater == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "updater unavailable"})

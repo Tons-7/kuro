@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// The tags matter: this crosses the wire to the browser player, which reads
-// lower-case names like every other type in the API.
+// The tags matter: the browser player reads lower-case names, as everywhere in the API.
 type SkipRange struct {
 	Kind  string  `json:"kind"`
 	Start float64 `json:"start"`
@@ -16,8 +15,7 @@ type SkipRange struct {
 
 func (s SkipRange) Contains(t float64) bool { return t >= s.Start && t < s.End }
 
-// Chapter titles are matched by uosc's chapter_range_patterns to tint the
-// seekbar, so these names are load-bearing, not decorative.
+// uosc's chapter_range_patterns match these titles to tint the seekbar, so they're load-bearing.
 func chapterTitle(kind string) string {
 	switch strings.ToLower(kind) {
 	case "op", "mixed-op":

@@ -15,8 +15,7 @@ func seasonPack() []File {
 	return files
 }
 
-// Taking the largest file returns whichever episode happens to be biggest, so
-// the number in the filename has to decide.
+// The filename's number decides, not size, which picks whichever episode is biggest.
 func TestPickEpisodeUsesTheNumberNotTheSize(t *testing.T) {
 	got, idx, ok := PickEpisode(seasonPack(), 10, 0)
 	if !ok {
@@ -117,20 +116,6 @@ func TestEpisodeInName(t *testing.T) {
 	for name, want := range tests {
 		if got := episodeInName(name); got != want {
 			t.Errorf("episodeInName(%q) = %d, want %d", name, got, want)
-		}
-	}
-}
-
-func TestBaseName(t *testing.T) {
-	tests := map[string]string{
-		"Show/Show - 01 [1080p].mkv": "Show - 01 [1080p]",
-		`Show\Show - 01.mkv`:         "Show - 01",
-		"Show - 01.mkv":              "Show - 01",
-		"noextension":                "noextension",
-	}
-	for in, want := range tests {
-		if got := baseName(in); got != want {
-			t.Errorf("baseName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

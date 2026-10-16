@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -34,8 +35,7 @@ type discoverItem struct {
 	Description *string `json:"description,omitempty"`
 	OnList      bool    `json:"onList"`
 	Progress    int     `json:"progress"`
-	// Which list it is on. Status above is the airing state, so without this a
-	// card cannot tell "completed" from "never added".
+	// Its list status (Status is airing state), so a card tells "completed" from "never added".
 	ListStatus *string `json:"listStatus,omitempty"`
 
 	// For the hover card: episodes out so far (next minus one while airing),
@@ -153,11 +153,14 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("perPage"))
 
+	// 400 only for a sort kuro does not know; the catalogue being down is a 502, as everywhere else.
+	if !slices.Contains(anilist.Sorts(), sort) {
+		send(w, http.StatusBadRequest, map[string]any{"error": "unknown sort " + sort, "sorts": anilist.Sorts()})
+		return
+	}
 	result, err := s.ranked(r, sort, page, perPage)
 	if err != nil {
-		send(w, http.StatusBadRequest, map[string]any{
-			"error": err.Error(), "sorts": anilist.Sorts(),
-		})
+		s.fail(w, "discover", err)
 		return
 	}
 
@@ -178,4 +181,13 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		"sorts":   anilist.Sorts(),
 		"season":  map[string]any{"season": season, "year": year},
 	})
+}
+
+// anilistRecheck backs "Try now" on the saved-copy notice: one live question, whatever the down window.
+func (s *Server) anilistRecheck(w http.ResponseWriter, r *http.Request) {
+	if err := s.anilist.Recheck(r.Context()); err != nil {
+		send(w, http.StatusOK, map[string]any{"live": false, "error": err.Error()})
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"live": true})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func stubWindow(t *testing.T, window func(context.Context, string) *launched) *a
 	var tabs atomic.Int32
 
 	oldWindow, oldTab := showWindow, showTab
-	showWindow = func(ctx context.Context, url, _ string, _ bool) *launched { return window(ctx, url) }
+	showWindow = func(ctx context.Context, url, _ string, _, _ bool) *launched { return window(ctx, url) }
 	showTab = func(string) { tabs.Add(1) }
 	t.Cleanup(func() { showWindow, showTab = oldWindow, oldTab })
 
@@ -28,7 +29,7 @@ func TestOpenAppStopsWhenTheWindowStaysUp(t *testing.T) {
 		return &launched{}
 	})
 
-	OpenApp(context.Background(), "http://localhost:4321")
+	OpenApp(context.Background(), "http://localhost:4321", "")
 
 	if attempts.Load() != 1 {
 		t.Errorf("tried %d times, want one", attempts.Load())
@@ -38,8 +39,7 @@ func TestOpenAppStopsWhenTheWindowStaysUp(t *testing.T) {
 	}
 }
 
-// After an update the previous window is still releasing the profile, and the
-// browser that cannot take it exits at once showing nothing.
+// After an update the old window still holds the profile, so a browser that can't take it exits blank.
 func TestOpenAppRetriesOnceBeforeGivingUp(t *testing.T) {
 	var attempts atomic.Int32
 	tabs := stubWindow(t, func(context.Context, string) *launched {
@@ -49,7 +49,7 @@ func TestOpenAppRetriesOnceBeforeGivingUp(t *testing.T) {
 		return nil
 	})
 
-	OpenApp(context.Background(), "http://localhost:4321")
+	OpenApp(context.Background(), "http://localhost:4321", "")
 
 	if attempts.Load() != 2 {
 		t.Errorf("tried %d times, want a second attempt", attempts.Load())
@@ -59,8 +59,7 @@ func TestOpenAppRetriesOnceBeforeGivingUp(t *testing.T) {
 	}
 }
 
-// The old behaviour: a browser that started counted as success, so a failure to
-// show anything left the app with no interface at all.
+// A browser that merely started is not success: one that showed nothing left no interface.
 func TestOpenAppFallsBackToATab(t *testing.T) {
 	var attempts atomic.Int32
 	tabs := stubWindow(t, func(context.Context, string) *launched {
@@ -68,7 +67,7 @@ func TestOpenAppFallsBackToATab(t *testing.T) {
 		return nil
 	})
 
-	OpenApp(context.Background(), "http://localhost:4321")
+	OpenApp(context.Background(), "http://localhost:4321", "")
 
 	if attempts.Load() != 2 {
 		t.Errorf("tried %d times, want both attempts", attempts.Load())
@@ -87,7 +86,7 @@ func TestOpenAppGivesUpWhenCancelled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	OpenApp(ctx, "http://localhost:4321")
+	OpenApp(ctx, "http://localhost:4321", "")
 
 	if attempts.Load() != 0 || tabs.Load() != 0 {
 		t.Errorf("attempts=%d tabs=%d, want nothing opened after cancellation",
@@ -108,7 +107,7 @@ func TestOpenAppRetryHonoursCancellation(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		OpenApp(ctx, "http://localhost:4321")
+		OpenApp(ctx, "http://localhost:4321", "")
 		close(done)
 	}()
 
@@ -167,12 +166,7 @@ func TestCloseEndsTheWindowProcess(t *testing.T) {
 // Fullscreen unless the setting asks for a maximized window.
 func TestWindowModeFlag(t *testing.T) {
 	has := func(args []string, flag string) bool {
-		for _, a := range args {
-			if a == flag {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(args, flag)
 	}
 	full := windowArgs("http://x", "p", false)
 	if !has(full, "--start-fullscreen") || has(full, "--start-maximized") {
@@ -185,7 +179,7 @@ func TestWindowModeFlag(t *testing.T) {
 
 	var got bool
 	old := showWindow
-	showWindow = func(_ context.Context, _, _ string, maximized bool) *launched { got = maximized; return &launched{} }
+	showWindow = func(_ context.Context, _, _ string, maximized, _ bool) *launched { got = maximized; return &launched{} }
 	t.Cleanup(func() { showWindow = old })
 	(&Window{Maximized: func() bool { return true }}).Open(context.Background(), "http://x")
 	if !got {

@@ -7,6 +7,7 @@ import {
   ErrorState,
   FilterToggle,
   PageHeader,
+  RefreshFailed,
   Segmented,
   Skeleton,
 } from '../components/ui'
@@ -17,10 +18,7 @@ const WINDOWS = [
   { value: '168', label: 'Last week' },
 ] as const
 
-/**
- * What has just come out, newest first. Distinct from the schedule, which
- * answers when things air: this one is a list of episodes ready to watch now.
- */
+/** What just came out, newest first: episodes ready now, where the schedule says when things air. */
 export function RecentPage() {
   const [hours, setHours] = useState<string>('72')
   const [mine, setMine] = useState(false)
@@ -37,7 +35,7 @@ export function RecentPage() {
       <PageHeader
         title="Recently released"
         subtitle="Episodes that have aired and can be watched now."
-        meta={!isPending && !isError ? `${items.length} episodes` : undefined}
+        meta={data ? `${items.length} episodes` : undefined}
         actions={
           <>
             <Segmented options={WINDOWS} value={hours} onChange={setHours} />
@@ -48,7 +46,8 @@ export function RecentPage() {
         }
       />
 
-      {isError ? (
+      {isError && data && <RefreshFailed retry={() => refetch()} />}
+      {isError && !data ? (
         <ErrorState error={error} retry={() => refetch()} />
       ) : isPending ? (
         <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">

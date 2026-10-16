@@ -3,12 +3,25 @@
 const TOKEN_KEY = 'kuro.token'
 
 function readToken(): string {
-  const fromUrl = new URLSearchParams(window.location.search).get('token')
+  const params = new URLSearchParams(window.location.search)
+  const fromUrl = params.get('token')
   if (fromUrl) {
-    localStorage.setItem(TOKEN_KEY, fromUrl)
+    try {
+      localStorage.setItem(TOKEN_KEY, fromUrl)
+    } catch {
+      // Private mode: the cookie the server set carries it from here.
+    }
+    // Out of the address bar, history and any screenshot: the cookie holds it now.
+    params.delete('token')
+    const rest = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`)
     return fromUrl
   }
-  return localStorage.getItem(TOKEN_KEY) ?? ''
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? ''
+  } catch {
+    return ''
+  }
 }
 
 export const UNPAIRED_EVENT = 'kuro:unpaired'
@@ -53,8 +66,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers, credentials: 'same-origin' })
   noteSource(res)
 
-  // A paired device whose token was revoked: every call now fails the same
-  // way, so the app says so once instead of on every page.
+  // A revoked device fails every call alike, so the app says so once, not per page.
   if (res.status === 401) window.dispatchEvent(new Event(UNPAIRED_EVENT))
 
   if (!res.ok) {
@@ -241,6 +253,8 @@ export interface Episode {
   /** The position is worth going back to, by the same rule playback resumes on. */
   resumable?: boolean
   onDisk: boolean
+  /** A library folder holds it: it plays from there, so there is nothing to download. */
+  local?: boolean
 }
 
 /** Mixed episodes are part filler, so they carry the filler colour too. */

@@ -45,8 +45,7 @@ func TestPeekAtTheEndingIsNotWatched(t *testing.T) {
 	}
 }
 
-// Playing through normally still marks the episode, and a finished episode
-// starts over rather than resuming in the credits.
+// Playing through marks the episode, and a finished one starts over, not in the credits.
 func TestPlayingThroughIsWatchedAndStartsOver(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -94,8 +93,7 @@ func TestSkippingOpeningAndEndingIsWatched(t *testing.T) {
 	}
 }
 
-// Winding a watched episode back to its middle resumes there and puts it back on
-// the continue rail, flagged resumable in the episode list.
+// A watched episode wound back to its middle resumes there and returns to the continue rail.
 func TestWatchedEpisodeWoundBackResumesThere(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -135,8 +133,7 @@ func TestWatchedEpisodeWoundBackResumesThere(t *testing.T) {
 	}
 }
 
-// The first report of an episode is accepted wherever it lands — there is no
-// earlier resume point to protect.
+// An episode's first report is accepted wherever it lands: there is no earlier resume point to protect.
 func TestFirstReportNearTheEndIsKept(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

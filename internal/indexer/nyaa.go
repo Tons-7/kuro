@@ -15,8 +15,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Prowlarr's own Nyaa definition sets a two second delay; there is no
-// documented rate limit, but latency is high and variable.
+// Prowlarr's Nyaa definition waits two seconds; no limit is documented, but latency varies.
 const nyaaDelay = 2 * time.Second
 
 type Nyaa struct {
@@ -60,8 +59,7 @@ func (n *Nyaa) defaultCategory() string {
 	return CategoryEnglishSubbed
 }
 
-// CategorySukebeiAnime is "Art - Anime" on Nyaa's adult sister site, whose
-// numbering differs from the main site's.
+// CategorySukebeiAnime is "Art - Anime" on Nyaa's adult sister site, numbered differently.
 const CategorySukebeiAnime = "1_1"
 
 // NewSukebei reads an adult Nyaa-style site. The main site carries no adult

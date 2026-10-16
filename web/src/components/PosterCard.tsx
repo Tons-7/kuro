@@ -42,8 +42,7 @@ export interface CardAnime {
 export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
   const discover = item as DiscoverItem
   const library = item as LibraryItem
-  // Both carry a "status", meaning opposite things: on a search result it is
-  // the airing state, on a library row the list tag.
+  // "status" is the airing state on a search result but the list tag on a library row.
   const fromDiscover = 'onList' in item
   const nextEpisode = (fromDiscover ? discover.nextEpisode : library.nextEpisode) ?? null
   return {
@@ -76,18 +75,15 @@ export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
   }
 }
 
-/**
- * Poster with a hover layer carrying the two things worth doing without
- * opening the show: play it, or tag it. On touch there is no hover, so the
- * overlay is always visible at reduced strength instead of unreachable.
- */
+/** Poster with play and tag on a hover layer, always shown (softer) on touch. */
 export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
   const href = to ?? `/anime/${anime.id}`
   const accent = tint(anime.color, 0.55)
   const watched = anime.progress ?? 0
   const released = anime.aired ?? anime.episodes
+  // aired 0 is nothing out yet, not unknown.
   const nextEpisode =
-    anime.airing === 'NOT_YET_RELEASED' || (released && watched >= released) ? null : watched + 1
+    anime.airing === 'NOT_YET_RELEASED' || (released != null && watched >= released) ? null : watched + 1
 
   return (
     <HoverInfo
@@ -106,10 +102,10 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
     <div className="group/card relative">
       <Link
         to={href}
+        aria-label={anime.title}
         className="block rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-400"
       >
-        {/* Lifts on hover and picks up the show's own colour as a glow, so the
-            card under the pointer is unmistakable in a dense grid. */}
+        {/* Lifts on hover with a glow in the show's colour, unmistakable in a dense grid. */}
         <div
           className="relative aspect-[2/3] overflow-hidden rounded-card bg-base-850 shadow-card transition-[transform,box-shadow] duration-300 ease-out-quint group-hover/card:-translate-y-1 group-hover/card:shadow-lift"
           style={
@@ -179,16 +175,14 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
         </div>
       </Link>
 
-      {/* A sibling over the poster, not inside its link: the play button plays,
-          the rest of the card opens the show. Nothing next to play, no button. */}
+      {/* Over the poster, not in its link: play plays, the rest opens the show. */}
       {nextEpisode && (
         <div className="pointer-events-none absolute inset-x-0 top-0 grid aspect-[2/3] place-items-center">
           <Link
             to={`/watch/${anime.id}/${nextEpisode}`}
             aria-label={`Play episode ${nextEpisode}`}
             title={`Play episode ${nextEpisode}`}
-            // Never on touch: unseen there, a tap on the poster's middle would
-            // play instead of opening the show.
+            // A desktop shortcut (the card opens the show, which has Play); never on touch, or a tap plays.
             className="pointer-events-auto grid size-11 place-items-center rounded-full bg-base-950/70 opacity-0 ring-1 ring-white/20 backdrop-blur-sm transition-[opacity,transform] duration-200 group-hover/card:opacity-100 hover:scale-110 hover:bg-accent-500 focus-visible:opacity-100 [@media(hover:none)]:hidden"
           >
             <PlayIcon />
@@ -196,13 +190,13 @@ export function PosterCard({ anime, to }: { anime: CardAnime; to?: string }) {
         </div>
       )}
 
-      {/* Shown wherever there is no hover (tablets too, not just narrow
-          screens): invisible there, it still caught taps. */}
-      <div className="absolute top-1.5 right-1.5 opacity-0 transition-opacity duration-200 group-hover/card:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+      {/* Always shown: hover reveals nothing, and invisible it still caught taps. */}
+      <div className="absolute top-1.5 right-1.5">
         <StatusMenu animeId={anime.id} current={anime.status} compact />
       </div>
 
-      <Link to={href} className="mt-2 block">
+      {/* The poster link above already carries the title, so this one is out of the tab order. */}
+      <Link to={href} tabIndex={-1} aria-hidden className="mt-2 block">
         <p
           className="line-clamp-2 text-sm leading-snug font-medium text-base-200 transition-colors group-hover/card:text-white"
           title={anime.title}

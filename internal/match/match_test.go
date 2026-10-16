@@ -69,8 +69,7 @@ func TestMatchScenneNamesResolveCorrectly(t *testing.T) {
 	}
 }
 
-// The exact failure that motivated building this: the full official English
-// title must not land on a sibling franchise entry.
+// The full official English title must not land on a sibling franchise entry.
 func TestFullEnglishTitleDoesNotDriftToSpinOff(t *testing.T) {
 	ix := frierenIndex(t)
 
@@ -89,8 +88,7 @@ func TestFullEnglishTitleDoesNotDriftToSpinOff(t *testing.T) {
 	}
 }
 
-// A bare franchise name genuinely cannot be resolved, so it must be reported
-// as ambiguous rather than guessed at.
+// A bare franchise name can't be resolved, so it reports ambiguous rather than guessing.
 func TestAmbiguousQueryIsFlagged(t *testing.T) {
 	ix := frierenIndex(t)
 

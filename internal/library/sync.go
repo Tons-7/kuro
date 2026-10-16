@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -50,11 +51,13 @@ type SyncReport struct {
 	Favourites int `json:"favourites"`
 }
 
-// AuthErrorSetting is set when AniList refuses the stored token, and cleared by
-// a successful sync or a new login.
+// AuthErrorSetting is set when AniList refuses the token, cleared by a sync or a new login.
 const AuthErrorSetting = "anilist.auth_error"
 
 var ErrReconnect = errors.New("anilist rejected the token; reconnect AniList in Settings")
+
+// pushBatch is how many dirty entries one run sends: a 300-entry import drains in a few runs, not a dozen.
+const pushBatch = 100
 
 func (s *Sync) Run(ctx context.Context) (SyncReport, error) {
 	rep, err := s.run(ctx)
@@ -72,7 +75,8 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 		return rep, nil
 	}
 
-	dirty, err := s.store.DirtyEntries(ctx, 0)
+	// Rows AniList refused come last, so they cannot take every slot of every run.
+	dirty, err := s.store.DirtyEntries(ctx, pushBatch)
 	if err != nil {
 		return rep, err
 	}
@@ -82,12 +86,13 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 			rep.Failed++
 			s.log.Warn("push progress", "anime", d.AnimeID, "err", err)
 
-			// Re-authentication is the user's job; retrying every entry would
-			// just burn the rate limit. Recorded so the job fails visibly and
-			// the tracker reads "reconnect", not Connected.
+			// Retrying would only burn the rate limit; recorded so the tracker reads "reconnect".
 			if errs, ok := err.(anilist.Errors); ok && errs.Unauthorized() {
 				s.store.SetSetting(ctx, AuthErrorSetting, "true")
 				return rep, ErrReconnect
+			}
+			if err := s.store.PushFailed(ctx, "anilist", d.AnimeID); err != nil {
+				return rep, err
 			}
 			continue
 		}
@@ -165,8 +170,7 @@ func (s *Sync) favourites(ctx context.Context, userID int) (int, error) {
 		return 0, err
 	}
 
-	// A favourite the corpus has never seen arrives as a placeholder row
-	// titled "Unknown" until something fetches it.
+	// A favourite the corpus never saw is an "Unknown" placeholder until fetched.
 	if s.importer != nil {
 		missing, err := s.store.Unhydrated(ctx, ids)
 		if err != nil {
@@ -246,4 +250,27 @@ func (s *Sync) Watched(ctx context.Context, animeID, episode int) error {
 	s.log.Info("episode watched", "anime", animeID, "episode", episode)
 
 	return s.PushOne(ctx, animeID)
+}
+
+// Remove takes a show off the list on AniList, then MAL, then here; a tracker failing leaves it all on.
+// The push lock is held throughout, so a push already in flight can't recreate the entry after.
+func (s *Sync) Remove(ctx context.Context, animeID int) error {
+	s.pushing.Lock()
+	defer s.pushing.Unlock()
+	entry, err := s.store.ListEntry(ctx, animeID)
+	if err != nil {
+		return err
+	}
+	// A negative id is a row only kuro has; AniList never saw it.
+	if entry.ID > 0 && s.al.Authenticated() {
+		if err := s.al.DeleteEntry(ctx, entry.ID); err != nil {
+			return fmt.Errorf("remove from AniList: %w", err)
+		}
+	}
+	if s.mal != nil {
+		if err := s.mal.Remove(ctx, animeID); err != nil {
+			return fmt.Errorf("remove from MyAnimeList: %w", err)
+		}
+	}
+	return s.store.RemoveListEntry(ctx, animeID)
 }

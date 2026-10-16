@@ -7,19 +7,28 @@ import (
 	"slices"
 	"strconv"
 
+	"kuro/internal/sound"
 	"kuro/internal/store"
 )
 
 // Values are validated against the known set so a typo cannot silently disable
 // a feature: an unrecognised Anime4K mode would otherwise fail at playback.
 var allowed = map[string][]string{
-	"playback.player":       store.Players,
-	"playback.anime4k_mode": store.Anime4KModes,
-	"playback.anime4k_size": store.Anime4KSizes,
-	"audio.prefer":          store.AudioPrefs,
-	"display.titles":        store.TitleModes,
-	"notify.releases":       {"sub", "dub", "both"},
+	"playback.player":          store.Players,
+	"playback.anime4k_mode":    store.Anime4KModes,
+	"playback.anime4k_size":    store.Anime4KSizes,
+	"audio.prefer":             store.AudioPrefs,
+	"display.titles":           store.TitleModes,
+	"notify.releases":          {"sub", "dub", "both"},
+	"cache.autodelete":         store.AutoDeletes,
+	"playback.voice":           sound.Levels,
+	"playback.boost":           sound.Levels,
+	"downloads.while_watching": {"pause", "continue"},
+	"window.mode":              {"fullscreen", "maximized"},
 }
+
+// numeric settings take whole numbers; a typo would read as zero.
+var numeric = map[string]bool{"cache.budget_bytes": true, "notify.poll_seconds": true, "playback.progress_at": true, "cache.prefetch_count": true}
 
 func isBool(def string) bool { return def == "true" || def == "false" }
 
@@ -45,8 +54,7 @@ func (s *Server) getPrefs(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
-// A setting with no anime id changes the global default; with one it creates a
-// per-show override. An empty value removes the override.
+// Without an anime id this sets the default; with one, a per-show override (empty removes it).
 func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int    `json:"animeId"`
@@ -62,8 +70,7 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "unknown setting " + body.Key})
 		return
 	}
-	// A boolean setting is read with == "true", so "True" or "yes" would be
-	// stored happily and then silently mean off.
+	// Booleans are read as == "true", so "True" or "yes" would silently mean off.
 	if isBool(store.Defaults[body.Key]) {
 		if body.Value != "" && body.Value != "true" && body.Value != "false" {
 			send(w, http.StatusBadRequest, map[string]any{
@@ -76,6 +83,11 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 			"error": "invalid value for " + body.Key, "allowed": valid,
 		})
 		return
+	} else if numeric[body.Key] && body.Value != "" {
+		if _, err := strconv.ParseInt(body.Value, 10, 64); err != nil {
+			send(w, http.StatusBadRequest, map[string]any{"error": "invalid value for " + body.Key + ": a whole number"})
+			return
+		}
 	}
 
 	var err error
@@ -150,8 +162,7 @@ func (s *Server) markRead(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// notificationID reads ?id=. Zero means every notification, so an unparseable
-// one is refused rather than silently clearing the whole list.
+// notificationID reads ?id=, refusing a bad one, since zero would clear every notification.
 func notificationID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.URL.Query().Get("id")
 	if raw == "" {

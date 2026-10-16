@@ -5,11 +5,19 @@ import { buttonClass } from './ui'
 // After a self-update the old page asks for chunks that no longer exist.
 const STALE_CHUNK = /dynamically imported module|Importing a module script failed|error loading dynamically/i
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+// resetKey clears a caught error when it changes: the watch page keeps one key across episodes.
+export class ErrorBoundary extends Component<
+  { children: ReactNode; resetKey?: string },
+  { error: Error | null }
+> {
   state: { error: Error | null } = { error: null }
 
   static getDerivedStateFromError(error: Error) {
     return { error }
+  }
+
+  componentDidUpdate(prev: { resetKey?: string }) {
+    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null })
   }
 
   render() {

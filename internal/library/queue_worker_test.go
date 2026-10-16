@@ -13,8 +13,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// workerQueue is a queue over a fake engine holding episode 1 complete, with
-// nothing to find for any other episode.
+// workerQueue: a fake engine holding episode 1 complete, with nothing to find for others.
 func workerQueue(t *testing.T) (*Downloader, *store.Store) {
 	t.Helper()
 	d, st, _ := workerQueueWith(t)

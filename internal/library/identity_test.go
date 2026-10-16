@@ -81,8 +81,7 @@ func TestMonsterOnlyMatchesMonster(t *testing.T) {
 	}
 }
 
-// The group spells it "Semi", the catalogue "Zemi": one word apart is still the
-// same show, which a strict comparison would lose.
+// The group spells it "Semi", the catalogue "Zemi": one word apart is still the same show.
 func TestRomanisationDifferenceStillMatches(t *testing.T) {
 	known := []string{
 		"Onaji Zemi no Someya-san ga Sexy Joyuu Datta Hanashi.",
@@ -112,8 +111,7 @@ func TestShortenedTitlesMatch(t *testing.T) {
 	if !identifies(t, "[Group] Kaguya-sama wa Kokurasetai - 05 [1080p].mkv", long) {
 		t.Error("a group dropping the subtitle should still match")
 	}
-	// The same rule must not run backwards: naming most of a long title is a
-	// shortening, naming one word of it is another show.
+	// Not backwards: most of a long title is a shortening, one word of it another show.
 	if identifies(t, "[Group] Kaguya - 05 [1080p].mkv", long) {
 		t.Error("one leading word is not enough to claim a long title")
 	}
@@ -163,8 +161,7 @@ func TestSequelsNamedByTheirBaseTitleMatch(t *testing.T) {
 			t.Errorf("%q was rejected for %q", p.release, p.known)
 		}
 	}
-	// A base of one word gives no such licence; the sequel logic elsewhere
-	// tells cours apart, this only has to keep other shows out.
+	// A one-word base gives no such licence; this only keeps other shows out, not cours.
 	if identifies(t, "[Group] Monster Musume no Oisha-san - 01 [1080p].mkv", "Monster: Season 1") {
 		t.Error("a one-word base accepted a longer show")
 	}
@@ -250,6 +247,19 @@ func TestIdentityTokens(t *testing.T) {
 				t.Errorf("identityTokens(%q) = %v, want %v", in, got, want)
 				break
 			}
+		}
+	}
+}
+
+// "Monster - 02 - Downfall" names Monster; the words after the number are the episode's, not another show's.
+func TestEpisodeTitleAfterTheNumberStillNamesTheShow(t *testing.T) {
+	known := []string{"MONSTER", "Monster"}
+	for _, name := range []string{
+		"[CBM]_Monster_-_02_-_Downfall_[78722558].mkv",
+		"[Group] Monster - S01E05 - The Title [1080p].mkv",
+	} {
+		if !identifiesShow(parse.Parse(name), name, known) {
+			t.Errorf("%s was taken for another show", name)
 		}
 	}
 }

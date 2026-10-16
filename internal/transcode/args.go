@@ -5,9 +5,7 @@ import (
 	"strings"
 )
 
-// Hardware decode keeps frames on the GPU in the source pixel format, so a
-// 10-bit source feeding an 8-bit H.264 encoder cannot be converted and ffmpeg
-// writes nothing.
+// Hardware decode keeps 10-bit frames on the GPU, where an 8-bit H.264 encoder can't take them.
 func (s *Session) canDecodeInHardware() bool {
 	v := s.Info.Video
 	if v == nil {
@@ -30,8 +28,7 @@ const (
 func (s *Session) args(offset float64, startSegment int) []string {
 	a := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 
-	// Pinning the output to d3d11 keeps frames on the GPU, where the pixel
-	// format conversion a 10-bit source needs cannot happen.
+	// d3d11 output keeps frames on the GPU, where 10-bit can't be converted.
 	if !s.Plan.VideoCopy && usesHardware(s.encoder) && s.canDecodeInHardware() {
 		a = append(a, "-hwaccel", "d3d11va")
 	}
@@ -45,9 +42,7 @@ func (s *Session) args(offset float64, startSegment int) []string {
 		a = append(a, "-ss", fmt.Sprintf("%.3f", seek))
 	}
 
-	// Uncapped, ffmpeg converts the whole episode as fast as the disk allows and
-	// stutters the machine. The burst covers the start and early seeks; the rate
-	// keeps it ahead of the viewer.
+	// Capped, or ffmpeg stutters the machine; the burst covers the start, the rate stays ahead of the viewer.
 	a = append(a,
 		"-readrate", fmt.Sprintf("%.1f", readRate),
 		"-readrate_initial_burst", fmt.Sprintf("%.0f", initialBurstSeconds),
@@ -56,9 +51,7 @@ func (s *Session) args(offset float64, startSegment int) []string {
 	a = append(a,
 		"-i", s.Source,
 		"-map", "0:v:0",
-		// Read directly, not via AudioTrack(): args runs inside launch, whose
-		// callers already hold s.mu (await) or startMu (start), and re-locking
-		// s.mu here would deadlock against await.
+		// Read directly: launch's callers hold s.mu, so AudioTrack() would deadlock.
 		"-map", fmt.Sprintf("0:a:%d?", s.audioTrack),
 		"-map_metadata", "-1",
 		"-map_chapters", "-1",
@@ -68,8 +61,7 @@ func (s *Session) args(offset float64, startSegment int) []string {
 	a = append(a, s.audioArgs()...)
 
 	a = append(a,
-		// Preserved timestamps keep segments aligned to the playlist the
-		// player was handed before any encoding started.
+		// Preserved timestamps keep segments aligned with the playlist handed out up front.
 		"-copyts",
 		"-avoid_negative_ts", "disabled",
 		"-max_muxing_queue_size", "1024",
@@ -97,8 +89,7 @@ func (s *Session) videoArgs() []string {
 	codec := s.Plan.VideoCodec
 	args := []string{"-c:v", codec}
 
-	// Hardware encoders ignore -force_key_frames, so the interval has to be
-	// set directly or segment boundaries drift out of alignment.
+	// Hardware encoders ignore -force_key_frames, so the interval is set directly.
 	gop := int(SegmentSeconds * 24)
 	if usesHardware(codec) {
 		args = append(args, "-g", fmt.Sprint(gop), "-keyint_min", fmt.Sprint(gop))
@@ -121,8 +112,7 @@ func (s *Session) videoArgs() []string {
 		args = append(args, "-crf", "21")
 	}
 
-	// 10-bit H.264 is one of the formats the browser cannot decode, so
-	// preserving the source depth makes the output equally unplayable.
+	// Browsers can't decode 10-bit H.264, so the source depth isn't kept.
 	if isH264(codec) {
 		args = append(args, "-pix_fmt", "yuv420p")
 	}

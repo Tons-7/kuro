@@ -141,8 +141,7 @@ client_secret = "shh"
 	}
 }
 
-// A root under the temp directory is what an exe opened from inside a zip gets,
-// and the page has to be able to say so.
+// An exe opened inside a zip gets a temp root, which the page must be able to say.
 func TestLoadKnowsATemporaryRoot(t *testing.T) {
 	dir := inTempDir(t)
 	cfg, err := Load()
@@ -166,8 +165,7 @@ func TestLoadKnowsATemporaryRoot(t *testing.T) {
 	}
 }
 
-// data_dir moves the database out of AppData; written by SetDataDir above any
-// table, so it stays a top-level key.
+// SetDataDir writes data_dir above any table, so it stays a top-level key.
 func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	dir := inTempDir(t)
 	cfg, err := Load()

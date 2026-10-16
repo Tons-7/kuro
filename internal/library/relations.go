@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"slices"
 	"time"
 
@@ -42,7 +43,10 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 	seen := map[int]bool{animeID: true}
 	frontier := []int{animeID}
 	var saved []store.Relation
-	var walked []int
+	// walked: ids Ensure skips for a week; fetched: those AniList answered for, whose edges are the truth.
+	var walked, fetched []int
+	dates := map[int]string{}
+	answered := false
 
 	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
 		media, err := r.al.Relations(ctx, frontier)
@@ -52,7 +56,13 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 
 		var next []int
 		for _, m := range media {
-			walked = append(walked, m.ID)
+			if m.ID == animeID {
+				answered = true
+			}
+			walked, fetched = append(walked, m.ID), append(fetched, m.ID)
+			if d := m.StartDate.String(); d != "" {
+				dates[m.ID] = d
+			}
 			for _, edge := range m.Relations.Edges {
 				if !relatedEdges[edge.Type] || edge.Node.Type != "ANIME" {
 					continue
@@ -60,11 +70,14 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 				saved = append(saved, store.Relation{
 					AnimeID: m.ID, RelatedID: edge.Node.ID, Kind: edge.Type,
 				})
-				// Films and spin-offs are covered by this walk too; without
-				// marking them, opening one crawled the franchise again.
-				walked = append(walked, edge.Node.ID)
-				// Only the season chain is followed outward: films and spin-offs
-				// are recorded where they hang, not crawled through.
+				if d := edge.Node.StartDate.String(); d != "" {
+					dates[edge.Node.ID] = d
+				}
+				// A film or special's chain is this one; a series reached by an edge has its own, unasked.
+				if !series(edge.Node.Format) {
+					walked = append(walked, edge.Node.ID)
+				}
+				// Only the season chain is followed; films and spin-offs are recorded, not crawled.
 				if seasonEdges[edge.Type] && !seen[edge.Node.ID] {
 					seen[edge.Node.ID] = true
 					next = append(next, edge.Node.ID)
@@ -78,7 +91,12 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 	if anilist.UsedSaved(ctx) {
 		return 0, nil
 	}
-	if err := r.store.MarkRelationsFetched(ctx, append(walked, animeID)); err != nil {
+	// Hidden from this account (adult, with adult off) or gone: not a standalone show, and asked again next time.
+	if !answered {
+		r.log.Warn("anilist did not answer for the show; its franchise stays unknown", "anime", animeID)
+		return 0, nil
+	}
+	if err := r.store.MarkRelationsFetched(ctx, walked); err != nil {
 		r.log.Warn("record relation fetch", "anime", animeID, "err", err)
 	}
 
@@ -86,12 +104,12 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 	if len(saved) == 0 {
 		return 0, r.store.MarkNoRelations(ctx, animeID)
 	}
-	if err := r.store.SaveRelations(ctx, saved); err != nil {
+	if err := r.store.SaveRelations(ctx, fetched, saved); err != nil {
 		return 0, err
 	}
 	r.nameMembers(ctx, seen)
 
-	groups, err := r.store.RebuildFranchises(ctx)
+	groups, err := r.store.RebuildFranchisesFor(ctx, slices.Collect(maps.Keys(seen)), dates)
 	if err != nil {
 		return 0, err
 	}
@@ -99,8 +117,7 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 	return len(saved), nil
 }
 
-// nameMembers stores titles for franchise members that have none: the walk
-// records ids, and a sibling cour is only told apart by name.
+// nameMembers titles untitled franchise members, as a sibling cour is told apart only by name.
 func (r *Relations) nameMembers(ctx context.Context, members map[int]bool) {
 	const maxFetch = 25
 
@@ -110,6 +127,10 @@ func (r *Relations) nameMembers(ctx context.Context, members map[int]bool) {
 		if err == nil && len(names) == 0 {
 			missing = append(missing, id)
 		}
+	}
+	// Not the ids AniList no longer returns: asking again on every view was what marking them dead stops.
+	if dead, err := r.store.DeadAnime(ctx, missing); err == nil {
+		missing = slices.DeleteFunc(missing, func(id int) bool { return dead[id] })
 	}
 	if len(missing) == 0 {
 		return

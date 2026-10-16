@@ -1,34 +1,35 @@
-// Package firewall lets other devices on the home network reach kuro. Windows
-// asks about a program only the first time it listens beyond loopback, and an
-// answer given once (or a network marked Public) silently blocks every phone
-// afterwards, so kuro checks and, when asked, adds a rule of its own.
+// Package firewall checks, and on request adds, the rule that lets other devices at home reach kuro.
 package firewall
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
-// Network is one connection as Windows classifies it. Public is what Windows
-// picks for a network it has not been told to trust.
+// Network is one connection as Windows classifies it; Public is its pick for an untrusted network.
 type Network struct {
 	Name      string `json:"name"`
 	Interface string `json:"interface"`
 	Category  string `json:"category"`
 }
 
-// Rule is an inbound firewall rule touching kuro: its own port rule, or one
-// Windows made for kuro.exe when its prompt was answered.
+// Rule is an inbound rule touching kuro: its port rule, or one Windows made for kuro.exe at its prompt.
 type Rule struct {
 	Name     string `json:"name"`
 	Action   string `json:"action"`
 	Profiles string `json:"profiles"`
 	Enabled  bool   `json:"enabled"`
+	// LocalPort and Protocol are the rule's scope: a rule for another port says nothing about this one.
+	LocalPort string `json:"localPort,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
 }
 
 type Status struct {
 	Supported bool      `json:"supported"`
 	Networks  []Network `json:"networks"`
+	// Port is the one these rules are judged for.
+	Port int `json:"port,omitempty"`
 	// PortRule is kuro's own rule for its port, if added.
 	PortRule *Rule `json:"portRule,omitempty"`
 	// Program lists the rules for kuro.exe; a Block among them beats any allow.
@@ -41,15 +42,50 @@ type Status struct {
 	Command  string `json:"command,omitempty"`
 }
 
-// Blocked reports a block rule for kuro.exe that is on, which wins over every
-// allow rule whatever the profile.
+// Blocked reports a block rule for kuro.exe on a connected network's profile; it wins over every allow there.
 func (s Status) Blocked() bool {
-	for _, r := range s.Program {
-		if r.Enabled && strings.EqualFold(r.Action, "Block") {
+	for _, n := range s.Networks {
+		if s.blocks(profileOf(n)) {
 			return true
 		}
 	}
 	return false
+}
+
+func (s Status) blocks(profile string) bool {
+	for _, r := range s.Program {
+		if r.Enabled && strings.EqualFold(r.Action, "Block") && s.covers(r) && onProfile(r, profile) {
+			return true
+		}
+	}
+	return false
+}
+
+// covers: the rule speaks for this port; one for another port (the torrent peers') does not.
+func (s Status) covers(r Rule) bool {
+	if strings.EqualFold(r.Protocol, "UDP") {
+		return false
+	}
+	if r.LocalPort == "" || strings.EqualFold(r.LocalPort, "Any") || s.Port == 0 {
+		return true
+	}
+	for p := range strings.SplitSeq(r.LocalPort, ",") {
+		if strings.TrimSpace(p) == strconv.Itoa(s.Port) {
+			return true
+		}
+	}
+	return false
+}
+
+func onProfile(r Rule, profile string) bool {
+	return strings.EqualFold(r.Profiles, "Any") || strings.Contains(strings.ToLower(r.Profiles), strings.ToLower(profile))
+}
+
+func profileOf(n Network) string {
+	if strings.EqualFold(n.Category, "DomainAuthenticated") {
+		return "Domain"
+	}
+	return n.Category
 }
 
 // OnPublic reports a connected network Windows treats as Public.
@@ -69,10 +105,10 @@ func (s Status) Allows(profile string) bool {
 		rules = append(rules, *s.PortRule)
 	}
 	for _, r := range rules {
-		if !r.Enabled || !strings.EqualFold(r.Action, "Allow") {
+		if !r.Enabled || !strings.EqualFold(r.Action, "Allow") || !s.covers(r) {
 			continue
 		}
-		if strings.EqualFold(r.Profiles, "Any") || strings.Contains(strings.ToLower(r.Profiles), strings.ToLower(profile)) {
+		if onProfile(r, profile) {
 			return true
 		}
 	}
@@ -84,15 +120,12 @@ func (s Status) Reachable() bool {
 	if !s.Supported {
 		return true
 	}
-	if s.Blocked() || len(s.Networks) == 0 {
+	if len(s.Networks) == 0 {
 		return false
 	}
 	for _, n := range s.Networks {
-		profile := n.Category
-		if strings.EqualFold(profile, "DomainAuthenticated") {
-			profile = "Domain"
-		}
-		if !s.Allows(profile) {
+		profile := profileOf(n)
+		if s.blocks(profile) || !s.Allows(profile) {
 			return false
 		}
 	}

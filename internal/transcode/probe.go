@@ -1,6 +1,4 @@
-// Package transcode serves video to a browser. No browser can play Matroska,
-// which is what anime ships as, so the container is always rewritten — usually
-// without touching the streams themselves.
+// Package transcode serves video to a browser, rewriting Matroska into HLS, usually without re-encoding.
 package transcode
 
 import (
@@ -37,8 +35,7 @@ type Attachment struct {
 	MimeType string `json:"mimeType"`
 }
 
-// Chapter is a marker the release itself carries. Where one exists it beats a
-// crowd-sourced timestamp: it was cut for this exact file.
+// Chapter is the release's own marker, which beats AniSkip as it fits this exact file.
 type Chapter struct {
 	Title string  `json:"title"`
 	Start float64 `json:"start"`
@@ -110,8 +107,7 @@ type ffprobeOutput struct {
 	} `json:"chapters"`
 }
 
-// ffprobe repeats itself once per stream it could not read; the first line is
-// the cause and the rest is noise in a log.
+// ffprobe repeats itself per unreadable stream; the first line is the cause.
 func firstLine(s string) string {
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		return strings.TrimSpace(s[:i])
@@ -131,8 +127,7 @@ var probeLimit = 3 * time.Minute
 // ErrProbeTimeout: the start of the file had not arrived when the probe gave up.
 var ErrProbeTimeout = errors.New("the start of the file didn't arrive")
 
-// Probe inspects the source. It reads over HTTP directly from the torrent
-// engine, so only the header is fetched rather than the whole file.
+// Probe inspects the source over HTTP, so the engine fetches only the header.
 func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeLimit)
 	defer cancel()
@@ -238,9 +233,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	return info, nil
 }
 
-// dropMirror removes a second copy of a track list. Read through the engine
-// mid-download, ffprobe has reported every track twice (the copies at indices
-// the file does not have), and picking one of those fails the encode.
+// dropMirror removes the phantom second copy of the tracks ffprobe reports mid-download.
 func dropMirror(tracks []Stream) []Stream {
 	n := len(tracks)
 	if n < 2 || n%2 != 0 {

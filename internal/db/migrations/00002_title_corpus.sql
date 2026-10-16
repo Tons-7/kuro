@@ -1,8 +1,6 @@
 -- +goose Up
 
--- Every known name for every anime, not just the ones on the user's list.
--- Matching a release to a show is done against this locally, because AniList's
--- own search ranks worse as the query gets more specific.
+-- Every name of every anime, for matching releases locally: AniList's search ranks worse as queries narrow.
 CREATE TABLE title (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     anime_id INTEGER NOT NULL,
@@ -43,8 +41,7 @@ CREATE TRIGGER title_fts_au AFTER UPDATE ON title BEGIN
 END;
 -- +goose StatementEnd
 
--- Minimal record for anime that are only in the corpus, so a match can be
--- reported before the full AniList entry has ever been fetched.
+-- Minimal record for corpus-only anime, so a match is reported before AniList's entry is fetched.
 CREATE TABLE corpus_anime (
     anime_id   INTEGER PRIMARY KEY,
     mal_id     INTEGER,

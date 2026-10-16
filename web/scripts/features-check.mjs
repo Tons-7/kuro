@@ -1,7 +1,5 @@
-// End-to-end check of the hand controls: mark watched/unwatched ticks, the
-// score menu, favourites and notes, the release picker, the random button, the
-// orphan clean-up, and the folded season-pack row on Downloads. Run through
-// run-player-check.mjs with CHECK=features-check.mjs.
+// The hand controls: ticks, score, favourites, notes, release picker, random, orphans, pack rows.
+// Run through run-player-check.mjs with CHECK=features-check.mjs.
 import { spawnSync } from 'node:child_process'
 import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -111,36 +109,42 @@ const episodeRows = page.locator('ul li', { has: page.locator('a[href*="/watch/"
 const listed = await until(() => episodeRows.count().then((n) => n > 3), 45_000)
 check(listed, 'episode list rendered (needs AniList reachable)')
 
+// The tick names what it does: "Mark 1 to 3 watched", "Mark 2 to 3 not watched", or the episode alone.
 const tickFor = (n) =>
   page
     .locator('li', { has: page.locator(`a[href$="/watch/${ANIME}/${n}"]`) })
-    .getByRole('button', { name: /Mark (not )?watched/ })
+    .getByRole('button', { name: /^Mark .*watched$/ })
     .first()
+const ticked = async (n) => /not watched$/.test((await tickFor(n).getAttribute('aria-label')) ?? '')
 
 if (listed) {
-  // Mark episode 3 by hand: 1-3 tick, 4 does not. Marking past unwatched
-  // episodes asks first.
+  // Mark episode 3 by hand: 1-3 tick, 4 does not; marking past unwatched ones asks first.
+  check((await tickFor(3).getAttribute('aria-label')) === 'Mark 1 to 3 watched', 'the tick says it marks 1 to 3')
   await tickFor(3).click()
   const confirmRange = page.getByRole('button', { name: 'Mark 1–3' })
   check(await until(() => confirmRange.isVisible()), 'marking past unwatched episodes asks first')
   await confirmRange.click()
-  check(await until(async () => (await tickFor(3).getAttribute('aria-label')) === 'Mark not watched'), 'episode 3 ticks when marked')
-  check(await until(async () => (await tickFor(2).getAttribute('aria-label')) === 'Mark not watched'), 'episodes before it tick too (progress is a count)')
+  check(await until(() => ticked(3)), 'episode 3 ticks when marked')
+  check(await until(() => ticked(2)), 'episodes before it tick too (progress is a count)')
   check((await tickFor(4).getAttribute('aria-label')) === 'Mark watched', 'episode 4 stays unticked')
   let entry = await api(`/api/anime/${ANIME}`)
   check(entry.body?.progress === 3, 'tracker progress is 3', String(entry.body?.progress))
 
-  // Unmark 2: 2 and 3 untick, 1 stays.
+  // Unmark 2: it asks, as 3 goes too; then 2 and 3 untick and 1 stays.
+  check((await tickFor(2).getAttribute('aria-label')) === 'Mark 2 to 3 not watched', 'the tick says it unmarks 2 to 3')
   await tickFor(2).click()
-  check(await until(async () => (await tickFor(3).getAttribute('aria-label')) === 'Mark watched'), 'unmarking 2 also unticks 3')
-  check(await until(async () => (await tickFor(1).getAttribute('aria-label')) === 'Mark not watched'), 'episode 1 stays ticked')
+  const confirmUnmark = page.getByRole('button', { name: 'Unmark 2–3' })
+  check(await until(() => confirmUnmark.isVisible()), 'unmarking past later ticks asks first')
+  await confirmUnmark.click()
+  check(await until(async () => !(await ticked(3))), 'unmarking 2 also unticks 3')
+  check(await until(() => ticked(1)), 'episode 1 stays ticked')
   entry = await api(`/api/anime/${ANIME}`)
   check(entry.body?.progress === 1, 'tracker progress rewound to 1', String(entry.body?.progress))
 
   // Marking again after an unmark works (the round-trip that used to hang).
   await tickFor(3).click()
   await page.getByRole('button', { name: 'Mark 2–3' }).click()
-  check(await until(async () => (await tickFor(3).getAttribute('aria-label')) === 'Mark not watched'), 'episode 3 ticks again after an unmark')
+  check(await until(() => ticked(3)), 'episode 3 ticks again after an unmark')
 
   // Score menu: readable, picks, persists.
   const scoreButton = page.getByRole('button', { name: 'Your score' })
@@ -297,8 +301,7 @@ check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'next
 check(await until(() => video.evaluate((v) => Math.abs(v.volume - 0.3) < 0.01 && v.playbackRate === 1.5)), 'volume and speed carried to the next episode', await video.evaluate((v) => `vol=${v.volume} rate=${v.playbackRate}`))
 
 // ---------------------------------------------------------------- player: controls hide after a keyboard resume
-// The pointer never moves again after the first nudge, so only the resume
-// itself can re-arm the hide timer.
+// The pointer never moves after the first nudge, so only the resume can re-arm the hide timer.
 const cursorHidden = () =>
   page.evaluate(() => !!document.querySelector('.group\\/player')?.classList.contains('cursor-none'))
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -383,8 +386,7 @@ await video.evaluate((v) => {
 })
 const upNext = page.getByRole('dialog', { name: 'Up next' })
 check(await until(() => upNext.isVisible(), 20_000), 'up-next card appears at the end')
-// Fullscreen paints only the player's subtree, so a card outside it counts
-// down where nobody can see it.
+// Fullscreen paints only the player's subtree, so a card outside it counts down unseen.
 check(
   await page.evaluate(() => {
     const card = document.querySelector('[role="dialog"][aria-label="Up next"]')
@@ -415,8 +417,7 @@ await video.evaluate((v) => {
 })
 check(await until(() => page.url().endsWith(`/watch/${ANIME}/3`), 20_000), 'auto-next lands on episode 3 after five seconds', page.url())
 // ---------------------------------------------------------------- fullscreen survives the next episode
-// Fullscreen belongs to the player element; remounting it between episodes
-// drops out of fullscreen.
+// Fullscreen belongs to the player element; remounting it between episodes drops out of fullscreen.
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads for the fullscreen check')
 await page.evaluate(() => {
@@ -442,8 +443,7 @@ if (wentFullscreen) {
 check(await until(() => video.evaluate((v) => !v.paused), 20_000), 'the next episode plays rather than sitting paused')
 
 // ---------------------------------------------------------------- opening and ending markers
-// The release's own chapters name the opening and ending, so they need no
-// crowd-sourced timestamp and no guess at the episode's length.
+// The release's own chapters name the opening and ending, with no AniSkip lookup needed.
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads for the skip check')
 const dur = Math.round(await video.evaluate((v) => v.duration))
@@ -464,8 +464,7 @@ check(await until(() => marker.first().isVisible(), 20_000), 'the opening is mar
 check(await until(() => page.locator('div.group\\/scrub div[title^="Ending"]').first().isVisible()), 'the ending is marked too')
 
 // ---------------------------------------------------------------- resume survives an in-app switch
-// The player is reused between episodes, so the new source has to attach at the
-// saved position rather than the one the last episode left behind.
+// The reused player attaches the new source at its saved position, not the last episode's.
 await post('/api/progress', { animeId: ANIME, episode: 3, position: 40, duration: 180, played: 40 })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads before the switch')

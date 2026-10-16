@@ -149,8 +149,7 @@ func TestImportSkipsDirtyRows(t *testing.T) {
 	}
 }
 
-// Replacing exists precisely to do what merging refuses to: make the local list
-// match the tracker, unpushed edits included.
+// Replace makes the local list match the tracker, unpushed edits included, as merge won't.
 func TestReplaceOverwritesDirtyRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -213,8 +212,7 @@ func TestReplaceDropsEntriesTheTrackerNoLongerHas(t *testing.T) {
 	}
 }
 
-// Merging is the safe default and must never delete: a show added locally and
-// never pushed is the whole reason someone picks it.
+// Merge, the safe default, never deletes a show added locally and not yet pushed.
 func TestMergeKeepsEntriesTheTrackerDoesNotHave(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -250,8 +248,7 @@ func TestImportIsAtomic(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	// The second entry references an anime that was never inserted, so the
-	// foreign key rejects it and the whole batch must roll back.
+	// The second entry's anime was never inserted, so the foreign key rolls back the batch.
 	_, err := s.ImportList(ctx, []Anime{anime(100, "Frieren")},
 		[]Entry{
 			{ID: 1, AnimeID: 100, Progress: 7},
@@ -285,8 +282,7 @@ func TestFullTextSearchIndexesEveryTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Latin terms go through FTS, CJK and short terms through the LIKE
-	// fallback. Every one must resolve to the same row.
+	// Latin terms take FTS, CJK and short ones LIKE; all resolve to the same row.
 	for _, q := range []string{"sousou", "frier", "beyond", "funeral", "葬送", "フリーレン", "no"} {
 		got, err := s.SearchLocal(ctx, q, 0)
 		if err != nil {

@@ -1,6 +1,5 @@
 -- +goose Up
--- The push/merge pair the list entries already use: what the tracker was last
--- known to hold, and whether the local value has moved since.
+-- The list entries' push/merge pair: what the tracker last held, and whether ours moved since.
 ALTER TABLE user_anime ADD COLUMN favourite_synced INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE user_anime ADD COLUMN favourite_dirty INTEGER NOT NULL DEFAULT 0;
 

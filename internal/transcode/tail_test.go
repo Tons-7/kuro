@@ -36,9 +36,7 @@ func TestSegmentCountFoldsSlivers(t *testing.T) {
 	}
 }
 
-// Stream copy cuts on the file's keyframes: with a long GOP the last keyframe
-// can fall short of the arithmetic, so a pass from the start stops before the
-// final segment and the player waits for it forever.
+// With a long GOP a copy pass stops before the final segment; the player must still get it.
 func TestTrailingSegmentIsWrittenWhenThePassEndsShort(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 

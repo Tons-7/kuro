@@ -35,8 +35,7 @@ func ownedFixture(t *testing.T) (*Cache, *store.Store, *fakeEngine) {
 	return c, st, engine
 }
 
-// Another install's (or program's) downloads in a shared engine would be
-// adopted into the budget and swept away.
+// Another program's downloads in a shared engine must not be adopted and swept.
 func TestAdoptSkipsDownloadsOutsideTheCache(t *testing.T) {
 	c, st, engine := ownedFixture(t)
 	engine.ids[1] = "foreign"
@@ -213,8 +212,7 @@ func (downIndexer) Search(context.Context, indexer.Query) ([]indexer.Torrent, er
 	return nil, errors.New("dial tcp: no such host")
 }
 
-// Every site failing is an outage; reporting "no release" sent people looking
-// for a release that may well exist.
+// Every site failing is an outage, not "no release", which may well exist.
 func TestFindReportsAnOutage(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -247,5 +245,59 @@ func TestDiscardSparesADownloadOnRecord(t *testing.T) {
 	}
 	if !engine.wasDeleted(otherHash) {
 		t.Error("an abandoned candidate was left")
+	}
+}
+
+// kuro's own folders inside the cache folder are never orphans.
+func TestOrphansLeaveKurosOwnFoldersAlone(t *testing.T) {
+	c, _, _ := ownedFixture(t)
+	was := orphanSettle
+	orphanSettle = 0
+	t.Cleanup(func() { orphanSettle = was })
+	bin, data := filepath.Join(c.dir, "bin"), filepath.Join(c.dir, "data")
+	c.WithProtected(bin, data)
+	os.MkdirAll(bin, 0o755)
+	os.MkdirAll(data, 0o755)
+	os.WriteFile(filepath.Join(c.dir, "stray.mkv"), []byte("x"), 0o644)
+
+	if _, err := c.Orphans(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, kept := range []string{bin, data} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s was deleted", kept)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.dir, "stray.mkv")); err == nil {
+		t.Error("the stray file was kept")
+	}
+}
+
+// A deletion takes only the reviewed orphans: one that turned up or was claimed since stays.
+func TestRemoveOrphansDeletesOnlyTheReviewedNames(t *testing.T) {
+	c, st, _ := ownedFixture(t)
+	was := orphanSettle
+	orphanSettle = 0
+	t.Cleanup(func() { orphanSettle = was })
+
+	for _, name := range []string{"reviewed.mkv", "new-since.mkv", "claimed.mkv"} {
+		if err := os.WriteFile(filepath.Join(c.dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Claimed after the preview: a download recorded it.
+	record(t, st, "clm", "claimed.mkv", 0)
+
+	gone, err := c.RemoveOrphans(context.Background(), []string{"reviewed.mkv", "claimed.mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gone) != 1 || gone[0].Name != "reviewed.mkv" {
+		t.Fatalf("removed %+v, want only reviewed.mkv", gone)
+	}
+	for name, want := range map[string]bool{"reviewed.mkv": false, "new-since.mkv": true, "claimed.mkv": true} {
+		if _, err := os.Stat(filepath.Join(c.dir, name)); (err == nil) != want {
+			t.Errorf("%s present = %v, want %v", name, err == nil, want)
+		}
 	}
 }

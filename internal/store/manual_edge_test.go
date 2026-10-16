@@ -41,8 +41,7 @@ func TestScoreChangeAloneIsPendingForMAL(t *testing.T) {
 	}
 }
 
-// Negative ids are MAL-only titles; the anime row comes from the corpus so an
-// entry can hang on it, mal_id included for the MAL push.
+// A MAL-only title (negative id) gets its anime row from the corpus, mal_id included.
 func TestMALOnlyAnimeGetRowsFromTheCorpus(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -96,8 +95,7 @@ func TestMALOnlyAnimeGetRowsFromTheCorpus(t *testing.T) {
 	}
 }
 
-// A show the corpus has never seen still gets a placeholder row, whatever the
-// sign of its id, so nothing keyed on anime(id) can fail.
+// A show the corpus never saw gets a placeholder row, so nothing keyed on anime(id) fails.
 func TestEnsureAnimePlaceholderForUnknownIDs(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

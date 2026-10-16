@@ -21,8 +21,7 @@ func airingAnime(t *testing.T, nextEpisode int, airingAt int64) *Store {
 	return st
 }
 
-// Auto-next and prefetch ask the same question the watcher does; an episode
-// airing next Saturday has nothing to find yet.
+// Auto-next and prefetch skip, as the watcher does, an episode airing next Saturday.
 func TestNextEpisodeWaitsForTheBroadcast(t *testing.T) {
 	ctx := context.Background()
 

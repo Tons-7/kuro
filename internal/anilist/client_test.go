@@ -70,8 +70,7 @@ func TestToggleFavouriteIsNeverRetried(t *testing.T) {
 	}
 }
 
-// Without a referer AniList's edge answers 403 "API temporarily disabled",
-// which reads exactly like an outage. Every request carries one.
+// Every request carries a referer; without one AniList answers a 403 that reads as an outage.
 func TestEveryRequestSendsTheReferer(t *testing.T) {
 	var got string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -164,8 +163,7 @@ func TestQuerySendsBearerOnlyWhenSet(t *testing.T) {
 	}
 }
 
-// The burst limiter returns 429s carrying no rate-limit headers at all, so the
-// fallback must not depend on any of them being present.
+// The burst limiter's 429s carry no rate-limit headers, so the fallback needs none of them.
 func TestRetryAfterFallbacks(t *testing.T) {
 	reset := time.Now().Add(30 * time.Second).Unix()
 
@@ -247,8 +245,7 @@ func TestExhaustedQuotaReturnsImmediately(t *testing.T) {
 	}
 }
 
-// A 429 seen by one goroutine has to hold back all of them, since the quota
-// belongs to the account rather than the connection.
+// A 429 seen by one goroutine holds back all of them: the quota is the account's.
 func TestPauseAppliesAcrossCallers(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":{}}`)

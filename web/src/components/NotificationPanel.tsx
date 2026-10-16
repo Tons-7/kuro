@@ -5,12 +5,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { cx, relativeTime } from '../lib/format'
 import { useNotifications, type Notification } from '../lib/queries'
-import { useDismiss, useModalFocus } from './ui'
+import { ConfirmInline, useDismiss, useModalFocus } from './ui'
 
-/**
- * New episodes read as a glance, not a destination. The panel does the whole
- * job in place, linking out only when there is more.
- */
+/** New episodes at a glance, handled in place, linking out only when there is more. */
 export function NotificationPanel() {
   const [open, setOpen] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -18,7 +15,7 @@ export function NotificationPanel() {
   const panelRef = useRef<HTMLDivElement>(null)
   useModalFocus(panelRef, open)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
 
   const qc = useQueryClient()
@@ -48,7 +45,7 @@ export function NotificationPanel() {
         aria-expanded={open}
         aria-label={unread ? `${unread} unread notifications` : 'Notifications'}
         onClick={() => setOpen((v) => !v)}
-        className="relative grid size-9 place-items-center rounded-md text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+        className="tap relative grid size-9 place-items-center rounded-md text-base-300 transition-colors hover:bg-base-800 hover:text-white"
       >
         <BellIcon />
         {unread > 0 && (
@@ -63,11 +60,16 @@ export function NotificationPanel() {
             role="dialog"
             aria-label="Notifications"
             data-portal-menu
+            // Under the bell, but never past either edge of a narrow phone.
             style={{
               top: box.bottom + 8,
-              right: Math.max(8, window.innerWidth - box.right),
+              width: Math.min(320, window.innerWidth - 16),
+              right: Math.min(
+                Math.max(8, window.innerWidth - box.right),
+                window.innerWidth - 8 - Math.min(320, window.innerWidth - 16),
+              ),
             }}
-            className="fixed z-50 w-80 animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 shadow-panel"
+            className="fixed z-50 animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 shadow-panel"
           >
             <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
               <p className="text-sm font-medium text-base-100">
@@ -79,7 +81,7 @@ export function NotificationPanel() {
                 )}
               </p>
               <div className="flex items-center gap-1">
-                {unread > 0 && (
+                {unread > 0 && !confirmClear && (
                   <button
                     onClick={() => markRead.mutate(undefined)}
                     className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white"
@@ -90,16 +92,15 @@ export function NotificationPanel() {
                 {/* Every notification at once: asked, not done on one click. */}
                 {items.length > 0 &&
                   (confirmClear ? (
-                    <button
-                      onClick={() => {
+                    <ConfirmInline
+                      label="Clear all"
+                      onConfirm={() => {
                         remove.mutate(undefined)
                         setConfirmClear(false)
                       }}
-                      onBlur={() => setConfirmClear(false)}
-                      className="rounded bg-recap/20 px-1.5 py-0.5 text-[11px] font-medium text-red-300 transition-colors hover:bg-recap/30"
-                    >
-                      Clear all {items.length}?
-                    </button>
+                      onCancel={() => setConfirmClear(false)}
+                      size="sm"
+                    />
                   ) : (
                     <button
                       onClick={() => setConfirmClear(true)}
@@ -178,7 +179,7 @@ function Row({
       <button
         onClick={onRemove}
         aria-label="Remove notification"
-        className="absolute top-2 right-2 rounded p-1 text-base-600 opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-recap focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        className="tap absolute top-2 right-2 rounded p-1 text-base-600 transition-colors hover:text-recap"
       >
         <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
           <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
@@ -199,21 +200,23 @@ export function desktopNotifyWanted(): boolean {
   }
 }
 
-// Raises a system notification for each unread item newer than the last one
-// this browser announced, when the setting is on and permission was granted.
-// The first poll only records where the list stands, so enabling it does not
-// replay the backlog.
+// Raises a system notification per new unread item; the first poll only marks the spot, replaying nothing.
 function useDesktopNotifications(items?: Notification[]) {
   useEffect(() => {
     if (!items || typeof Notification === 'undefined') return
     const newest = items.reduce((m, n) => Math.max(m, n.id), 0)
+    // No key yet is the first sight; a stored 0 is a list that was empty, so anything newer is news.
     let seen = 0
+    let first = true
     try {
-      seen = Number(localStorage.getItem(SEEN_KEY) ?? '')
+      const stored = localStorage.getItem(SEEN_KEY)
+      if (stored !== null && Number.isFinite(Number(stored))) {
+        seen = Number(stored)
+        first = false
+      }
     } catch {
       // Unreadable storage: treat as first sight.
     }
-    const first = !Number.isFinite(seen) || seen === 0
     if (!first && desktopNotifyWanted() && Notification.permission === 'granted') {
       for (const n of items.filter((n) => n.id > seen && !n.read).reverse()) {
         const note = new Notification(n.title, { body: n.body, tag: `kuro-${n.id}` })

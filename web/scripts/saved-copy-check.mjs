@@ -1,6 +1,4 @@
-// When AniList can't be reached pages come from kuro's saved copy, and a banner
-// says so; the next live answer clears it. The outage is simulated by marking
-// responses the way the server does when it answers from the saved copy.
+// Saved-copy answers (marked as the server does) show a banner; the next live answer clears it.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -49,10 +47,20 @@ check(await until(() => banner.isVisible()), 'the banner shows while answers are
 check(/1d ago/.test(await banner.innerText().catch(() => '')), 'and says how old', await banner.innerText().catch(() => ''))
 await page.screenshot({ path: `${SHOTS}/saved-copy-banner.png` })
 
-// AniList back: the next live answer clears it.
-// A request still in the handler would fulfil a route already gone.
-await page.unrouteAll({ behavior: 'ignoreErrors' })
+// Still down: Try now asks AniList once and says so, rather than seeming to do nothing.
+await page.route('**/api/anilist/recheck', (route) =>
+  route.fulfill({ status: 200, contentType: 'application/json', body: '{"live":false}' }),
+)
 await banner.getByRole('button', { name: 'Try now' }).click()
+check(
+  await until(() => banner.getByRole('button', { name: /Still down/ }).isVisible()),
+  'a recheck that fails says Still down',
+)
+await page.unroute('**/api/anilist/recheck')
+
+// AniList back: the next live answer clears it (requests still in the handler are let finish).
+await page.unrouteAll({ behavior: 'ignoreErrors' })
+await banner.getByRole('button', { name: /Try again|Try now/ }).click()
 check(await until(async () => !(await banner.isVisible())), 'a live answer clears the banner')
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))

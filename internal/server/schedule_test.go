@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// A week of tabs must be seven distinct weekdays. An eighth entry would repeat
-// a weekday and break a tab strip keyed on the name.
+// A week is seven distinct weekdays; an eighth would repeat one in a strip keyed on the name.
 func TestGroupByDayEmitsExactlyOneTabPerDay(t *testing.T) {
 	const offset = 120
 	start := midnight(time.Now(), offset).Unix()

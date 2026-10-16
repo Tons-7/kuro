@@ -5,6 +5,7 @@ package update
 import (
 	"archive/zip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,7 +35,22 @@ const (
 	Repo      = "Tons-7/kuro"
 	userAgent = "kuro"
 	sumsFile  = "SHA256SUMS.txt"
+	sigFile   = sumsFile + ".sig"
 )
+
+// signingKeyHex can be replaced at build time (-X) only by an end-to-end test signing its own fake release.
+var signingKeyHex = "22e0c47d84c95b91d24c386c08e994718a23cec6332f187c92bb3ed5ad4c279b"
+
+// signingKey verifies SHA256SUMS.txt.sig, which a stolen token or hijacked CI cannot forge.
+var signingKey = mustPublicKey(signingKeyHex)
+
+func mustPublicKey(hexKey string) ed25519.PublicKey {
+	key, err := hex.DecodeString(hexKey)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		panic("update: bad signing key")
+	}
+	return ed25519.PublicKey(key)
+}
 
 type Stage string
 
@@ -50,7 +66,15 @@ type Release struct {
 	Version string `json:"version"`
 	URL     string `json:"url"`
 	Sums    string `json:"-"`
+	Sig     string `json:"-"`
 	Notes   string `json:"notes,omitempty"`
+}
+
+// Notes is one release's text, so someone several versions behind reads every one, not just the newest.
+type Notes struct {
+	Version   string    `json:"version"`
+	Notes     string    `json:"notes"`
+	Published time.Time `json:"published,omitzero"`
 }
 
 type Status struct {
@@ -63,6 +87,12 @@ type Status struct {
 	Bytes     int64     `json:"bytes"`
 	Total     int64     `json:"total"`
 	Error     string    `json:"error,omitempty"`
+	// Pending: every release newer than this one, newest first.
+	Pending []Notes `json:"pending,omitempty"`
+	// WhatsNew: this version's notes, with those of the versions skipped since the one it replaced here.
+	WhatsNew []Notes `json:"whatsNew,omitempty"`
+	// UpdatedFrom: the version that ran here before this one, when known.
+	UpdatedFrom string `json:"updatedFrom,omitempty"`
 }
 
 type Updater struct {
@@ -111,9 +141,12 @@ func (u *Updater) set(apply func(*Status)) {
 }
 
 type ghRelease struct {
-	Tag    string `json:"tag_name"`
-	Body   string `json:"body"`
-	Assets []struct {
+	Tag        string    `json:"tag_name"`
+	Body       string    `json:"body"`
+	Draft      bool      `json:"draft"`
+	Prerelease bool      `json:"prerelease"`
+	Published  time.Time `json:"published_at"`
+	Assets     []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -126,6 +159,14 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 	defer cancel()
 
 	rel, err := u.latest(ctx)
+	var all []Notes
+	if err == nil {
+		// Best effort: without the list, the latest release's own notes still show.
+		if all, err = u.releases(ctx); err != nil {
+			u.log.Warn("release notes", "err", err)
+			all, err = []Notes{{Version: rel.Version, Notes: rel.Notes}}, nil
+		}
+	}
 	u.set(func(s *Status) {
 		s.CheckedAt = time.Now()
 		s.CheckErr = ""
@@ -135,6 +176,8 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 		}
 		s.Latest = &rel
 		s.Available = rel.URL != "" && Newer(rel.Version, Version)
+		s.Pending = pending(all, Version)
+		s.WhatsNew = whatsNew(all, Version, s.UpdatedFrom)
 	})
 	if err != nil {
 		return u.Status(), err
@@ -180,9 +223,139 @@ func (u *Updater) latest(ctx context.Context) (Release, error) {
 			rel.URL = a.URL
 		case sumsFile:
 			rel.Sums = a.URL
+		case sigFile:
+			rel.Sig = a.URL
 		}
 	}
 	return rel, nil
+}
+
+// releases lists the published releases' notes, newest first; drafts and pre-releases are nobody's update.
+func (u *Updater) releases(ctx context.Context) ([]Notes, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		u.api+"/repos/"+Repo+"/releases?per_page=50", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	res, err := u.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: HTTP %d", res.StatusCode)
+	}
+	var list []ghRelease
+	if err := json.NewDecoder(io.LimitReader(res.Body, 8<<20)).Decode(&list); err != nil {
+		return nil, err
+	}
+	out := make([]Notes, 0, len(list))
+	for _, r := range list {
+		if r.Draft || r.Prerelease {
+			continue
+		}
+		out = append(out, Notes{Version: strings.TrimPrefix(r.Tag, "v"), Notes: r.Body, Published: r.Published})
+	}
+	slices.SortStableFunc(out, func(a, b Notes) int {
+		switch {
+		case Newer(a.Version, b.Version):
+			return -1
+		case Newer(b.Version, a.Version):
+			return 1
+		}
+		return 0
+	})
+	return out, nil
+}
+
+// pending is every release newer than current.
+func pending(all []Notes, current string) []Notes {
+	var out []Notes
+	for _, n := range all {
+		if Newer(n.Version, current) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// whatsNew is current's notes and every release after from up to it; from unknown, current's alone.
+func whatsNew(all []Notes, current, from string) []Notes {
+	if current == "dev" {
+		return nil
+	}
+	var out []Notes
+	for _, n := range all {
+		if Newer(n.Version, current) {
+			continue
+		}
+		same := !Newer(current, n.Version)
+		if same || (from != "" && Newer(n.Version, from)) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Started records the running version; the first start after an update announces it and keeps the old one.
+func (u *Updater) Started(ctx context.Context) {
+	if u.store == nil || Version == "dev" {
+		return
+	}
+	last, _ := u.store.Setting(ctx, "update.version")
+	if last == Version {
+		from, _ := u.store.Setting(ctx, "update.previous")
+		u.set(func(s *Status) { s.UpdatedFrom = from })
+		return
+	}
+	updated := last != "" && Newer(Version, last)
+	// Versions before this one recorded nothing; the announcement of this very version says it came by update.
+	if last == "" {
+		notified, _ := u.store.Setting(ctx, "update.notified")
+		updated = notified == Version
+	}
+	from := ""
+	if updated {
+		from = last
+	}
+	if err := u.store.SetSetting(ctx, "update.version", Version); err != nil {
+		u.log.Warn("remember the running version", "err", err)
+	}
+	if err := u.store.SetSetting(ctx, "update.previous", from); err != nil {
+		u.log.Warn("remember the previous version", "err", err)
+	}
+	u.set(func(s *Status) { s.UpdatedFrom = from })
+	if !updated {
+		return
+	}
+	if _, err := u.store.AddNotification(ctx, store.Notification{
+		Kind:    store.NotifyUpdate,
+		Title:   fmt.Sprintf("Updated to kuro %s", Version),
+		Body:    "See what's new in Settings → About",
+		Payload: map[string]any{"version": Version, "updated": true},
+	}); err != nil {
+		u.log.Warn("updated notification", "err", err)
+	}
+}
+
+// fetchSmall reads a release's small text asset.
+func (u *Updater) fetchSmall(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	res, err := u.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(res.Body, 64<<10))
 }
 
 // AssetName is the zip package.ps1 publishes for this platform.
@@ -218,15 +391,20 @@ func (u *Updater) notify(ctx context.Context, rel Release) {
 // Apply fetches the latest release in the background, swaps the executable and
 // starts the new one; the caller's restart hook then ends this process.
 func (u *Updater) Apply() error {
-	st := u.Status()
+	// Judged and claimed under one lock: two presses must not start two downloads into one file.
+	u.mu.Lock()
+	st := u.status
 	if st.Stage == StageDownloading || st.Stage == StageVerifying || st.Stage == StageRestarting {
+		u.mu.Unlock()
 		return nil
 	}
 	if !st.Available || st.Latest == nil {
+		u.mu.Unlock()
 		return errors.New("no update available")
 	}
 	rel := *st.Latest
-	u.set(func(s *Status) { s.Stage, s.Bytes, s.Total, s.Error = StageDownloading, 0, 0, "" })
+	u.status.Stage, u.status.Bytes, u.status.Total, u.status.Error = StageDownloading, 0, 0, ""
+	u.mu.Unlock()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -247,8 +425,8 @@ func (u *Updater) Apply() error {
 }
 
 func (u *Updater) apply(ctx context.Context, rel Release) error {
-	if rel.Sums == "" {
-		return errors.New("release carries no " + sumsFile + "; refusing an unverified binary")
+	if rel.Sums == "" || rel.Sig == "" {
+		return errors.New("release carries no signed " + sumsFile + "; refusing an unverified binary")
 	}
 	if err := os.MkdirAll(u.staging, 0o755); err != nil {
 		return err
@@ -301,8 +479,7 @@ func Rollback(exe string) error {
 	return nil
 }
 
-// Handover reports a start by an update, which is the only time a failed
-// start should fall back to the previous binary.
+// Handover reports a start by an update, the only time a failed start falls back to the old binary.
 func Handover(args []string) bool {
 	return slices.Contains(args, "--wait-for")
 }
@@ -359,26 +536,23 @@ func (u *Updater) download(ctx context.Context, url, dest string) error {
 	}
 }
 
-// verify checks the zip against the published SHA256SUMS line for it.
+// verify checks the zip against the published SHA256SUMS line for it, and that file against its signature.
 func (u *Updater) verify(ctx context.Context, rel Release, archive string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rel.Sums, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	res, err := u.http.Do(req)
+	raw, err := u.fetchSmall(ctx, rel.Sums)
 	if err != nil {
 		return fmt.Errorf("checksums: %w", err)
 	}
-	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	sig, err := u.fetchSmall(ctx, rel.Sig)
 	if err != nil {
-		return err
+		return fmt.Errorf("signature: %w", err)
+	}
+	if !ed25519.Verify(signingKey, raw, sig) {
+		return errors.New(sumsFile + " is not signed by kuro's release key; refusing the update")
 	}
 
 	want := ""
 	name := filepath.Base(archive)
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == name {
 			want = strings.ToLower(fields[0])
@@ -433,8 +607,7 @@ func extractExe(archive, dest string) error {
 	return fmt.Errorf("%s not in the archive", want)
 }
 
-// swap moves the running binary aside (allowed on every OS) and puts the new
-// one in its place; a failure puts the old one back.
+// swap moves the running binary aside and the new one in; a failure puts the old one back.
 func swap(exe, fresh string) error {
 	old := exe + ".old"
 	os.Remove(old)
@@ -448,25 +621,23 @@ func swap(exe, fresh string) error {
 	return nil
 }
 
-// Cleanup removes what the last update left behind. Called once this version
-// is serving: until then .old is the way back.
+// Cleanup removes the last update's leftovers once this version serves; until then .old is the way back.
 func Cleanup(exe string) {
 	os.Remove(exe + ".old")
 	os.Remove(exe + ".new")
 	os.Remove(exe + ".failed")
 }
 
-// relaunch starts the new binary outside this process's job object, told to
-// wait for this one to exit before it binds the port. The app window dies with
-// this process, so the window choice carries over instead of being suppressed —
-// a windowed kuro reopens its UI.
+// RelaunchSelf starts this binary again, told to wait for this process, for a change that needs a restart.
+func RelaunchSelf(exe string) error { return relaunch(exe) }
+
+// relaunch starts the new binary outside the job object, waiting for this exit; a windowed kuro reopens its UI.
 func relaunch(exe string) error { return relaunchCmd(exe).Start() }
 
 func relaunchCmd(exe string) *exec.Cmd {
 	cmd := exec.Command(exe, relaunchArgs(os.Getpid(), os.Args[1:])...)
 	cmd.Dir = filepath.Dir(exe)
-	// Inherited, not left at the default of NUL: a handover that fails at
-	// startup would otherwise take the app away without printing why.
+	// Inherited, not NUL, so a handover failing at startup says why.
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	config.Detach(cmd)
 	return cmd

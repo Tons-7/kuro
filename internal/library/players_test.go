@@ -19,8 +19,7 @@ func (f *fakePlayer) Events() <-chan player.Event                { return f.even
 func (f *fakePlayer) Running() bool                              { return false }
 func (f *fakePlayer) Stop()                                      { f.stopped++ }
 
-// Dragging to the end and letting mpv reach EOF is a peek, not a watch; the
-// same end after actually playing it through is.
+// Dragging to mpv's EOF is a peek, not a watch; the same end after playing it through is.
 func TestMpvEOFFollowsThePlayedShareRule(t *testing.T) {
 	ctx := context.Background()
 	run := func(positions []float64) int {

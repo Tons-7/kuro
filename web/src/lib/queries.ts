@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -18,8 +19,7 @@ import {
   type ScheduleItem,
 } from './api'
 
-// The browser reports minutes to subtract from local time to reach UTC, which
-// is the opposite sign to what the schedule endpoint wants.
+// getTimezoneOffset has the opposite sign to what the schedule endpoint wants.
 export const tzOffset = () => -new Date().getTimezoneOffset()
 
 export function useHome() {
@@ -35,8 +35,7 @@ export function useDiscover(sort: string, perPage = 24) {
   return useQuery({
     queryKey: ['discover', sort, perPage],
     queryFn: () => api.get<{ items: DiscoverItem[] }>(`/api/discover${query({ sort, perPage })}`),
-    // Trending moves slowly; refetching on every tab focus wastes the AniList
-    // budget, which is 30 requests a minute for everything.
+    // Trending moves slowly, and a refetch per tab focus wastes AniList's 30 a minute.
     staleTime: 10 * 60_000,
   })
 }
@@ -54,8 +53,7 @@ export function useSchedule(days = 7, mine = false) {
   })
 }
 
-// Re-renders on a timer so relative times ("5h ago", "in 2h") advance on their
-// own; without it the page is correct but motionless.
+// Re-renders on a timer so relative times ("5h ago", "in 2h") advance on their own.
 export function useNow(every = 30_000) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -69,14 +67,15 @@ export function useAired(hours = 48) {
   const start = Math.floor(Date.now() / 3_600_000) * 3600 - hours * 3600
   return useQuery({
     queryKey: ['aired', hours, start],
+    // The window moves on the hour, which is a new key; the last answer stays up until the next lands.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       // The window has to reach now, whatever the span.
       api.get<{ items: ScheduleItem[] }>(
         `/api/schedule${query({ start, days: Math.min(28, Math.ceil(hours / 24) + 1) })}`,
       ),
     staleTime: 5 * 60_000,
-    // New episodes appear on their own; leaving the page open should not mean
-    // looking at a list from hours ago.
+    // New episodes appear on their own, so a page left open stays current.
     refetchInterval: 5 * 60_000,
   })
 }
@@ -194,13 +193,18 @@ export interface Queued {
 }
 
 // Both are local, cheap reads: always fresh on arrival, polled fast while anything is moving.
+// Queue entries worth polling fast for: not failed, and not waiting minutes for a retry.
+function pollable(items: Queued[] = []): boolean {
+  return items.some((q) => q.state !== 'failed' && !(q.retryAt && q.retryAt - Date.now() > 60_000))
+}
+
 export function useDownloadQueue() {
   return useQuery({
     queryKey: ['download-queue'],
     queryFn: () =>
       api.get<{ items: Queued[]; waiting: Record<string, number>; paused?: boolean }>('/api/download/queue'),
     staleTime: 0,
-    refetchInterval: (q) => ((q.state.data?.items ?? []).length ? 5000 : 15_000),
+    refetchInterval: (q) => (pollable(q.state.data?.items) ? 5000 : 15_000),
   })
 }
 
@@ -208,29 +212,34 @@ export function useDownloads() {
   const qc = useQueryClient()
   const result = useQuery({
     queryKey: ['downloads'],
-    queryFn: () => api.get<{ items: Download[]; count: number }>('/api/downloads'),
+    // A finished download changes the episode lists' on-disk marks and the cache figures; noticed here, once
+    // per fetch, rather than by every component holding this hook.
+    queryFn: async () => {
+      const before = qc.getQueryData<{ items: Download[] }>(['downloads'])
+      const next = await api.get<{ items: Download[]; count: number }>('/api/downloads')
+      if (before && finishedHashes(before.items) !== finishedHashes(next.items)) {
+        void qc.invalidateQueries({ queryKey: ['episodes'] })
+        void qc.invalidateQueries({ queryKey: ['cache'] })
+      }
+      return next
+    },
     staleTime: 0,
     // A queued episode becomes a download between polls, so a busy queue counts as activity.
     refetchInterval: (q) => {
       const moving = (q.state.data?.items ?? []).some((d) => !d.paused && d.percent < 100)
-      const queued = (qc.getQueryData<{ items: Queued[] }>(['download-queue'])?.items ?? []).length > 0
+      const queued = pollable(qc.getQueryData<{ items: Queued[] }>(['download-queue'])?.items)
       return moving || queued ? 5000 : 15_000
     },
   })
-
-  // A finished download changes the episode lists' on-disk marks and the cache figures.
-  const finished = (result.data?.items ?? []).filter((d) => d.percent >= 100).map((d) => d.infoHash).sort().join()
-  const seen = useRef<string | null>(null)
-  useEffect(() => {
-    if (!result.data) return
-    if (seen.current !== null && seen.current !== finished) {
-      void qc.invalidateQueries({ queryKey: ['episodes'] })
-      void qc.invalidateQueries({ queryKey: ['cache'] })
-    }
-    seen.current = finished
-  }, [finished, result.data, qc])
   return result
 }
+
+const finishedHashes = (items: Download[]) =>
+  items
+    .filter((d) => d.percent >= 100)
+    .map((d) => d.infoHash)
+    .sort()
+    .join()
 
 /** Everything that shows download state, refreshed together after a download action. */
 export function refreshDownloads(qc: QueryClient) {
@@ -298,6 +307,26 @@ export function useSetPref() {
   })
 }
 
+// Everything that shows list state or progress: a status change, a tick or an import refreshes all of it.
+const LIST_STATE_KEYS = [
+  'library', 'continue', 'discover', 'browse', 'schedule', 'anime', 'episodes', 'franchise',
+  'recommend', 'aired', 'bookmarks', 'search', 'history',
+]
+
+export function refreshListState(qc: QueryClient) {
+  for (const key of LIST_STATE_KEYS) void qc.invalidateQueries({ queryKey: [key] })
+}
+
+/** Takes a show off the list, on the trackers first. */
+export function useRemoveStatus() {
+  const qc = useQueryClient()
+  return useMutation({
+    meta: { inline: true },
+    mutationFn: (animeId: number) => api.del(`/api/status/${animeId}`),
+    onSuccess: () => refreshListState(qc),
+  })
+}
+
 /** inline: the caller shows the error itself, so no toast. */
 export function useSetStatus({ inline = false }: { inline?: boolean } = {}) {
   const qc = useQueryClient()
@@ -305,17 +334,7 @@ export function useSetStatus({ inline = false }: { inline?: boolean } = {}) {
     meta: { inline },
     mutationFn: (v: { animeId: number; status: ListStatus; score?: number }) =>
       api.post('/api/status', v),
-    // The tag appears in several places at once, so everything showing list
-    // state has to be refreshed rather than just the card that was clicked.
-    // Episodes too: a rewatch clears every tick.
-    onSuccess: () => {
-      for (const key of [
-        'library', 'continue', 'discover', 'browse', 'schedule', 'anime',
-        'episodes', 'franchise', 'recommend', 'aired', 'bookmarks', 'search',
-      ]) {
-        void qc.invalidateQueries({ queryKey: [key] })
-      }
-    },
+    onSuccess: () => refreshListState(qc),
   })
 }
 

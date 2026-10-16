@@ -6,8 +6,7 @@ import (
 	"kuro/internal/parse"
 )
 
-// An AniList entry is one season numbered from one, so a caller that omits the
-// season must not be handed a later season's episode 1.
+// An entry is one season from one, so omitting the season never yields a later season's episode 1.
 func TestSeasonComesFromTheShowsOwnTitle(t *testing.T) {
 	for _, tc := range []struct {
 		title string
@@ -24,8 +23,7 @@ func TestSeasonComesFromTheShowsOwnTitle(t *testing.T) {
 	}
 }
 
-// The rejection this enables: episode 1 of a first season against a release
-// explicitly marked as a later season.
+// A first season's episode 1 rejects a release marked as a later season.
 func TestLaterSeasonIsRejectedForAFirstSeasonRequest(t *testing.T) {
 	rel := parse.Parse("[Judas] Frieren - S02E01.mkv")
 	if rel.Season != 2 {

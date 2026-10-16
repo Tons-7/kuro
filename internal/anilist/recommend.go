@@ -2,8 +2,7 @@ package anilist
 
 import "context"
 
-// AniList recommendations are submitted and voted on by users, so a negative
-// rating means the community disagreed with the suggestion.
+// Recommendations are user-voted, so a negative rating means the community disagreed.
 const recommendQuery = `query Recommend($id: Int!, $perPage: Int!) {
   Media(id: $id, type: ANIME) {
     genres

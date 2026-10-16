@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Finishing an episode cleanly used to empty the row: it only ever listed
-// episodes stopped part way, so a rewatch never appeared at all.
+// Finishing an episode cleanly offers the next, so the row never empties.
 func TestContinueWatchingOffersTheNextEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -187,8 +186,7 @@ func TestContinueWatchingStopsAtTheEnd(t *testing.T) {
 	}
 }
 
-// "None met your preferences" for an episode that simply is not out yet sends
-// people to change settings for nothing.
+// An episode not out yet isn't "none met your preferences", which sends people to settings.
 func TestEpisodeAiredReadsTheSchedule(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -222,8 +220,7 @@ func TestEpisodeAiredReadsTheSchedule(t *testing.T) {
 	}
 }
 
-// The next episode of a show still airing is not something to continue: the
-// card sat there all week and failed when clicked.
+// An unaired next episode isn't offered, or the card sits all week and fails when clicked.
 func TestContinueWatchingWaitsForTheEpisodeToAir(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

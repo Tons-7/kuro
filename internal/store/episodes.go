@@ -27,12 +27,10 @@ type EpisodeRow struct {
 	AirDate  *int64  `json:"airDate,omitempty"`
 	Runtime  *int    `json:"runtime,omitempty"`
 
-	// Display equals Number now that episodes carry the entry's own numbering;
-	// kept because the pages read it.
+	// Display equals Number under the entry's own numbering; kept as the pages read it.
 	Display int `json:"display"`
 
-	// Planned marks a row invented from the catalogue's episode count. Worth
-	// offering to play, but not evidence the episode exists.
+	// Planned: a row from the catalogue's count, playable but no proof the episode exists.
 	Planned bool `json:"planned,omitempty"`
 
 	Filler   string  `json:"filler,omitempty"`
@@ -40,10 +38,11 @@ type EpisodeRow struct {
 	Watched  bool    `json:"watched"`
 	Position float64 `json:"position,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
-	// Resumable says the position is worth going back to, by the same rule
-	// playback uses, so the list and the player agree.
+	// Resumable by playback's own rule, so the list and the player agree.
 	Resumable bool `json:"resumable,omitempty"`
 	OnDisk    bool `json:"onDisk"`
+	// Local: a file in a library folder plays it, so there is nothing to download.
+	Local bool `json:"local,omitempty"`
 }
 
 func (s *Store) SaveEpisodes(ctx context.Context, animeID int, eps []metadata.Episode) (int, error) {
@@ -62,8 +61,8 @@ func (s *Store) SaveEpisodes(ctx context.Context, animeID int, eps []metadata.Ep
 		                     title_en, title_ja, overview, still_url, air_date, runtime, anidb_eid)
 		VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?,?)
 		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
-		    tvdb_number=coalesce(excluded.tvdb_number, episode.tvdb_number),
-		    absolute=coalesce(excluded.absolute, episode.absolute),
+		    tvdb_number=excluded.tvdb_number,
+		    absolute=excluded.absolute,
 		    title_en=coalesce(excluded.title_en, episode.title_en),
 		    title_ja=coalesce(excluded.title_ja, episode.title_ja),
 		    overview=coalesce(excluded.overview, episode.overview),
@@ -88,8 +87,7 @@ func (s *Store) SaveEpisodes(ctx context.Context, animeID int, eps []metadata.Ep
 		keys = append(keys, fmt.Sprint(e.Number))
 	}
 
-	// The source's list is the whole list: a numbered row it no longer has was
-	// keyed under an older numbering.
+	// The source's list is whole: a numbered row it lacks was keyed under an older numbering.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM episode WHERE anime_id = ? AND is_special = 0
 		  AND ep_key NOT IN (`+placeholders(len(eps))+`)`, keys...); err != nil {
@@ -126,9 +124,7 @@ func (s *Store) SaveFillers(ctx context.Context, rows []metadata.Filler) (int, e
 	return len(rows), tx.Commit()
 }
 
-// UnclassifiedEpisodes counts the episodes of a show that no source has
-// classified. Zero means there is nothing a second source could add, which is
-// the usual answer and worth knowing before fetching anything.
+// UnclassifiedEpisodes counts a show's episodes no source classified; zero means nothing to fetch.
 func (s *Store) UnclassifiedEpisodes(ctx context.Context, animeID int) (int, error) {
 	var n int
 	err := s.r.QueryRowContext(ctx, `
@@ -141,9 +137,7 @@ func (s *Store) UnclassifiedEpisodes(ctx context.Context, animeID int) (int, err
 	return n, err
 }
 
-// SaveFillerGaps fills in episodes the dataset has no classification for,
-// leaving everything it does classify alone: it keeps the last word wherever it
-// already has a classification.
+// SaveFillerGaps classifies only episodes the dataset left unclassified; it keeps the last word.
 func (s *Store) SaveFillerGaps(ctx context.Context, malID int, rows []metadata.Filler) (int, error) {
 	if malID == 0 || len(rows) == 0 {
 		return 0, nil
@@ -182,8 +176,7 @@ func (s *Store) SaveFillerGaps(ctx context.Context, malID int, rows []metadata.F
 	return filled, tx.Commit()
 }
 
-// SaveFlags records recap markers without disturbing the classification the
-// filler dataset already provided: an episode can be both.
+// SaveFlags records recap markers beside the filler classification: an episode can be both.
 func (s *Store) SaveFlags(ctx context.Context, malID int, flags []metadata.EpisodeFlags) (int, error) {
 	if malID == 0 || len(flags) == 0 {
 		return 0, nil
@@ -292,14 +285,41 @@ func (s *Store) Episodes(ctx context.Context, animeID int) ([]EpisodeRow, error)
 
 	if len(out) == 0 {
 		planned, err := s.plannedEpisodes(ctx, animeID)
-		return s.asItself(ctx, animeID, planned), err
+		if err != nil {
+			return nil, err
+		}
+		return s.asItself(ctx, animeID, s.markLocal(ctx, animeID, planned)), nil
 	}
 
 	out = s.padToCount(ctx, animeID, out)
 	for i := range out {
 		out[i].Display = out[i].Number
 	}
-	return s.asItself(ctx, animeID, out), nil
+	return s.asItself(ctx, animeID, s.markLocal(ctx, animeID, out)), nil
+}
+
+// markLocal flags the episodes a library file holds, by the number playback looks them up by.
+func (s *Store) markLocal(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
+	rows, err := s.r.QueryContext(ctx,
+		`SELECT DISTINCT episode FROM local_file WHERE anime_id = ? AND missing = 0 AND episode IS NOT NULL`, animeID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	have := map[int]bool{}
+	for rows.Next() {
+		var n int
+		if rows.Scan(&n) == nil {
+			have[n] = true
+		}
+	}
+	if rows.Err() != nil {
+		return out
+	}
+	for i := range out {
+		out[i].Local = have[out[i].Number]
+	}
+	return out
 }
 
 var (
@@ -353,9 +373,7 @@ func (s *Store) asItself(ctx context.Context, animeID int, out []EpisodeRow) []E
 	return out
 }
 
-// padToCount fills in the episodes the catalogue says exist but nothing has
-// recorded. Only for release-derived lists, which stop at what's published; a
-// real metadata source lists unaired episodes itself.
+// padToCount adds episodes the catalogue counts but release-derived lists stop short of.
 func (s *Store) padToCount(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
 	for _, e := range out {
 		if e.TitleEN != nil || e.AirDate != nil {
@@ -371,8 +389,7 @@ func (s *Store) padToCount(ctx context.Context, animeID int, out []EpisodeRow) [
 
 	last := out[len(out)-1].Number
 	first := out[0].Number
-	// Counted from where the derived list starts, not from one: a later cour
-	// numbered 13-18 still needs `total` episodes, ending at 24.
+	// From where the list starts, not one: a cour numbered 13-18 still runs to 24.
 	for n := last + 1; n-first+1 <= total && n-last <= 5000; n++ {
 		out = append(out, EpisodeRow{
 			AnimeID: animeID,
@@ -473,10 +490,7 @@ func (s *Store) cachedEpisodes(ctx context.Context, animeID int) (map[string]str
 	return out, rows.Err()
 }
 
-// NextEpisode is the episode to play after `after`: the next number, or with
-// playback.skip_filler on for the show, the next that is neither filler nor a
-// recap. Zero when the show ends there. Without episode data the count alone
-// decides, since nothing is known to skip.
+// NextEpisode follows `after`, skipping filler and recaps under playback.skip_filler; zero at the end.
 func (s *Store) NextEpisode(ctx context.Context, animeID, after int) (int, error) {
 	prefs, err := s.Prefs(ctx, animeID)
 	if err != nil {
@@ -503,8 +517,7 @@ func (s *Store) NextEpisode(ctx context.Context, animeID, after int) (int, error
 		return 0, err
 	}
 	if next == nil {
-		// Nothing catalogued past here. Rows can lag the count on an airing
-		// show, so the first uncatalogued number is still offered.
+		// Nothing catalogued past here, but rows lag an airing show, so the next number is offered.
 		var last int
 		if err := s.r.QueryRowContext(ctx,
 			`SELECT coalesce(max(number), 0) FROM episode WHERE anime_id = ? AND is_special = 0`, animeID).Scan(&last); err != nil {
@@ -536,14 +549,12 @@ func (s *Store) onceAired(ctx context.Context, animeID, episode int) (int, error
 	return episode, nil
 }
 
-// EpisodeAlias is the other numbers a release may carry for one episode: TheTVDB's
-// count through a long season (Bleach TYBW part 4's 5 is 45 there) and the
-// absolute count over the whole show. Zero where unknown or the same number.
+// EpisodeAlias is an episode's other numbers (TheTVDB's in-season, the absolute); zero where unknown or equal.
 type EpisodeAlias struct {
 	Tvdb     int
 	Absolute int
-	// Stated: the catalogue carried a numbering; a derived one must not override it.
-	Stated bool
+	// Stated per number: the catalogue carried it, and a derived one must not override it.
+	StatedTvdb, StatedAbsolute bool
 }
 
 // Numbers lists the aliases that differ from the episode's own number.
@@ -567,7 +578,8 @@ func (s *Store) EpisodeAlias(ctx context.Context, animeID, episode int) (Episode
 		return EpisodeAlias{}, nil
 	}
 
-	out := EpisodeAlias{Stated: tvdb != nil || absolute != nil}
+	// Decided per number: a stated one is the catalogue's, a missing one may still be counted through the franchise.
+	out := EpisodeAlias{StatedTvdb: tvdb != nil, StatedAbsolute: absolute != nil}
 	if tvdb != nil && *tvdb != episode {
 		out.Tvdb = *tvdb
 	}
@@ -596,8 +608,7 @@ func (s *Store) MalID(ctx context.Context, animeID int) (int, error) {
 	return *mal, nil
 }
 
-// Stills and titles appear days after broadcast, so an incomplete list is
-// refetched on a timer; a finished and complete one never is.
+// Stills and titles lag broadcast, so an incomplete list is refetched on a timer; a complete one never.
 const episodeCoverageQuery = `
 SELECT (SELECT count(*) FROM episode WHERE anime_id = ?),
        (SELECT count(*) FROM episode WHERE anime_id = ?
@@ -683,9 +694,7 @@ func (s *Store) SetEpisodeStills(ctx context.Context, animeID int, stills map[in
 	return n, tx.Commit()
 }
 
-// SaveDerivedEpisodes records episodes evidenced by releases rather than by a
-// metadata source. They carry no titles, so a later real fetch fills them in
-// without conflict.
+// SaveDerivedEpisodes records episodes known from releases; untitled, so a real fetch fills them later.
 func (s *Store) SaveDerivedEpisodes(ctx context.Context, animeID int, numbers []int) (int, error) {
 	if err := s.MarkSource(ctx, derivedKey(animeID), len(numbers)); err != nil {
 		return 0, err
@@ -793,8 +802,7 @@ func listingKey(animeID int) string {
 	return "listing:" + strconv.Itoa(animeID)
 }
 
-// EpisodesDerived reports that releases have already been searched for this
-// show today. The search costs seconds against every indexer.
+// EpisodesDerived: releases were searched for this show today, a costly search.
 func (s *Store) EpisodesDerived(ctx context.Context, animeID int) bool {
 	at, err := s.SourceRefreshedAt(ctx, derivedKey(animeID))
 	return err == nil && !at.IsZero() && time.Since(at) < 24*time.Hour
@@ -812,12 +820,10 @@ func episodesKey(animeID int) string {
 	return "episodes:" + strconv.Itoa(animeID)
 }
 
-// flagsRetry is how long a provisional answer stands: an airing show, or one
-// the source did not list yet, gains flagged episodes later.
+// flagsRetry is how long a provisional answer stands, as airing or unlisted shows gain flags later.
 const flagsRetry = 7 * 24 * time.Hour
 
-// FlagsFetched reports a recorded attempt: a show without filler stores no
-// rows, so their absence can't mean "not fetched".
+// FlagsFetched reports a recorded attempt, since a show without filler stores no rows.
 func (s *Store) FlagsFetched(ctx context.Context, malID int) bool {
 	if malID == 0 {
 		return true

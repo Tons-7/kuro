@@ -17,8 +17,7 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
     if (!el) return
     const max = el.scrollWidth - el.clientWidth
     const next = {
-      // A pixel of slack: sub-pixel widths otherwise report a rail that fits as
-      // scrollable, and every short row grew arrows.
+      // A pixel of slack, or sub-pixel widths give short rows arrows.
       scrollable: max > 1,
       atStart: el.scrollLeft <= 1,
       atEnd: el.scrollLeft >= max - 1,
@@ -39,8 +38,7 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
 
     const resize = new ResizeObserver(measure)
     resize.observe(el)
-    // Cards replacing skeletons change scrollWidth without touching the
-    // track's own box, so a rail kept arrows it no longer needed.
+    // Cards replacing skeletons change scrollWidth but not the track's box, so this watches both.
     const swap = new MutationObserver(measure)
     swap.observe(el, { childList: true, subtree: true })
 
@@ -54,10 +52,7 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
   return { ...state, measure }
 }
 
-/**
- * Horizontal strip of cards. The arrows only appear on pointer devices; touch
- * users swipe, and a floating button over the art would just be in the way.
- */
+/** A horizontal strip of cards; arrows on pointer devices only, as touch swipes. */
 export function Rail({
   title,
   more,
@@ -82,8 +77,7 @@ export function Rail({
   return (
     <section className="group/rail">
       <div className="mb-3 flex items-center justify-between gap-4">
-        {/* Big enough to read from across the row it labels. Uppercase grey at
-            11px is legible only if you go looking for it. */}
+        {/* Big enough to read across the row it labels. */}
         <h2 className="section-title">{title}</h2>
         <div className="flex items-center gap-2">
           {more && (
@@ -105,8 +99,7 @@ export function Rail({
             </Link>
           )}
           {action}
-          {/* Only where there is something to scroll to: a row of six films
-              that already fits grew arrows that did nothing. */}
+          {/* Only where there's something to scroll to. */}
           {scrollable && (
             <div className="hidden gap-1 md:flex">
               <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
@@ -123,8 +116,7 @@ export function Rail({
         {children}
       </div>
 
-      {/* How far along the row you are, and that there is more of it. The thumb
-          is the share on screen, so a long row reads as a short thumb. */}
+      {/* Where you are in the row; the thumb is the share on screen. */}
       {scrollable && (
         <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-850" aria-hidden>
           <div

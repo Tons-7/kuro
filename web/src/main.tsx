@@ -7,8 +7,7 @@ import { App } from './App'
 import { toast, Toaster } from './components/Toaster'
 
 const client = new QueryClient({
-  // A failed action says so. Those that show the error next to themselves
-  // opt out with meta.inline, so it is not said twice.
+  // A failed action says so, unless meta.inline shows it beside the control instead.
   mutationCache: new MutationCache({
     onError: (error, _vars, _ctx, mutation) => {
       if (mutation.meta?.inline) return

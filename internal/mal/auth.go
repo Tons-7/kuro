@@ -12,13 +12,10 @@ import (
 	"time"
 )
 
-// refreshWindow renews slightly early so a request that takes a while cannot
-// start with a valid token and finish with an expired one.
+// refreshWindow renews early, so a slow request can't start valid and finish expired.
 const refreshWindow = 5 * time.Minute
 
-// Verifier is the PKCE secret. MAL supports only the plain challenge method,
-// so the challenge is the verifier itself and it must never leave the machine
-// except in the token exchange.
+// Verifier is the PKCE secret; MAL takes only the plain method, so it leaves only in the token exchange.
 func Verifier() string {
 	b := make([]byte, 64)
 	rand.Read(b)
@@ -61,7 +58,7 @@ func (c *Client) Exchange(ctx context.Context, code, verifier, redirect string) 
 	if redirect != "" {
 		form.Set("redirect_uri", redirect)
 	}
-	return c.token1(ctx, form)
+	return c.token1(ctx, form, "")
 }
 
 // Refresh trades the refresh token for a new pair. MAL revokes the old access
@@ -81,12 +78,14 @@ func (c *Client) Refresh(ctx context.Context) (Token, error) {
 	if secret != "" {
 		form.Set("client_secret", secret)
 	}
-	return c.token1(ctx, form)
+	return c.token1(ctx, form, current.Refresh)
 }
 
-// token1 posts to the OAuth endpoint, which is not the API host and takes no
-// bearer token, so it bypasses do().
-func (c *Client) token1(ctx context.Context, form url.Values) (Token, error) {
+// errSuperseded: the account was disconnected or replaced while a refresh was in flight.
+var errSuperseded = errors.New("mal: token changed during refresh")
+
+// token1 posts to the OAuth endpoint, outside do(): no API host, no bearer. spent is the refresh token traded.
+func (c *Client) token1(ctx context.Context, form url.Values, spent string) (Token, error) {
 	if !c.Configured() {
 		return Token{}, errors.New("mal: client_id not configured")
 	}
@@ -125,18 +124,32 @@ func (c *Client) token1(ctx context.Context, form url.Values) (Token, error) {
 	}
 	// A refresh response without a new refresh token leaves the old one valid.
 	if token.Refresh == "" {
-		token.Refresh = c.Token().Refresh
+		token.Refresh = spent
 	}
 
-	c.SetToken(token)
+	// A logout or a new login since the request went out wins: storing this would reconnect the old account.
+	c.mu.Lock()
+	if spent != "" && c.token.Refresh != spent {
+		c.mu.Unlock()
+		return Token{}, errSuperseded
+	}
+	c.token = token
+	c.mu.Unlock()
 	if c.onToken != nil {
 		c.onToken(token)
 	}
 	return token, nil
 }
 
-// ensureToken renews before the hour is up. Without this every call more than
-// an hour after connecting would 401.
+// Forget drops the token and runs clear with no refresh in flight, so none can write the token back.
+func (c *Client) Forget(clear func() error) error {
+	c.refreshing.Lock()
+	defer c.refreshing.Unlock()
+	c.SetToken(Token{})
+	return clear()
+}
+
+// ensureToken renews before the hour is up, or every later call would 401.
 func (c *Client) ensureToken(ctx context.Context) error {
 	due := func() bool {
 		t := c.Token()
@@ -153,7 +166,9 @@ func (c *Client) ensureToken(ctx context.Context) error {
 		return nil
 	}
 
-	if _, err := c.Refresh(ctx); err != nil {
+	if _, err := c.Refresh(ctx); errors.Is(err, errSuperseded) {
+		return nil // the request goes out with whatever replaced it
+	} else if err != nil {
 		c.log.Warn("mal token refresh failed", "err", err)
 		return err
 	}

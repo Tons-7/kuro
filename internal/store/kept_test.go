@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// A download someone asked for is not cache: it costs the budget nothing, and
-// the downloads list says which tier a row is in.
+// A requested download costs the budget nothing, and the list says each row's tier.
 func TestCacheUsageLeavesKeptDownloadsOutOfTheBudget(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -65,8 +64,7 @@ func TestCacheUsageLeavesKeptDownloadsOutOfTheBudget(t *testing.T) {
 	}
 }
 
-// A kept episode fetched again under another release stays kept, and the old
-// release is reported so the engine can drop it.
+// A kept episode refetched from another release stays kept; the old one is reported for dropping.
 func TestRecordTorrentCarriesKeepToTheReplacement(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

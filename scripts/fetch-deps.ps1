@@ -37,8 +37,7 @@ $ProgressPreference = 'SilentlyContinue'   # Write-Progress makes downloads seve
 if (-not $BinDir) { $BinDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'bin' }
 $manifestPath = Join-Path $BinDir 'versions.json'
 
-# TLS 1.2 is not the default in Windows PowerShell 5.1 and every source below
-# refuses anything older.
+# TLS 1.2 isn't Windows PowerShell 5.1's default, and every source below refuses anything older.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $github = @{ 'User-Agent' = 'kuro-fetch-deps'; 'Accept' = 'application/vnd.github+json' }
@@ -54,14 +53,29 @@ function Get-Manifest {
 }
 
 function Save-Manifest($manifest) {
-    $manifest | ConvertTo-Json -Depth 4 | Set-Content $manifestPath -Encoding utf8
+    # No BOM: Windows PowerShell's utf8 puts one first, and the Go side could not read the file at all.
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 4))
 }
 
-function Get-Download($url, $destination) {
+# Checked against the checksum the source publishes, as the in-app installer checks the same downloads.
+function Get-Download($url, $destination, $digest) {
     Write-Note "downloading $url"
     Invoke-WebRequest -Uri $url -OutFile $destination -UseBasicParsing -TimeoutSec 900
     $size = (Get-Item $destination).Length / 1MB
     Write-Note ("received {0:N1} MB" -f $size)
+    if (-not $digest) {
+        Write-Warning "no checksum published for $url; installing unverified"
+        return
+    }
+    $got = (Get-FileHash $destination -Algorithm SHA256).Hash
+    if ($got -ne $digest.ToUpper()) { throw "checksum mismatch for $url, refusing to install" }
+    Write-Note 'checksum ok'
+}
+
+# The sha256 GitHub records for an asset, or nothing for releases older than that.
+function Get-AssetDigest($asset) {
+    if ($asset.digest -and $asset.digest -match '^sha256:([0-9a-fA-F]{64})$') { return $Matches[1] }
+    return $null
 }
 
 # Windows ships bsdtar, which reads 7-Zip as well as zip. Requiring a separate
@@ -80,8 +94,7 @@ function Expand-Download($archive, $destination) {
     }
 }
 
-# Copy-Item on a running executable fails, which is exactly what happens when
-# kuro is open. Saying so beats an access-denied trace.
+# Copy-Item fails on a running executable, as when kuro is open; saying so beats an access-denied trace.
 function Install-Binary($source, $name) {
     $target = Join-Path $BinDir $name
     try {
@@ -104,10 +117,18 @@ function Resolve-Ffmpeg {
     $raw = (Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/release-version' -UseBasicParsing -TimeoutSec 60).Content
     if ($raw -is [byte[]]) { $raw = [Text.Encoding]::UTF8.GetString($raw) }
 
+    $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z'
+    $digest = $null
+    try {
+        $sum = (Invoke-WebRequest "$url.sha256" -UseBasicParsing -TimeoutSec 60).Content
+        if ($sum -is [byte[]]) { $sum = [Text.Encoding]::UTF8.GetString($sum) }
+        if ($sum -match '([0-9a-fA-F]{64})') { $digest = $Matches[1] }
+    } catch { }
     return [pscustomobject]@{
         Version = $raw.Trim()
-        Url     = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z'
+        Url     = $url
         Archive = $true
+        Digest  = $digest
     }
 }
 
@@ -124,6 +145,7 @@ function Resolve-Mpv {
         Version = $asset.name -replace '^mpv-x86_64-' -replace '\.7z$'
         Url     = $asset.browser_download_url
         Archive = $true
+        Digest  = Get-AssetDigest $asset
     }
 }
 
@@ -133,10 +155,14 @@ function Resolve-Anime4K {
     $asset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
     if (-not $asset) { throw "no zip in Anime4K release $($release.tag_name)" }
 
+    # Older than GitHub's digests: pinned, the release has not changed since 2021.
+    $digest = Get-AssetDigest $asset
+    if (-not $digest -and $release.tag_name -eq 'v4.0.1') { $digest = '139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fea62d7ed7' }
     return [pscustomobject]@{
         Version = $release.tag_name.TrimStart('v')
         Url     = $asset.browser_download_url
         Archive = $true
+        Digest  = $digest
     }
 }
 
@@ -177,11 +203,11 @@ try {
 
         if (-not $resolved.Archive) {
             $file = Join-Path $staging "$name.exe"
-            Get-Download $resolved.Url $file
+            Get-Download $resolved.Url $file $resolved.Digest
             Install-Binary $file $spec.Files[0]
         } else {
             $archive = Join-Path $staging ([IO.Path]::GetFileName(([Uri]$resolved.Url).AbsolutePath))
-            Get-Download $resolved.Url $archive
+            Get-Download $resolved.Url $archive $resolved.Digest
 
             $unpacked = Join-Path $staging "$name-unpacked"
             Expand-Download $archive $unpacked

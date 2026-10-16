@@ -20,12 +20,12 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"golang.org/x/time/rate"
 
 	"kuro/internal/torrent"
 )
 
-// pack is three episodes whose sizes are not piece multiples, so episode 2
-// starts mid-piece, as in a real season pack.
+// pack is three episodes off piece boundaries, so episode 2 starts mid-piece as in a real pack.
 func makePack(t *testing.T, dir string) (metainfo.MetaInfo, map[string][]byte) {
 	t.Helper()
 	root := filepath.Join(dir, "Show Pack")
@@ -69,7 +69,7 @@ func quietConfig(cfg *atorrent.ClientConfig) {
 }
 
 // seeder serves the pack from dir.
-func seeder(t *testing.T, dir string, mi metainfo.MetaInfo) *atorrent.Client {
+func seeder(t *testing.T, dir string, mi metainfo.MetaInfo, tweaks ...func(*atorrent.ClientConfig)) *atorrent.Client {
 	t.Helper()
 	var cl *atorrent.Client
 	var err error
@@ -80,6 +80,9 @@ func seeder(t *testing.T, dir string, mi metainfo.MetaInfo) *atorrent.Client {
 		cfg.DataDir = dir
 		cfg.DefaultStorage = files{base: dir, pieces: storage.NewMapPieceCompletion()}
 		cfg.Seed = true
+		for _, tweak := range tweaks {
+			tweak(cfg)
+		}
 		if cl, err = atorrent.NewClient(cfg); err == nil {
 			break
 		}
@@ -109,17 +112,17 @@ type fixture struct {
 	peer    *net.TCPAddr
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t *testing.T, seed ...func(*atorrent.ClientConfig)) *fixture {
 	t.Helper()
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
-	s := seeder(t, seedDir, mi)
+	s := seeder(t, seedDir, mi, seed...)
 	f := &fixture{
 		content: content,
 		cache:   t.TempDir(),
 		session: t.TempDir(),
 		peer:    &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.LocalPort()},
-		magnet:  mi.Magnet(nil, nil).String(),
+		magnet:  magnetOf(t, &mi),
 	}
 	f.start(t)
 	return f
@@ -258,8 +261,11 @@ func TestNextEpisodeOfHeldPack(t *testing.T) {
 	}
 }
 
+// slowSeed serves about 64 KiB/s: a local seeder otherwise finishes the episode before the pause lands.
+func slowSeed(cfg *atorrent.ClientConfig) { cfg.UploadRateLimiter = rate.NewLimiter(64<<10, 16<<10) }
+
 func TestPauseStartAndRemove(t *testing.T) {
-	f := newFixture(t)
+	f := newFixture(t, slowSeed)
 	c := ctx(t)
 	in, _ := f.client.Inspect(c, f.magnet)
 	added, err := f.client.Add(c, f.magnet, in.Details.Files[2])
@@ -342,17 +348,14 @@ func TestRestartKeepsTheSession(t *testing.T) {
 	}
 }
 
-// rqbit's downloads carry over: its session is read, the data on disk is
-// hashed, and nothing is fetched again. A session rqbit keeps outside the
-// cache is found when kuro's own is missing, and left alone.
+// rqbit's downloads carry over without a refetch; a session outside the cache is read and left alone.
 func TestCarriesOverRqbitDownloads(t *testing.T) {
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
 	cache, legacy := t.TempDir(), t.TempDir()
 	missing := filepath.Join(cache, "rqbit-session")
 
-	// rqbit had episode 1 downloaded into the cache, with the start of episode 2
-	// that its last piece spills into, as rqbit writes it.
+	// rqbit's episode 1 in the cache, with the start of episode 2 its last piece spills into.
 	pack := filepath.Join(cache, "Show Pack")
 	os.MkdirAll(pack, 0o755)
 	os.WriteFile(filepath.Join(pack, "Show - 01.mkv"), content["Show - 01.mkv"], 0o644)
@@ -435,7 +438,7 @@ func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
 	f := &fixture{
 		content: content, cache: t.TempDir(), session: t.TempDir(),
 		peer:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.LocalPort()},
-		magnet: mi.Magnet(nil, nil).String(),
+		magnet: magnetOf(t, &mi),
 	}
 	f.start(t)
 	c := ctx(t)
@@ -452,7 +455,7 @@ func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
 	}
 
 	read := make(chan error, 1)
-	reqCtx, cancel := context.WithCancel(context.Background())
+	reqCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
 		req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, f.client.StreamURL(added.ID, 2), nil)
@@ -536,7 +539,7 @@ func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 	f := &fixture{
 		content: content, cache: t.TempDir(), session: t.TempDir(),
 		peer:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port},
-		magnet: mi.Magnet(nil, nil).String(),
+		magnet: magnetOf(t, &mi),
 	}
 	f.start(t)
 	c := ctx(t)
@@ -563,4 +566,14 @@ func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 		st, _ := f.client.Stats(c, added.ID)
 		t.Fatalf("the download did not resume once its peer was back: %v (state %s, peers %d)", err, st.State, st.Peers())
 	}
+}
+
+// magnetOf is a torrent's magnet link, through MagnetV2 (Magnet is deprecated).
+func magnetOf(t *testing.T, mi *metainfo.MetaInfo) string {
+	t.Helper()
+	m, err := mi.MagnetV2()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.String()
 }

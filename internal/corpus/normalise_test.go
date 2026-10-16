@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// Normalise handles everything that is unambiguously the same title written
-// differently: case, punctuation, apostrophes, spacing.
+// Normalise folds what is surely the same title: case, punctuation, apostrophes, spacing.
 func TestNormaliseEquivalentSpellings(t *testing.T) {
 	groups := [][]string{
 		{"Jujutsu Kaisen", "JUJUTSU KAISEN", "jujutsu  kaisen"},
@@ -75,8 +74,7 @@ func TestNormaliseRomanNumerals(t *testing.T) {
 }
 
 func TestNormaliseKeepsDistinctTitlesDistinct(t *testing.T) {
-	// Over-normalising is worse than under-normalising: collapsing two real
-	// shows into one form makes the wrong pick unavoidable.
+	// Over-normalising is worse: two shows collapsed into one form make the wrong pick unavoidable.
 	distinct := [][2]string{
 		{"Steins;Gate", "Steins;Gate 0"},
 		{"Show Season 1", "Show Season 2"},
@@ -139,9 +137,7 @@ func TestNormaliseIsConcurrencySafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 200 {
 				for i, s := range titles {
 					if got := Normalise(s); got != want[i] {
@@ -150,7 +146,7 @@ func TestNormaliseIsConcurrencySafe(t *testing.T) {
 					}
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

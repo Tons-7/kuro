@@ -23,11 +23,13 @@ export function relativeTime(unix: number): string {
   const hour = 60 * minute
   const day = 24 * hour
 
+  // Rounded to whole minutes once, so 59.6 minutes reads "1h", not "60m", and never "2h 60m".
+  const mins = Math.max(1, Math.round(abs / minute))
   let text: string
-  if (abs < hour) text = `${Math.max(1, Math.round(abs / minute))}m`
+  if (mins < 60) text = `${mins}m`
   else if (abs < day) {
-    const h = Math.floor(abs / hour)
-    const m = Math.round((abs % hour) / minute)
+    const h = Math.floor(mins / 60)
+    const m = mins % 60
     text = m > 0 ? `${h}h ${m}m` : `${h}h`
   } else text = `${Math.round(abs / day)}d`
 
@@ -67,10 +69,7 @@ export function tint(color?: string | null, alpha = 1): string | undefined {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
 }
 
-/**
- * The show's colour, lifted until it reads as text on the dark background: a
- * dark red cover colour used as-is disappeared.
- */
+/** The show's colour, lifted until it reads as text on the dark background. */
 export function readableTint(color?: string | null): string | undefined {
   if (!color || !/^#[0-9a-f]{6}$/i.test(color)) return undefined
   const n = parseInt(color.slice(1), 16)
@@ -109,20 +108,14 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
 
-// ffmpeg reports ISO 639-2/B, which Intl does not accept for the languages
-// where the bibliographic and terminological codes differ — "ger" rather than
-// "deu". Only the ones that actually turn up on anime releases are listed.
+// ffmpeg's ISO 639-2/B codes Intl rejects ("ger", not "deu"), for languages seen on releases.
 const BIBLIOGRAPHIC: Record<string, string> = {
   ger: 'de', fre: 'fr', dut: 'nl', gre: 'el', chi: 'zh', cze: 'cs',
   ice: 'is', mac: 'mk', mao: 'mi', may: 'ms', per: 'fa', rum: 'ro',
   slo: 'sk', tib: 'bo', wel: 'cy', arm: 'hy', baq: 'eu', bur: 'my', geo: 'ka',
 }
 
-/**
- * The language a subtitle track is in, spelled out. Release groups label every
- * track with their own name — Erai-raws calls all of them "CR" — so a picker
- * showing titles offers several identical rows and no way to choose.
- */
+/** A subtitle track's language spelled out, since groups title every track alike (Erai-raws: "CR"). */
 export function languageName(code?: string | null): string | undefined {
   const raw = code?.trim().toLowerCase()
   if (!raw || raw === 'und') return undefined

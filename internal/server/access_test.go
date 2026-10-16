@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/xml"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,9 +28,7 @@ func (h *harness) from(t *testing.T, addr, target string, header http.Header) *h
 	// What a real client sends; the guard only exempts loopback by name too.
 	req.Host = "127.0.0.1:4321"
 	req.RemoteAddr = addr
-	for k, v := range header {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, header)
 
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)
@@ -101,8 +100,7 @@ func TestRemoteAcceptsEveryTokenChannel(t *testing.T) {
 	}
 }
 
-// A media element cannot set a header on the segment requests that follow, so
-// the query parameter has to leave a cookie behind.
+// A media element can't set headers on segment requests, so the query token leaves a cookie.
 func TestQueryTokenSetsCookie(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -175,8 +173,7 @@ func TestStreamOpenRejectsForeignSources(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.playback = library.NewPlayback(h.store, nil, torrent.NewClient("http://"+engineAddr), nil, t.TempDir(),
 		slog.New(slog.DiscardHandler))
-	// Present so the handler reaches the source check rather than reporting no
-	// transcoder; nothing here ever runs ffmpeg.
+	// Present so the handler reaches the source check; nothing here runs ffmpeg.
 	h.server.streams = transcode.NewManager("ffmpeg", "ffprobe", t.TempDir(), "libx264", slog.New(slog.DiscardHandler))
 
 	for _, source := range []string{
@@ -247,8 +244,7 @@ func TestCrossSitePostsAreRefused(t *testing.T) {
 	}
 }
 
-// A paired phone must not point the library at the host's drives or move its
-// database, nor link the host to its own tracker account.
+// A paired phone can't point the library at host drives, move the database, or link trackers.
 func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -368,8 +364,7 @@ func TestSecretClassification(t *testing.T) {
 		"anilist.token", "access.token", "anilist.client.secret", "anilist.state",
 		"anilist.client_secret", "mal.client_secret", "mal.refresh.token",
 	}
-	// A client id is not a credential: it is shown so it can be checked against
-	// the developer page that issued it.
+	// A client id isn't a credential; shown to check against the developer page.
 	plain := []string{
 		"cache.budget_bytes", "playback.player", "anilist.user_name", "notify.enabled",
 		"anilist.client_id", "mal.client_id",

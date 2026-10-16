@@ -356,8 +356,7 @@ func TestCallbackStoresTokenAndViewer(t *testing.T) {
 	ctx := context.Background()
 	h.store.SetSetting(ctx, "anilist.state", "expected")
 
-	// The callback redirects back into the app rather than leaving the user on
-	// a page telling them to close the tab.
+	// The callback redirects into the app, not to a "close this tab" page.
 	res, _ := h.do(t, "GET", "/callback?code=abc&state=expected")
 	if res.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want a redirect", res.StatusCode)

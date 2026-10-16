@@ -30,6 +30,7 @@ export function ReleasedCard({ item, tags }: { item: ScheduleItem; tags?: boolea
       >
         <Link
           to={watch}
+          aria-label={`Play episode ${item.episode} of ${item.title}`}
           className="block rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-400"
         >
           <div className="relative aspect-video overflow-hidden rounded-card bg-base-850 shadow-card ring-1 ring-white/[0.06] transition-[transform,box-shadow] duration-300 ease-out-quint group-hover/released:-translate-y-0.5 group-hover/released:shadow-lift">
@@ -60,7 +61,7 @@ export function ReleasedCard({ item, tags }: { item: ScheduleItem; tags?: boolea
               <span className="font-medium text-white">Ep {item.episode}</span> · {relativeTime(item.airingAt)}
             </div>
 
-            <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/released:opacity-100">
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/released:opacity-100 [@media(hover:none)]:opacity-100">
               <span className="grid size-10 place-items-center rounded-full bg-base-950/70 ring-1 ring-white/20 backdrop-blur-sm">
                 <PlayIcon />
               </span>

@@ -1,7 +1,5 @@
-// Browser check of the Settings additions: the library backup (export links,
-// import through the file chooser), the components section, and the keep
-// control on Downloads. Run through run-player-check.mjs with
-// CHECK=backup-check.mjs.
+// Library backup (export, import), the components section, and Downloads' keep control.
+// Run through run-player-check.mjs with CHECK=backup-check.mjs.
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'

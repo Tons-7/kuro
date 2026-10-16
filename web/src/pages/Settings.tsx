@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken } from '../lib/api'
 import { bytes, cx, relativeTime } from '../lib/format'
 import {
+  refreshListState,
   useAccessDevices,
   useDecideDevice,
   usePrefs,
@@ -14,32 +15,46 @@ import {
 } from '../lib/queries'
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../components/Anime4KDialog'
 import { ComponentState } from '../components/ComponentState'
+import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../components/NotificationPanel'
-import { buttonClass, ControlLabel, ProgressBar, Segmented, Select, Skeleton, Spinner } from '../components/ui'
+import {
+  Button,
+  buttonClass,
+  ConfirmInline,
+  ControlLabel,
+  ErrorState,
+  inputClass,
+  PageHeader,
+  ProgressBar,
+  SaveHint,
+  Segmented,
+  Select,
+  Skeleton,
+  Spinner,
+  TextInput,
+} from '../components/ui'
 
 const TABS = ['Playback', 'Quality', 'Trackers', 'Library', 'Notifications', 'Access', 'Jobs', 'About'] as const
 type Tab = (typeof TABS)[number]
 
 export function Settings() {
-  // The OAuth callback lands here rather than on a dead "you may close this
-  // tab" page, so it opens on the tab that shows the result. ?tab= is how an
-  // update notification lands on About.
+  // The OAuth callback and update notifications land here on their tab (?tab=).
   const [params, setParams] = useSearchParams()
   const connected = params.get('connected')
   const wanted = params.get('tab') as Tab | null
-  const [tab, setTab] = useState<Tab>(
-    connected ? 'Trackers' : wanted && TABS.includes(wanted) ? wanted : 'Playback',
-  )
-  // A link to ?tab= (the update notification) while already here must switch.
-  useEffect(() => {
-    if (wanted && TABS.includes(wanted)) setTab(wanted)
-  }, [wanted])
+  // The URL holds the tab: a reload keeps it, and a link to another one always switches.
+  const tab: Tab = wanted && TABS.includes(wanted) ? wanted : connected ? 'Trackers' : 'Playback'
+  const setTab = (t: Tab) => {
+    const next = new URLSearchParams(params)
+    next.set('tab', t)
+    setParams(next, { replace: true })
+  }
 
   return (
     // Centred as one block: the slack becomes margins, not a gulf between every label and its control.
     <div className="mx-auto max-w-[59rem] space-y-5">
-      <h1 className="text-xl font-semibold text-white">Settings</h1>
+      <PageHeader title="Settings" />
 
       {connected && (
         <div className="animate-fade-in flex items-center justify-between gap-4 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2">
@@ -47,23 +62,23 @@ export function Settings() {
             Connected to {connected === 'mal' ? 'MyAnimeList' : 'AniList'}.
           </p>
           <button
-            onClick={() => setParams({}, { replace: true })}
+            onClick={() => setParams({ tab }, { replace: true })}
             aria-label="Dismiss"
-            className="rounded px-2 text-accent-300/70 hover:text-accent-100"
+            className="tap relative rounded px-2 text-accent-300/70 hover:text-accent-100"
           >
             ✕
           </button>
         </div>
       )}
 
-      {/* Beside the settings on a desktop, above them on a phone. */}
-      <div className="lg:hidden">
-        <Segmented
-          options={TABS.map((name) => ({ value: name, label: name }))}
-          value={tab}
-          onChange={setTab}
-        />
-      </div>
+      {/* Beside the settings on a desktop; on a phone a menu, as a strip of eight hid the last ones off-screen. */}
+      <Select value={tab} onChange={(v) => setTab(v as Tab)} aria-label="Settings section" className="lg:hidden">
+        {TABS.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </Select>
 
       <div className="flex gap-6">
         <SideTabs tab={tab} onChange={setTab} />
@@ -118,8 +133,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   )
 }
 
-// The row's label names its control for screen readers; the switches and
-// selects themselves have no visible text.
+// The row's label names its control for screen readers, as the controls show no text.
 const RowLabel = ControlLabel
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -130,8 +144,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
         <p className="text-sm text-base-200">{label}</p>
         {hint && <p className="text-xs text-base-500">{hint}</p>}
       </div>
-      {/* One track so the right edge does not zigzag; not on a phone, where it
-          would come out of the label. */}
+      {/* One track so the right edge doesn't zigzag (not on a phone, where it leaves the label). */}
       <div className="flex max-w-full justify-end sm:min-w-36">
         <RowLabel.Provider value={label}>{children}</RowLabel.Provider>
       </div>
@@ -362,10 +375,7 @@ const LANGUAGES = [
   { code: 'th', name: 'Thai' },
 ]
 
-/**
- * Which subtitles are worth having. The order matters twice over: it decides
- * which release is picked, and which track plays inside it.
- */
+/** Subtitle languages in order, which picks both the release and the track inside it. */
 function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
   const chosen: string[] = (() => {
     try {
@@ -383,7 +393,7 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Section
       title="Subtitle languages"
-      hint="Best first. A release in none of them is ranked lower, never refused — for some shows it is the only one there is."
+      hint="Best first. A release in none of them is ranked lower, never refused: for some shows it is the only one there is."
     >
       <div className="flex flex-wrap gap-1.5 px-3 py-2">
         {LANGUAGES.map((lang) => {
@@ -418,6 +428,8 @@ interface OrphanResult {
   files: { name: string; bytes: number }[]
   removed: number
   freedBytes: number
+  /** Shown but kept: claimed by a download since the list was made. */
+  kept?: string[]
 }
 
 function QualityTab() {
@@ -435,7 +447,8 @@ function QualityTab() {
   })
   const orphans = useMutation({
     meta: { inline: true },
-    mutationFn: () => api.post<OrphanResult>('/api/cache/orphans'),
+    // Exactly the names shown: anything that turned up or got claimed since stays.
+    mutationFn: (names: string[]) => api.post<OrphanResult>('/api/cache/orphans', { names }),
     onSuccess: () => {
       preview.reset()
       qc.invalidateQueries({ queryKey: ['cache'] })
@@ -499,7 +512,7 @@ function QualityTab() {
           hint={
             cache.data
               ? `${bytes(Number(cache.data.bytes ?? 0))} cached · ${bytes(Number(cache.data.keptBytes ?? 0))} downloaded`
-              : '—'
+              : 'Loading…'
           }
         >
           <button
@@ -514,29 +527,24 @@ function QualityTab() {
           label="Orphaned files"
           hint={
             orphans.data
-              ? `Removed ${orphans.data.removed} · freed ${bytes(orphans.data.freedBytes)}`
+              ? `Removed ${orphans.data.removed} · freed ${bytes(orphans.data.freedBytes)}${
+                  orphans.data.kept?.length ? ` · kept ${orphans.data.kept.length} now in use` : ''
+                }`
               : found
                 ? found.removed === 0
                   ? 'Nothing orphaned.'
                   : `${found.removed} found · ${bytes(found.freedBytes)}`
-                : 'Folders in the cache the torrent engine no longer knows about — left by a crash or a delete outside kuro. They escape the budget until removed.'
+                : 'Folders in the cache the torrent engine no longer knows about, left by a crash or a delete outside kuro. They escape the budget until removed.'
           }
         >
           {found && found.removed > 0 ? (
             <div className="flex gap-2">
-              <button
-                onClick={() => orphans.mutate()}
-                disabled={orphans.isPending}
-                className={buttonClass('danger')}
-              >
-                {orphans.isPending ? 'Deleting…' : `Delete ${found.removed}`}
-              </button>
-              <button
-                onClick={() => preview.reset()}
-                className={buttonClass()}
-              >
-                Cancel
-              </button>
+              <ConfirmInline
+                label={orphans.isPending ? 'Deleting…' : `Delete ${found.removed}`}
+                onConfirm={() => orphans.mutate(found.files.map((f) => f.name))}
+                onCancel={() => preview.reset()}
+                pending={orphans.isPending}
+              />
             </div>
           ) : (
             <button
@@ -655,22 +663,25 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
   const [text, setText] = useState(stored.join(', '))
   useEffect(() => setText(stored.join(', ')), [f.value('release.prefer_groups')]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Its own mutation, so the Saved hint is this field's and not every switch's on the page.
+  const setGroups = useSetPref()
   const save = () => {
     const groups = text.split(',').map((g) => g.trim()).filter(Boolean)
-    if (groups.join(',') !== stored.join(',')) f.set('release.prefer_groups', JSON.stringify(groups))
+    if (groups.join(',') !== stored.join(',')) setGroups.mutate({ key: 'release.prefer_groups', value: JSON.stringify(groups) })
   }
 
   return (
     <Row label="Preferred release groups" hint="Comma separated, e.g. SubsPlease, Erai-raws. A match ranks the release higher.">
-      <input
+      <TextInput
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         placeholder="SubsPlease, Erai-raws"
         aria-label="Preferred release groups"
-        className="w-56 rounded-md border border-base-800 bg-base-900 px-2.5 py-1.5 text-sm text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none"
+        className="w-56"
       />
+      <SaveHint state={setGroups} />
     </Row>
   )
 }
@@ -694,21 +705,26 @@ function TrackersTab() {
     queryKey: ['trackers'],
     queryFn: () => api.get<{ trackers: Tracker[] }>('/api/trackers'),
   })
+  // Signing in or out and the keys are the host's; a paired device only reads the state.
+  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const host = access.data?.host !== false
 
   return (
     <div className="space-y-4">
       {trackers.isPending ? (
         <Skeleton className="h-64 w-full" />
+      ) : trackers.isError && !trackers.data ? (
+        <ErrorState error={trackers.error} retry={() => void trackers.refetch()} />
       ) : (
         trackers.data?.trackers.map((tracker) => (
-          <TrackerCard key={tracker.provider} tracker={tracker} />
+          <TrackerCard key={tracker.provider} tracker={tracker} host={host} />
         ))
       )}
     </div>
   )
 }
 
-function TrackerCard({ tracker }: { tracker: Tracker }) {
+function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
   const qc = useQueryClient()
   const [clientId, setClientId] = useState(tracker.clientId)
   const [secret, setSecret] = useState('')
@@ -743,7 +759,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
   const status = tracker.reconnect
     ? `${tracker.name} refused the saved login. Reconnect to resume syncing.`
     : tracker.connected
-      ? `Connected as ${tracker.user ?? '—'}`
+      ? tracker.user ? `Connected as ${tracker.user}` : 'Connected'
       : tracker.configured
         ? 'Set up, not connected'
         : 'Not set up'
@@ -772,7 +788,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
     >
       <Row label={status}>
         <div className="flex gap-2">
-          {tracker.configured && (
+          {tracker.configured && host && (
             <a
               href={loginPath}
               className={buttonClass('primary')}
@@ -780,12 +796,14 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
               {tracker.connected ? 'Reconnect' : 'Connect'}
             </a>
           )}
-          <button
-            onClick={() => setEditing((open) => !open)}
-            className={buttonClass()}
-          >
-            {editing ? 'Cancel' : tracker.configured ? 'Edit keys' : 'Add keys'}
-          </button>
+          {host && (
+            <button
+              onClick={() => setEditing((open) => !open)}
+              className={buttonClass()}
+            >
+              {editing ? 'Cancel' : tracker.configured ? 'Edit keys' : 'Add keys'}
+            </button>
+          )}
           {tracker.provider === 'mal' && tracker.connected && (
             <button
               onClick={() => importFavs.mutate()}
@@ -798,22 +816,14 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
           )}
 
           {tracker.connected &&
+            host &&
             (confirmingOut ? (
-              <div className="flex items-center gap-1 rounded-md bg-base-950 p-1 ring-1 ring-base-700">
-                <button
-                  onClick={() => logout.mutate()}
-                  disabled={logout.isPending}
-                  className="rounded px-2 py-1 text-sm font-medium text-recap hover:bg-base-800 disabled:opacity-50"
-                >
-                  Disconnect
-                </button>
-                <button
-                  onClick={() => setConfirmingOut(false)}
-                  className="rounded px-2 py-1 text-sm text-base-400 hover:bg-base-800"
-                >
-                  Keep
-                </button>
-              </div>
+              <ConfirmInline
+                label="Disconnect"
+                onConfirm={() => logout.mutate()}
+                onCancel={() => setConfirmingOut(false)}
+                pending={logout.isPending}
+              />
             ) : (
               <button
                 onClick={() => setConfirmingOut(true)}
@@ -835,8 +845,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
         <p className="px-3 pb-2 text-xs text-recap">{(importFavs.error as Error).message}</p>
       )}
 
-      {/* Neither service offers token revocation, so being explicit about what
-          disconnecting does avoids a false sense of having revoked access. */}
+      {/* Neither service revokes tokens, so this says plainly what disconnecting does. */}
       {confirmingOut && (
         <p className="px-3 pb-2 text-xs text-base-500">
           Forgets the account on this machine. Watch history stays. The
@@ -869,7 +878,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
             value={secret}
             onChange={setSecret}
             secret
-            placeholder={tracker.hasSecret ? 'Saved — leave blank to keep' : ''}
+            placeholder={tracker.hasSecret ? 'Saved. Leave blank to keep' : ''}
           />
 
           <div className="flex items-center gap-2">
@@ -904,14 +913,14 @@ function Field({
   return (
     <label className="block">
       <span className="mb-1 block text-xs text-base-400">{label}</span>
-      <input
+      <TextInput
         type={secret ? 'password' : 'text'}
         value={value}
         placeholder={placeholder}
         spellCheck={false}
         autoComplete="off"
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-base-800 bg-base-900 px-2.5 py-1.5 font-mono text-sm text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none"
+        className="w-full font-mono"
       />
     </label>
   )
@@ -948,7 +957,7 @@ function ImportRow() {
     mutationFn: () => api.post(`/api/sync?mode=${mode}`),
     onSuccess: () => {
       setConfirming(false)
-      qc.invalidateQueries({ queryKey: ['library'] })
+      refreshListState(qc)
     },
   })
 
@@ -984,19 +993,12 @@ function ImportRow() {
 
       {mode === 'replace' && confirming ? (
         <div className="flex gap-2">
-          <button
-            onClick={() => sync.mutate()}
-            disabled={sync.isPending}
-            className={buttonClass('danger')}
-          >
-            {sync.isPending ? 'Replacing…' : 'Yes, replace'}
-          </button>
-          <button
-            onClick={() => setConfirming(false)}
-            className={buttonClass()}
-          >
-            Cancel
-          </button>
+          <ConfirmInline
+            label={sync.isPending ? 'Replacing…' : 'Yes, replace'}
+            onConfirm={() => sync.mutate()}
+            onCancel={() => setConfirming(false)}
+            pending={sync.isPending}
+          />
         </div>
       ) : (
         <button
@@ -1038,6 +1040,11 @@ function LibraryTab() {
   })
 
   const roots = local.data?.roots ?? []
+  // Which paths the server refused, and why, said beside the list instead of one vague line.
+  const problems =
+    save.error instanceof ApiError
+      ? ((save.error.body as { paths?: Record<string, string> } | undefined)?.paths ?? {})
+      : {}
 
   return (
     <div className="space-y-4">
@@ -1048,7 +1055,9 @@ function LibraryTab() {
             <span className="truncate text-sm text-base-200">{root}</span>
             <button
               onClick={() => save.mutate(roots.filter((r) => r !== root))}
-              className="text-xs text-base-500 hover:text-recap"
+              // One change at a time: a second click would start from the list before the first.
+              disabled={save.isPending}
+              className="tap relative text-xs text-base-500 hover:text-recap disabled:opacity-50"
             >
               Remove
             </button>
@@ -1057,24 +1066,37 @@ function LibraryTab() {
       </ul>
 
       <div className="flex gap-2">
-        <input
+        <TextInput
           value={path}
           onChange={(e) => setPath(e.target.value)}
           placeholder="D:\Anime"
-          className="min-w-0 flex-1 rounded-md border border-base-800 bg-base-900 px-3 py-1.5 text-sm text-base-100 placeholder:text-base-600"
+          aria-label="Folder to add"
+          className="min-w-0 flex-1"
         />
         <button
           onClick={() => {
-            if (path.trim()) save.mutate([...roots, path.trim()])
-            setPath('')
+            // Cleared only once saved, so a refused path can be corrected.
+            if (path.trim()) save.mutate([...roots, path.trim()], { onSuccess: () => setPath('') })
           }}
+          disabled={save.isPending}
           className={buttonClass()}
         >
           Add
         </button>
       </div>
 
-      {save.isError && <p className="text-xs text-recap">{(save.error as Error).message}</p>}
+      {save.isError &&
+        (Object.keys(problems).length > 0 ? (
+          <ul className="space-y-0.5 text-xs text-recap">
+            {Object.entries(problems).map(([p, why]) => (
+              <li key={p}>
+                {p}: {why}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-recap">{(save.error as Error).message}</p>
+        ))}
 
       <Row
         label={
@@ -1103,8 +1125,7 @@ function BackupSection() {
   const qc = useQueryClient()
   const [message, setMessage] = useState('')
 
-  // A plain link so the browser saves the file; a navigation cannot carry the
-  // auth header, so the token rides in the URL.
+  // A plain link so the browser saves the file, the token in the URL as a link has no header.
   const exportURL = (format: string) => withToken(`/api/library/export?format=${format}`)
 
   const load = useMutation({
@@ -1178,8 +1199,7 @@ function BackupSection() {
   )
 }
 
-// Desktop alerts are a browser permission plus a local switch: the choice
-// belongs to this browser, not the account.
+// Desktop alerts are a browser permission plus a switch, belonging to this browser.
 function DesktopNotifyRow() {
   const supported = typeof Notification !== 'undefined'
   const [on, setOn] = useState(desktopNotifyWanted())
@@ -1319,8 +1339,7 @@ function AccessTab() {
   )
 }
 
-const HTTPS_INPUT =
-  'min-w-0 flex-1 basis-48 rounded-md border border-base-800 bg-base-900 px-2.5 py-1.5 text-sm text-base-100 placeholder:text-base-600 focus:border-accent-500 focus:outline-none'
+const HTTPS_INPUT = cx(inputClass, 'min-w-0 flex-1 basis-48')
 
 interface HTTPSStatus {
   domain: string
@@ -1537,19 +1556,12 @@ function RevokeDevices() {
     >
       {confirming ? (
         <div className="flex gap-2">
-          <button
-            onClick={() => rotate.mutate()}
-            disabled={rotate.isPending}
-            className={buttonClass('danger')}
-          >
-            Sign them out
-          </button>
-          <button
-            onClick={() => setConfirming(false)}
-            className={buttonClass()}
-          >
-            Cancel
-          </button>
+          <ConfirmInline
+            label="Sign them out"
+            onConfirm={() => rotate.mutate()}
+            onCancel={() => setConfirming(false)}
+            pending={rotate.isPending}
+          />
         </div>
       ) : (
         <button
@@ -1576,9 +1588,7 @@ interface FirewallState {
   public: boolean
 }
 
-// Why a phone on the same Wi-Fi can or cannot get in, and the fix. Windows
-// asks about a program once; a Cancel, or a network it calls Public, blocks
-// every device afterwards without saying so.
+// Why a phone on the same Wi-Fi can or can't get in, and the fix (a Cancel or Public network blocks it).
 function FirewallPanel() {
   const qc = useQueryClient()
   const [alsoPublic, setAlsoPublic] = useState(false)
@@ -1691,11 +1701,13 @@ interface UpdateStatus {
   bytes: number
   total: number
   error?: string
+  pending?: Notes[]
+  whatsNew?: Notes[]
+  updatedFrom?: string
 }
 
 function AboutTab() {
   const qc = useQueryClient()
-  const [waiting, setWaiting] = useState(false)
   const [stuck, setStuck] = useState(false)
 
   const status = useQuery({
@@ -1721,15 +1733,12 @@ function AboutTab() {
   const s = status.data
   const from = s?.current
 
-  // Once the download lands the server hands over to the new binary: poll until
-  // something answers with a different version, then reload onto it. The old
-  // process may be gone before 'restarting' is ever seen, so a failed poll
-  // after verifying counts too.
+  // Poll until a different version answers, then reload; a failed poll after verifying counts too.
   const handingOver =
     s?.stage === 'restarting' || (status.isError && (s?.stage === 'verifying' || s?.stage === 'downloading'))
+  // Keyed on handingOver alone: one failed poll mid-download must not leave the restart unwatched.
   useEffect(() => {
-    if (!handingOver || waiting) return
-    setWaiting(true)
+    if (!handingOver) return
     let ticks = 0
     const timer = window.setInterval(async () => {
       // A new version that never comes up (or a rollback) must not leave the page spinning for good.
@@ -1747,8 +1756,7 @@ function AboutTab() {
 
   if (status.isPending) return <Skeleton className="h-40 w-full" />
 
-  // Only a build without an updater (503 "updater unavailable") is a
-  // development one; any other failure is said as what it is.
+  // Only a 503 "updater unavailable" means a development build; other failures say what they are.
   if (!s && !(status.error instanceof ApiError && status.error.status === 503)) {
     return (
       <Section title="kuro">
@@ -1759,7 +1767,7 @@ function AboutTab() {
   if (!s) {
     return (
       <div className="space-y-4">
-        <Section title="kuro" hint="Development build — updates are not checked.">
+        <Section title="kuro" hint="Development build: updates aren't checked.">
           <p className="text-sm text-base-400">Built from source.</p>
         </Section>
         <ComponentsSection />
@@ -1770,6 +1778,12 @@ function AboutTab() {
 
   const busy = s.stage === 'downloading' || s.stage === 'verifying' || s.stage === 'restarting'
   const percent = s.total > 0 ? Math.round((s.bytes / s.total) * 100) : 0
+  // Every release since this one, so a long jump reads all of it; the latest's own notes otherwise.
+  const pendingNotes: Notes[] = s.pending?.length
+    ? s.pending
+    : s.latest?.notes
+      ? [{ version: s.latest.version, notes: s.latest.notes }]
+      : []
 
   const line = (() => {
     switch (s.stage) {
@@ -1816,10 +1830,23 @@ function AboutTab() {
         </Row>
         {s.stage === 'downloading' && s.total > 0 && <ProgressBar value={percent} />}
         {apply.isError && <p className="text-xs text-recap">{(apply.error as Error).message}</p>}
-        {s.available && s.latest?.notes && (
-          <pre className="whitespace-pre-wrap rounded-lg bg-base-950/60 p-3 text-xs text-base-400">{s.latest.notes}</pre>
+        {s.available && pendingNotes.length > 0 && (
+          <div className="space-y-2 py-3">
+            <p className="text-xs text-base-400">
+              {pendingNotes.length > 1 ? `What the update brings: ${pendingNotes.length} releases since yours` : 'What the update brings'}
+            </p>
+            <ReleaseNotesList notes={pendingNotes} />
+          </div>
         )}
       </Section>
+
+      {(s.whatsNew ?? []).some((n) => n.notes.trim()) && (
+        <Section title={s.updatedFrom ? `What's new since ${s.updatedFrom}` : `What's new in ${s.current}`}>
+          <div className="py-3">
+            <ReleaseNotesList notes={s.whatsNew!} />
+          </div>
+        </Section>
+      )}
 
       <ComponentsSection />
       <WhereSection />
@@ -1827,8 +1854,7 @@ function AboutTab() {
   )
 }
 
-// The folders kuro uses, and the one the user can move: only the first-run
-// nudge opens the setup page, so it has to be here too.
+// The folders kuro uses and the movable one, here too as only the first run opens Setup.
 function WhereSection() {
   const setup = useSetup()
   if (!setup.data) return null
@@ -1839,8 +1865,7 @@ function WhereSection() {
   )
 }
 
-// Skipped on the first run meant unreachable: only the nudge opens the setup
-// page, and only for the torrent engine.
+// Here too, or what the first run skipped is unreachable: only its nudge opens Setup.
 function ComponentsSection() {
   const qc = useQueryClient()
   const setup = useSetup({
@@ -1920,6 +1945,8 @@ function JobsTab() {
     onSettled: () => qc.invalidateQueries({ queryKey: ['jobs'] }),
   })
   const busy = run.error instanceof ApiError && run.error.status === 409 ? run.variables : undefined
+  // Any other refusal is said under its row too: inline keeps it out of the toasts.
+  const failed = run.isError && busy === undefined ? run.variables : undefined
 
   return (
     <Section title="Background jobs" hint="Syncing, release checks and data mirrors.">
@@ -1941,14 +1968,13 @@ function JobsTab() {
                 {busy === job.name && !job.running && (
                   <p className="mt-0.5 text-xs text-base-400">Already running.</p>
                 )}
+                {failed === job.name && (
+                  <p className="mt-0.5 text-xs text-recap">Didn't start: {(run.error as Error).message}</p>
+                )}
               </div>
-              <button
-                onClick={() => run.mutate(String(job.name))}
-                disabled={Boolean(job.running)}
-                className="shrink-0 rounded-md bg-base-800 px-3 py-1 text-xs text-base-100 hover:bg-base-700 disabled:opacity-50"
-              >
+              <Button size="sm" onClick={() => run.mutate(String(job.name))} disabled={Boolean(job.running)}>
                 {job.running ? 'Running' : 'Run'}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>

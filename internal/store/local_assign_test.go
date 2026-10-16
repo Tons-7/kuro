@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// A file matched by hand must keep that match through every later scan,
-// whatever the parser makes of its name.
+// A hand match survives every later scan, whatever the parser makes of the name.
 func TestRescanKeepsHandAssignments(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

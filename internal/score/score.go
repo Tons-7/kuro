@@ -25,7 +25,7 @@ type Tier struct {
 
 func ParseTier(s string) Tier {
 	var t Tier
-	for _, part := range strings.Split(s, ":") {
+	for part := range strings.SplitSeq(s, ":") {
 		part = strings.TrimSpace(part)
 		switch {
 		case part == "":
@@ -72,20 +72,13 @@ type Preferences struct {
 	Audio string
 	// Raws carry no subtitles, so they are refused unless asked for by name.
 	AllowRaw bool
-	// Best first. A release in none is ranked down, never refused — for some
-	// shows it's the only one that exists.
+	// Best first; a release in none ranks down, never refused, as it may be the only one.
 	SubLanguages []string
-	// HardwareTranscode is set when this machine has a real-time hardware
-	// H.264 encoder. Without it, HEVC and 10-bit H.264 must be software
-	// transcoded, which stalls on seeks, so a directly-playable release of the
-	// same resolution is preferred (a browser plays H.264 8-bit untouched).
+	// HardwareTranscode: a real-time H.264 encoder here. Without one, HEVC and Hi10P stall on seeks.
 	HardwareTranscode bool
 }
 
-// needsSoftwareTranscode reports a codec a browser cannot decode and this build
-// re-encodes: HEVC always, 10-bit H.264 (Hi10P) which has no hardware decode.
-// Unknown/VP9/AV1 are left alone — either they play or they parse as unlabelled
-// H.264, and penalising those would drop the common well-seeded release.
+// needsSoftwareTranscode: HEVC or Hi10P. Unlabelled codecs are left alone, being mostly plain H.264.
 func needsSoftwareTranscode(rel parse.Release) bool {
 	switch rel.Codec {
 	case "HEVC":
@@ -140,8 +133,7 @@ type Candidate struct {
 	Torrent indexer.Torrent
 	Release parse.Release
 
-	// SeaDex curates the best release per anime, keyed by AniList id, so a
-	// match there outweighs any heuristic.
+	// SeaDex's curated best (by AniList id) outweighs any heuristic.
 	SeaDexBest  bool
 	SeaDexGroup bool
 
@@ -157,10 +149,10 @@ type Candidate struct {
 	// The release names some other show. Set by the finder, which knows the titles this one goes by.
 	WrongShow bool
 
-	// Numbers a file for the episode may carry inside this release, the one
-	// asked for first. A release that names no cour counts from the first one,
-	// so for a later cour only the numbers carried across cours are listed.
+	// Numbers the episode's file may carry in this release, the asked-for one first.
 	Numbers []int `json:"-"`
+	// Episode is the one asked for, which Numbers may or may not carry.
+	Episode int `json:"-"`
 
 	// Film is set for one film of a film series: its file is found by name, not by an episode number.
 	Film *film.Key `json:"-"`
@@ -171,8 +163,7 @@ type Candidate struct {
 // The limit is set for an episode of this length; longer runtimes scale it.
 const nominalRuntime = 24
 
-// SizeLimit scales the cap by runtime: a 50-minute film is twice the file of a
-// 24-minute episode at the same quality.
+// SizeLimit scales the cap by runtime: a 50-minute film is twice a 24-minute episode.
 func (c Candidate) SizeLimit(prefs Preferences) int64 {
 	if prefs.MaxAutoBytes <= 0 || c.RuntimeMinutes <= nominalRuntime {
 		return prefs.MaxAutoBytes
@@ -212,15 +203,15 @@ type Result struct {
 	Candidate
 	Score   float64  `json:"score"`
 	Reasons []string `json:"reasons"`
-	// Playable is false only for a release this machine would software-transcode
-	// (HEVC or Hi10P without a hardware encoder). Among one resolution the
-	// playable release wins, so playback does not stall on a seek.
+	// Playable is false only for a release this machine would software-transcode.
 	Playable   bool        `json:"playable"`
 	AutoPick   bool        `json:"autoPick"`
 	Blocked    string      `json:"blocked,omitempty"`
 	Rejections []Rejection `json:"rejections,omitempty"`
 	// resRank is the resolution's place on the ladder, the first quality key.
 	resRank float64
+	// unreadable: subtitled only in languages the viewer does not read.
+	unreadable bool
 }
 
 const (
@@ -234,23 +225,19 @@ const (
 	batchPenalty        = 15.0
 	unknownScopePenalty = 25.0
 	seedWeight          = 22.0
-	// Below the smallest gap between tiers, including a partial match, so the
-	// swarm orders equals and never buys a lower resolution.
+	// Under the smallest tier gap, so seeders order equals and never buy a lower resolution.
 	maxSeedBonus = 50.0
 	// A handful of seeders streams badly however good the release is.
 	thinSwarm        = 5
 	thinSwarmPenalty = 30.0
 
-	// Larger than a tier step, so the quality ladder cannot overturn language:
-	// an unreadable 1080p is worth less than a readable 720p.
-	// Small: a label only breaks ties; most English releases state none.
+	// Small: a label only breaks ties; most English releases state none. Language itself is a key in better().
 	subLanguageBonus  = 15.0
 	wrongLanguage     = 170.0
 	hardSubbedPenalty = 60.0
 )
 
-// Rank orders candidates best first. Everything is returned, including
-// ineligible releases, so the manual picker can still show them.
+// Rank orders candidates best first, ineligible ones included for the manual picker.
 func Rank(cands []Candidate, prefs Preferences) []Result {
 	out := make([]Result, 0, len(cands))
 	for _, c := range cands {
@@ -266,8 +253,7 @@ func Rank(cands []Candidate, prefs Preferences) []Result {
 	return out
 }
 
-// A batch is a fallback, not a preference: a single episode starts sooner and
-// needs no file selection, however well the pack is seeded.
+// A batch is a fallback: a single episode starts sooner, however well the pack is seeded.
 func better(a, b Result) bool {
 	if a.AutoPick != b.AutoPick {
 		return a.AutoPick
@@ -276,14 +262,9 @@ func better(a, b Result) bool {
 	if a.AutoPick && (a.Release.Resolution == "") != (b.Release.Resolution == "") {
 		return b.Release.Resolution == ""
 	}
-	// A stated episode beats a maybe outright, so a film with no episode number
-	// can't outrank the actual episode on score alone.
+	// A stated episode beats a maybe, so a numberless film can't outscore the episode.
 	if a.Confirmed != b.Confirmed {
 		return a.Confirmed
-	}
-	// A swarm counted at zero is nearly always dead; try it after live ones.
-	if a.AutoPick && empty(a) != empty(b) {
-		return !empty(a)
 	}
 	// An old film's single release is often one seeder; its series batch is the copy people keep.
 	if a.AutoPick && a.Film != nil && b.Film != nil && thin(a) != thin(b) {
@@ -292,15 +273,16 @@ func better(a, b Result) bool {
 	if a.AutoPick && a.Release.Batch != b.Release.Batch {
 		return !a.Release.Batch
 	}
-	// A strict order of keys, so the pick never depends on arrival order:
-	// SeaDex's curated best (a higher resolution is often an upscale), then
-	// resolution, then within it a release that plays as-is over one this
-	// machine would software-transcode (which stalls on seeks), then score.
+	// Strict keys, so arrival order never matters: SeaDex best, resolution, readable subs, playable, score.
 	if a.AutoPick && a.SeaDexBest != b.SeaDexBest {
 		return a.SeaDexBest
 	}
 	if a.AutoPick && a.resRank != b.resRank {
 		return a.resRank > b.resRank
+	}
+	// Quality first; within a resolution, subtitles the viewer cannot read lose whatever else they have.
+	if a.AutoPick && a.unreadable != b.unreadable {
+		return !a.unreadable
 	}
 	if a.AutoPick && a.Playable != b.Playable {
 		return a.Playable
@@ -311,11 +293,7 @@ func better(a, b Result) bool {
 // thin: counted at a handful of seeders, which streams badly. An unknown count isn't thin.
 func thin(r Result) bool { return r.Torrent.SeedersKnown && r.Torrent.Seeders < thinSwarm }
 
-// empty: counted at zero seeders. An unknown count isn't empty.
-func empty(r Result) bool { return r.Torrent.SeedersKnown && r.Torrent.Seeders == 0 }
-
-// Best returns the release to start automatically, or false when nothing
-// qualifies and the user should choose.
+// Best returns the release to start automatically, or false for the user to choose.
 func Best(cands []Candidate, prefs Preferences) (Result, bool) {
 	ranked := Rank(cands, prefs)
 	if len(ranked) == 0 || !ranked[0].AutoPick {
@@ -340,8 +318,7 @@ func evaluate(c Candidate, prefs Preferences) Result {
 	}
 
 	if !r.applyLadder(rel, prefs) {
-		// An unlabelled source or codec matches no tier, but the resolution is
-		// known and must not lose to a lower one.
+		// Unlabelled source or codec matches no tier, but its known resolution beats a lower one.
 		if rank := resolutionRank(rel.Resolution, prefs); rank > 0 {
 			r.Score += rank * tierStep * partialTier
 			r.addf("%s, unlabelled source", rel.Resolution)
@@ -380,8 +357,7 @@ func evaluate(c Candidate, prefs Preferences) Result {
 		r.Score -= batchPenalty
 		r.add("batch, needs an extra step to find the episode")
 	case rel.Episode == 0:
-		// Neither an episode number nor a batch marker: probably a season
-		// pack, confirmed only once the file list is known.
+		// No episode or batch marker: probably a pack, confirmed by its file list.
 		r.Score -= unknownScopePenalty
 		r.add("episode not stated in the name")
 	}
@@ -405,8 +381,7 @@ func evaluate(c Candidate, prefs Preferences) Result {
 	return r
 }
 
-// applySubtitles ranks on the languages a release names. An unlabelled release
-// is left alone: most English releases never say "English".
+// applySubtitles ranks on named languages; unlabelled is left alone, as English releases rarely say so.
 func (r *Result) applySubtitles(rel parse.Release, prefs Preferences) {
 	if len(prefs.SubLanguages) == 0 || len(rel.Subtitles) == 0 {
 		return
@@ -419,6 +394,7 @@ func (r *Result) applySubtitles(rel parse.Release, prefs Preferences) {
 	}
 
 	r.Score -= wrongLanguage
+	r.unreadable = true
 	r.addf("subtitles only in %s", strings.Join(rel.Subtitles, ", "))
 	if rel.HardSub {
 		// Burnt into the picture: there is no track to switch away from.
@@ -438,10 +414,7 @@ func (r *Result) applyLadder(rel parse.Release, prefs Preferences) bool {
 	return false
 }
 
-// Ranks by the user's ladder, not absolute pixel count, so a resolution they
-// never asked for (2160p is usually an upscale) can't outrank one they did.
-// The lowest tier naming the resolution: an unlabelled release sits under every
-// labelled one at that resolution, above the next resolution down.
+// Ranks by the user's ladder, not pixels, so an unasked 2160p can't win; unlabelled sits under labelled.
 func resolutionRank(res string, prefs Preferences) float64 {
 	res = strings.ToLower(res)
 	if res == "" {

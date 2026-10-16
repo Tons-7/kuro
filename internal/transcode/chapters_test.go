@@ -99,8 +99,7 @@ title=Credits
 	}
 }
 
-// A theme runs a minute or two; a quarter-hour "Intro" is a mislabel, and
-// skipping it would take the episode with it.
+// A quarter-hour "Intro" is a mislabel; skipping it would skip the episode.
 func TestImplausibleThemeSpanIsNotSkippable(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()

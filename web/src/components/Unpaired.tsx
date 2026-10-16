@@ -6,8 +6,17 @@ import { buttonClass } from './ui'
 /** Over everything once the server refuses this device's token. */
 export function Unpaired() {
   const [unpaired, setUnpaired] = useState(false)
+  // The token refused; a scan in another tab may since have stored a good one, which must stay.
+  const [refused, setRefused] = useState<string | null>(null)
   useEffect(() => {
-    const on = () => setUnpaired(true)
+    const on = () => {
+      setUnpaired(true)
+      try {
+        setRefused(localStorage.getItem('kuro.token'))
+      } catch {
+        // Unreadable storage: nothing to clear later either.
+      }
+    }
     window.addEventListener(UNPAIRED_EVENT, on)
     return () => window.removeEventListener(UNPAIRED_EVENT, on)
   }, [])
@@ -24,15 +33,16 @@ export function Unpaired() {
         <button
           onClick={() => {
             try {
-              localStorage.removeItem('kuro.token')
+              if (localStorage.getItem('kuro.token') === refused) localStorage.removeItem('kuro.token')
             } catch {
               // Nothing stored is fine.
             }
-            window.location.reload()
+            // Without the query: a ?token= still in the URL would bring the refused one back.
+            window.location.replace(window.location.pathname + window.location.hash)
           }}
           className={cx(buttonClass('primary'), 'mt-5')}
         >
-          I've scanned it — reload
+          Scanned it, reload
         </button>
       </div>
     </div>

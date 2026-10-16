@@ -16,8 +16,7 @@ import (
 	"kuro/internal/store"
 )
 
-// AniList answers 50 ids at a time and says nothing about the rest, so a
-// franchise of 61 films used to come back with 11 rows still bare.
+// AniList answers 50 ids at a time, so all 61 films of a franchise need a second request.
 func TestHydratePagesPastFiftyIds(t *testing.T) {
 	var asked [][]int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

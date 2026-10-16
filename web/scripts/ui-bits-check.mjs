@@ -1,5 +1,4 @@
-// Popular panel episode counts, the Recently released hover, and the
-// "download ahead" setting.
+// Popular panel episode counts, the Recently released hover, and the "download ahead" setting.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'

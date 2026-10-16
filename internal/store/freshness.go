@@ -50,6 +50,7 @@ func (s *Store) StaleAiring(ctx context.Context, now time.Time, limit int) ([]in
 		SELECT id FROM anime
 		WHERE id > 0 AND synced_at > 0
 		  AND status IN ('RELEASING', 'NOT_YET_RELEASED')
+		  AND id NOT IN (SELECT anime_id FROM dead_anime)
 		  AND ((next_airing_at IS NOT NULL AND next_airing_at <= ?1 AND synced_at < next_airing_at)
 		       OR synced_at < ?1 - CASE status WHEN 'RELEASING' THEN ?2 ELSE ?3 END)
 		ORDER BY (next_airing_at IS NOT NULL AND next_airing_at <= ?1) DESC, synced_at

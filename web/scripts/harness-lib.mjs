@@ -4,9 +4,7 @@ import { join } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// linkBin gives an instance the repo's programs, hard-linked file by file: it
-// can delete its copies (kuro removes obsolete binaries) without touching the
-// repo's, which a junction to the whole folder would. only: names to link.
+// linkBin hard-links the repo's programs, so an instance can delete its copies without touching the repo's.
 export function linkBin(from, to, only = null) {
   const exe = (n) => (process.platform === 'win32' ? `${n}.exe` : n)
   mkdirSync(to, { recursive: true })

@@ -241,8 +241,7 @@ func TestBuildIndexEmptyCorpus(t *testing.T) {
 	}
 }
 
-// Built through the store, not hand-made Media: the index never carried a
-// season, so a season-two file matched season one.
+// Built through the store, so the index carries seasons and season two stays season two.
 func TestIndexKnowsEachEntrysSeason(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

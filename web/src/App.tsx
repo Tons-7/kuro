@@ -37,8 +37,7 @@ export function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Home />} />
-          {/* The player is full-bleed but keeps the nav: losing it on the one
-              page you spend the most time on strands you there. */}
+          {/* The player is full-bleed but keeps the nav, or you're stranded on it. */}
           <Route path="watch/:animeId/:episode" element={<Watch />} />
           <Route path="anime/:animeId" element={<Anime />} />
           <Route path="browse" element={<Browse />} />

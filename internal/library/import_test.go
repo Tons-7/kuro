@@ -14,7 +14,8 @@ import (
 	"kuro/internal/store"
 )
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
+func ptr[T any](v T) *T { return new(v) }
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -24,8 +25,8 @@ func TestToAnimePrefersRomajiThenUserPreferred(t *testing.T) {
 		title anilist.Title
 		want  string
 	}{
-		{"romaji", anilist.Title{Romaji: ptr("Sousou no Frieren"), UserPreferred: ptr("Frieren")}, "Sousou no Frieren"},
-		{"falls back", anilist.Title{UserPreferred: ptr("Frieren")}, "Frieren"},
+		{"romaji", anilist.Title{Romaji: new("Sousou no Frieren"), UserPreferred: new("Frieren")}, "Sousou no Frieren"},
+		{"falls back", anilist.Title{UserPreferred: new("Frieren")}, "Frieren"},
 		{"neither", anilist.Title{}, ""},
 	}
 
@@ -72,7 +73,7 @@ func TestToAnimeCarriesNullsThrough(t *testing.T) {
 func TestToEntryFormatsFuzzyDates(t *testing.T) {
 	e := toEntry(anilist.ListEntry{
 		ID: 1, MediaID: 100, Progress: 7,
-		StartedAt:   anilist.FuzzyDate{Year: ptr(2026), Month: ptr(1), Day: ptr(5)},
+		StartedAt:   anilist.FuzzyDate{Year: new(2026), Month: new(1), Day: new(5)},
 		CompletedAt: anilist.FuzzyDate{},
 	})
 

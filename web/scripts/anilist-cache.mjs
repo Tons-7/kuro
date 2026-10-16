@@ -1,10 +1,5 @@
-// A caching stand-in for AniList, so the browser checks stop being rate limited:
-// every throwaway kuro starts with an empty database and asks for the same things.
-// Answers are kept a day in %TEMP%/kuro-e2e-anilist, shared by every run.
-//
+// Caching AniList stand-in for the checks: clean answers kept a day in %TEMP%/kuro-e2e-anilist.
 //   node scripts/anilist-cache.mjs <port>     (run-player-check starts and stops it)
-//
-// Only clean answers are kept; a 429 or an error passes straight through.
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'

@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// A phone gets in only when every connected network's profile is allowed and
-// nothing blocks kuro.exe outright.
+// A phone gets in only when every network's profile is allowed and nothing blocks kuro.exe.
 func TestReachable(t *testing.T) {
 	home := []Network{{Name: "Home", Category: "Private"}}
 	cafe := []Network{{Name: "Cafe", Category: "Public"}}
@@ -72,5 +71,32 @@ func TestCheckReadsThisMachine(t *testing.T) {
 			}
 		}
 		t.Logf("%s: %+v", name, st)
+	}
+}
+
+// Rules count only for the port asked about, and a Public-profile block doesn't block a Private network.
+func TestRulesAreJudgedForTheirPortAndProfile(t *testing.T) {
+	home := []Network{{Name: "Home", Category: "Private"}}
+	peers := Rule{Name: "kuro peers 4240", Action: "Allow", Profiles: "Any", Enabled: true, LocalPort: "4240", Protocol: "TCP"}
+	web := &Rule{Action: "Allow", Profiles: "Private, Domain", Enabled: true, LocalPort: "4321", Protocol: "TCP"}
+	publicBlock := Rule{Action: "Block", Profiles: "Public", Enabled: true}
+
+	if (Status{Supported: true, Port: 4321, Networks: home, Program: []Rule{peers}}).Reachable() {
+		t.Error("the peer port's rule was taken to open the web port")
+	}
+	if !(Status{Supported: true, Port: 4321, Networks: home, PortRule: web, Program: []Rule{peers}}).Reachable() {
+		t.Error("the web port's own rule was not enough")
+	}
+	st := Status{Supported: true, Port: 4321, Networks: home, PortRule: web, Program: []Rule{publicBlock}}
+	if st.Blocked() || !st.Reachable() {
+		t.Error("a Public block rule was read as blocking a Private network")
+	}
+	cafe := Status{Supported: true, Port: 4321, Networks: []Network{{Name: "Cafe", Category: "Public"}}, PortRule: web, Program: []Rule{publicBlock}}
+	if !cafe.Blocked() || cafe.Reachable() {
+		t.Error("a Public block rule should block a Public network")
+	}
+	udp := Rule{Action: "Allow", Profiles: "Any", Enabled: true, LocalPort: "4321", Protocol: "UDP"}
+	if (Status{Supported: true, Port: 4321, Networks: home, Program: []Rule{udp}}).Reachable() {
+		t.Error("a UDP-only rule was taken to open a TCP port")
 	}
 }

@@ -42,8 +42,7 @@ func TestClearDirtyKeepsAnEditMadeDuringThePush(t *testing.T) {
 	}
 }
 
-// A list fetched before our last push must not undo it: the push stored the
-// server's updatedAt, and an older remote row is skipped.
+// A list fetched before our last push can't undo it: rows older than its stored updatedAt are skipped.
 func TestMergeSkipsARemoteRowOlderThanOurPush(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -78,8 +77,7 @@ func TestMergeSkipsARemoteRowOlderThanOurPush(t *testing.T) {
 	}
 }
 
-// Unrated on purpose is flagged, so the push sends the 0; a new local row's 0
-// is not, so it can't wipe the site's score.
+// A deliberate unrate is flagged so its 0 is pushed; a new row's 0 isn't, so it can't wipe the site's.
 func TestUnratingIsFlaggedUntilPushed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -106,5 +104,70 @@ func TestUnratingIsFlaggedUntilPushed(t *testing.T) {
 	}
 	if e, _ := s.ListEntry(ctx, 1); e.ScoreCleared {
 		t.Fatal("still flagged after the push landed")
+	}
+}
+
+// A row the tracker keeps refusing goes to the back of the line, so newer edits still get their turn.
+func TestRefusedPushesGoToTheBackOfTheLine(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for id := 1; id <= 3; id++ {
+		seedShow(t, s, id, 12)
+		if _, err := s.MarkWatched(ctx, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	order := func(tracker string) []int {
+		var ids []int
+		if tracker == "anilist" {
+			dirty, _ := s.DirtyEntries(ctx, 0)
+			for _, d := range dirty {
+				ids = append(ids, d.AnimeID)
+			}
+			return ids
+		}
+		pending, _ := s.PendingMALPushes(ctx, tracker, 0)
+		for _, p := range pending {
+			ids = append(ids, p.AnimeID)
+		}
+		return ids
+	}
+
+	s.PushFailed(ctx, "anilist", 1)
+	if got := order("anilist"); len(got) != 3 || got[2] != 1 {
+		t.Fatalf("anilist order = %v, want the refused row last", got)
+	}
+	if err := s.ClearDirty(ctx, 1, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	var failed int64
+	s.r.QueryRow(`SELECT anilist_failed_at FROM list_entry WHERE anime_id = 1`).Scan(&failed)
+	if failed != 0 {
+		t.Fatal("a successful AniList push must forget the refusal")
+	}
+
+	for id := 1; id <= 3; id++ {
+		s.w.Exec(`UPDATE anime SET mal_id = ? WHERE id = ?`, 100+id, id)
+	}
+	s.PushFailed(ctx, "mal", 2)
+	if got := order("mal"); got[len(got)-1] != 2 {
+		t.Fatalf("mal order = %v, want the refused row last", got)
+	}
+	s.MarkPushed(ctx, "mal", 2, 2, "CURRENT", 0)
+	s.r.QueryRow(`SELECT mal_failed_at FROM list_entry WHERE anime_id = 2`).Scan(&failed)
+	if failed != 0 {
+		t.Fatal("a successful MAL push must forget the refusal")
+	}
+}
+
+// An entry with no status and no progress has nothing MAL can hold, so it never takes a slot.
+func TestEmptyEntriesAreNotPendingForMAL(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedShow(t, s, 1, 12)
+	s.w.Exec(`UPDATE anime SET mal_id = 101 WHERE id = 1`)
+	s.w.Exec(`INSERT INTO list_entry (id, anime_id, progress, remote_updated_at, local_updated_at, dirty) VALUES (-1, 1, 0, 0, 1, 1)`)
+	if pending, _ := s.PendingMALPushes(ctx, "mal", 0); len(pending) != 0 {
+		t.Fatalf("pending = %+v", pending)
 	}
 }

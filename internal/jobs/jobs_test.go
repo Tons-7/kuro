@@ -23,8 +23,7 @@ func TestRunsOnStartAndRecordsSuccess(t *testing.T) {
 		Run: func(context.Context) error { runs.Add(1); return nil },
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s.Start(ctx)
 
 	// The run is recorded after the job returns, so wait on the status itself.
@@ -46,8 +45,7 @@ func TestFailureIsRecordedNotFatal(t *testing.T) {
 		Run: func(context.Context) error { return errors.New("upstream down") },
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s.Start(ctx)
 
 	waitFor(t, func() bool { return s.Status()[0].Failures == 1 })
@@ -69,8 +67,7 @@ func TestPanicIsContained(t *testing.T) {
 		Run: func(context.Context) error { panic("boom") },
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s.Start(ctx)
 
 	waitFor(t, func() bool { return s.Status()[0].Failures == 1 })
@@ -98,8 +95,7 @@ func TestNoOverlappingRuns(t *testing.T) {
 		},
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s.Start(ctx)
 
 	waitFor(t, func() bool { return s.Status()[0].Running })
@@ -236,5 +232,15 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met in time")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A failing daily job waits at least its own day: the cap must not make it run four times as often.
+func TestBackoffNeverGoesUnderTheInterval(t *testing.T) {
+	if got := backoff(24*time.Hour, 1); got != 24*time.Hour {
+		t.Fatalf("backoff = %s, want the job's own interval", got)
+	}
+	if got := backoff(time.Minute, 2); got != 4*time.Minute {
+		t.Fatalf("backoff = %s, want 4m", got)
 	}
 }

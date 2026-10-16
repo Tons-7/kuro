@@ -2,11 +2,14 @@
 package film
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"kuro/internal/parse"
 )
 
 // Entry is one film, by the titles it goes by.
@@ -135,7 +138,7 @@ type File struct {
 func (k Key) Pick(files []File) (int, bool) {
 	var videos []int
 	for i, f := range files {
-		if IsVideo(f.Name) {
+		if parse.IsVideo(f.Name) {
 			videos = append(videos, i)
 		}
 	}
@@ -143,7 +146,7 @@ func (k Key) Pick(files []File) (int, bool) {
 	case 0:
 		return -1, false
 	case 1:
-		return videos[0], k.Match(baseName(files[videos[0]].Name)) != Other
+		return videos[0], k.Match(parse.BaseName(files[videos[0]].Name)) != Other
 	}
 
 	// Trailers and cinema intros are numbered like the films; they are a fraction of the size.
@@ -154,21 +157,31 @@ func (k Key) Pick(files []File) (int, bool) {
 	slices.Sort(lengths)
 	floor := lengths[len(lengths)/2] / 4
 
-	best, grade, tied := -1, 0, false
+	best, grade := -1, 0
+	var tied []int
 	for _, i := range videos {
-		v, g := k.judge(baseName(files[i].Name))
+		v, g := k.judge(parse.BaseName(files[i].Name))
 		// A number alone is not proof for a small file; the film's own name is, whatever its length.
 		if v != Ours || (g == 1 && files[i].Length < floor) {
 			continue
 		}
 		switch {
 		case g > grade:
-			best, grade, tied = i, g, false
+			best, grade, tied = i, g, nil
 		case g == grade:
-			tied = true
+			tied = append(tied, i)
 		}
 	}
-	return best, best >= 0 && !tied
+	if best < 0 {
+		return -1, false
+	}
+	// Named alike: a PV beside the film carries its name too. The film is the one that is not a fraction.
+	tied = append(tied, best)
+	slices.SortFunc(tied, func(a, b int) int { return cmp.Compare(files[b].Length, files[a].Length) })
+	if len(tied) == 1 || files[tied[1]].Length < floor || files[tied[1]].Length*4 <= files[tied[0]].Length {
+		return tied[0], true
+	}
+	return best, false
 }
 
 type evidence struct {
@@ -278,26 +291,4 @@ func Number(name string) (n int, fractional bool) {
 		return 0, true
 	}
 	return n, false
-}
-
-func baseName(path string) string {
-	path = strings.ReplaceAll(path, `\`, "/")
-	if i := strings.LastIndexByte(path, '/'); i >= 0 {
-		path = path[i+1:]
-	}
-	if i := strings.LastIndexByte(path, '.'); i > 0 {
-		path = path[:i]
-	}
-	return path
-}
-
-// IsVideo reports a file a player can open.
-func IsVideo(name string) bool {
-	lower := strings.ToLower(name)
-	for _, ext := range []string{".mkv", ".mp4", ".avi", ".ts", ".m2ts", ".webm", ".mov"} {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
-	}
-	return false
 }

@@ -1,6 +1,5 @@
 -- +goose Up
--- A release picked by hand is exempt from the title check that guards
--- against releases recorded for the wrong show.
+-- A hand-picked release skips the wrong-show title check.
 ALTER TABLE torrent ADD COLUMN manual INTEGER NOT NULL DEFAULT 0;
 
 -- +goose Down

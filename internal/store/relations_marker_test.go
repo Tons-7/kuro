@@ -5,9 +5,7 @@ import (
 	"testing"
 )
 
-// A standalone show has nothing to save, so without a marker it is looked up
-// against AniList on every visit. The marker also has to survive the franchise
-// rebuild that any other show's fetch triggers.
+// A standalone show's marker stops a lookup per visit, and survives other shows' franchise rebuilds.
 func TestNoRelationsMarkerSurvivesARebuild(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

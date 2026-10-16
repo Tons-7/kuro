@@ -1,5 +1,4 @@
-// Fullscreen with auto play and auto next both on: the episode should advance
-// once, stay fullscreen, and keep playing without a click.
+// Fullscreen with auto play and auto next: the episode advances once, stays fullscreen, and plays on.
 import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -109,8 +108,7 @@ await page.screenshot({ path: `${SHOTS}/fs-countdown.png` })
 
 check(await until(() => page.url().endsWith(`/watch/${ANIME}/2`), 25_000), 'auto-next advanced to episode 2', page.url())
 
-// How long the switch leaves you looking at nothing. Play used to wait on
-// canplay, so the next episode sat there apparently paused.
+// How long the switch leaves you looking at nothing, as the next episode once sat paused.
 const switched = Date.now()
 const started = await until(() => video.evaluate((v) => !v.paused), 20_000)
 const gap = Date.now() - switched
@@ -149,8 +147,7 @@ await page.evaluate(() => {
   if (el) el.dataset.mark = 'kept2'
 })
 
-// Client-side, the way auto-next moves: a full page load would drop fullscreen
-// on its own and prove nothing.
+// Client-side, as auto-next moves: a full page load drops fullscreen on its own and proves nothing.
 await page.evaluate((target) => {
   window.history.pushState({}, '', target)
   window.dispatchEvent(new PopStateEvent('popstate'))

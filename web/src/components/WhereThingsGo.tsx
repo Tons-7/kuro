@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { api, ApiError } from '../lib/api'
 import { bytes } from '../lib/format'
-import { buttonClass } from './ui'
+import { buttonClass, TextInput } from './ui'
 import type { SetupState } from '../lib/queries'
 
 /** Every folder kuro uses and its config.toml key. */
@@ -92,8 +92,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
     mutationFn: (v: { path: string; useExisting?: boolean }) =>
       api.post<{ dataDir: string; copied: boolean; restart: boolean }>('/api/setup/data-dir', v),
   })
-  // The folder already holds a kuro database: switching opens that history
-  // instead of carrying this one, so it is asked, with its age.
+  // The folder has a database already, whose history would open instead, so it asks, with its age.
   const existing =
     move.error instanceof ApiError && move.error.status === 409
       ? ((move.error.body as { modified?: number }) ?? {})
@@ -105,7 +104,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
         {move.data.restart === false
           ? 'Already using that folder.'
           : `Saved: ${move.data.dataDir}. Restart kuro to use it${
-              move.data.copied ? ' — your history has been copied there.' : '.'
+              move.data.copied ? '. Your history was copied there.' : '.'
             }`}
       </p>
     )
@@ -120,11 +119,12 @@ function DataDirPicker({ fallback }: { fallback: string }) {
         keeps everything in kuro's own folder.
       </p>
       <div className="flex gap-2">
-        <input
+        <TextInput
           value={path}
           onChange={(e) => setPath(e.target.value)}
           placeholder="D:\kuro\data"
-          className="min-w-0 flex-1 rounded-md border border-base-800 bg-base-950 px-2 py-1.5 text-sm text-base-100 outline-none focus:border-accent-500"
+          aria-label="Data folder"
+          className="min-w-0 flex-1"
         />
         <button
           onClick={() => move.mutate({ path: path.trim() })}

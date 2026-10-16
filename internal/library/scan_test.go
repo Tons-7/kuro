@@ -103,8 +103,7 @@ func TestScanFindsAndMatchesEpisodes(t *testing.T) {
 	}
 }
 
-// Samples and trailers are video files too, and playing one instead of the
-// episode would be worse than not finding anything.
+// Samples and trailers are video too; playing one is worse than finding nothing.
 func TestScanSkipsSmallFilesAndExtras(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
@@ -179,8 +178,7 @@ func TestUnmatchedFilesAreKept(t *testing.T) {
 	}
 }
 
-// A deleted file must stop being offered, without erasing the record: an
-// unplugged drive should not wipe the library.
+// A deleted file stops being offered but keeps its record, so an unplugged drive wipes nothing.
 func TestRescanMarksDeletedFilesMissing(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()

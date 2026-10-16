@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -39,8 +40,7 @@ type Prefetcher struct {
 	running map[string]chan struct{}
 	// When a resolve last failed, so it is not retried on every page view.
 	attempted map[string]time.Time
-	// Releases resolved ahead of play, in memory only: play uses one to skip the
-	// indexer search, and nothing touches the engine until then.
+	// Releases resolved ahead of play, in memory only: the engine is untouched until then.
 	prepared map[string]preparedRelease
 	// Torrents this process started or resumed, which the startup quiet leaves be.
 	claimed map[string]bool
@@ -56,6 +56,9 @@ type inFlightFetch struct {
 	done  chan struct{}
 	once  sync.Once
 	rec   store.TorrentRecord // under Prefetcher.mu; an empty hash until added, or after a discard
+	// Under Prefetcher.mu: the hash this fetch claimed from adoption, and whether play took its torrent over.
+	hash  string
+	taken bool
 }
 
 // errOvertaken: another path is fetching this episode, or recorded a release for it meanwhile.
@@ -82,6 +85,8 @@ func (p *Prefetcher) beginFetch(animeID, episode int) (*inFlightFetch, bool) {
 func (p *Prefetcher) endFetch(animeID, episode int, f *inFlightFetch) {
 	p.mu.Lock()
 	delete(p.fetching, fetchKey(animeID, episode))
+	// Adoption resumes: a torrent left unrecorded is still a download someone should see.
+	delete(p.claimed, f.hash)
 	p.mu.Unlock()
 	f.once.Do(func() { close(f.added) })
 	close(f.done)
@@ -97,7 +102,7 @@ func (p *Prefetcher) setTorrent(f *inFlightFetch, rec store.TorrentRecord) {
 	}
 }
 
-// Fetching is the torrent a fetch of this episode has added and is still warming; play takes it over.
+// Fetching is the torrent a fetch is still warming; play takes it over, and the fetch leaves it alone.
 func (p *Prefetcher) Fetching(animeID, episode int) (store.TorrentRecord, bool) {
 	if p == nil {
 		return store.TorrentRecord{}, false
@@ -108,7 +113,14 @@ func (p *Prefetcher) Fetching(animeID, episode int) (store.TorrentRecord, bool) 
 	if f == nil || f.rec.InfoHash == "" {
 		return store.TorrentRecord{}, false
 	}
+	f.taken = true
 	return f.rec, true
+}
+
+func (p *Prefetcher) takenOver(f *inFlightFetch) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return f.taken
 }
 
 // inFlight is the fetch of this episode under way, nil when there is none.
@@ -124,13 +136,30 @@ func (p *Prefetcher) WithRoom(room func(ctx context.Context, need int64, animeID
 	return p
 }
 
-func (p *Prefetcher) claim(hash string) {
+func (p *Prefetcher) claim(f *inFlightFetch, hash string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.claimed == nil {
 		p.claimed = map[string]bool{}
 	}
-	p.claimed[strings.ToLower(hash)] = true
+	f.hash = strings.ToLower(hash)
+	p.claimed[f.hash] = true
+}
+
+// claimWhile claims a hash until the returned func runs.
+func (p *Prefetcher) claimWhile(hash string) func() {
+	hash = strings.ToLower(hash)
+	p.mu.Lock()
+	if p.claimed == nil {
+		p.claimed = map[string]bool{}
+	}
+	p.claimed[hash] = true
+	p.mu.Unlock()
+	return func() {
+		p.mu.Lock()
+		delete(p.claimed, hash)
+		p.mu.Unlock()
+	}
 }
 
 func (p *Prefetcher) Claimed(hash string) bool {
@@ -142,6 +171,9 @@ func (p *Prefetcher) Claimed(hash string) bool {
 // Resolved as an episode starts, taken when it ends, so it must outlast one.
 // Play still warms it, so a stale pick costs one failed candidate.
 const preparedTTL = 4 * time.Hour
+
+// preparedFresh is how long a resolved release is not worth resolving again.
+var preparedFresh = 30 * time.Minute
 
 type preparedRelease struct {
 	result score.Result
@@ -237,8 +269,7 @@ func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences)
 // A prefetch idle this long is no longer waited on.
 const prefetchStall = 3 * time.Minute
 
-// Prepare resolves the episode after this one. Doing the indexer search and
-// metadata lookup now makes pressing next immediate later.
+// Prepare resolves the next episode now, so pressing Next later is immediate.
 func (p *Prefetcher) Prepare(animeID, episode, season int, prefs score.Preferences) {
 	if p == nil {
 		return
@@ -283,6 +314,11 @@ func (p *Prefetcher) resolveAsync(animeID, episode, season int, prefs score.Pref
 		p.mu.Unlock()
 		return
 	}
+	// Resolved a moment ago: every visit to the series page would otherwise search every indexer again.
+	if got, ok := p.prepared[key]; ok && time.Since(got.at) < preparedFresh {
+		p.mu.Unlock()
+		return
+	}
 	done := make(chan struct{})
 	p.running[key] = done
 	p.mu.Unlock()
@@ -296,8 +332,7 @@ func (p *Prefetcher) resolveAsync(animeID, episode, season int, prefs score.Pref
 		p.mu.Lock()
 		delete(p.running, key)
 		if err != nil {
-			// Expired marks are only ever read to be ignored; drop them so a long
-			// session does not accumulate one per failed episode.
+			// Expired marks are dropped, or a long session keeps one per failed episode.
 			for k, at := range p.attempted {
 				if time.Since(at) >= prepareRetry {
 					delete(p.attempted, k)
@@ -372,9 +407,8 @@ func (p *Prefetcher) prepare(ctx context.Context, animeID, episode, season int, 
 		return nil
 	}
 
-	// A file already in the library plays without a torrent at all, so
-	// searching the indexers for it is work with no possible use.
-	if f, err := p.store.LocalEpisode(ctx, animeID, episode); err == nil && f.ID != 0 {
+	// A library file plays without a torrent, so there's nothing to search for.
+	if _, ok := localCopy(ctx, p.store, p.log, animeID, episode); ok {
 		return nil
 	}
 
@@ -413,8 +447,15 @@ func (p *Prefetcher) storePrepared(animeID, episode int, r score.Result) {
 	p.prepared[prepareKey(animeID, episode)] = preparedRelease{result: r, at: now}
 }
 
-// TakePrepared returns and forgets a release resolved ahead of time, so play can
-// skip the indexer search. A stale one is treated as absent.
+// takePreparedUnless leaves the resolved release where it is when a release was picked by hand.
+func (p *Prefetcher) takePreparedUnless(animeID, episode int, picked bool) (score.Result, bool) {
+	if picked {
+		return score.Result{}, false
+	}
+	return p.TakePrepared(animeID, episode)
+}
+
+// TakePrepared hands play a release resolved ahead, once; a stale one counts as absent.
 func (p *Prefetcher) TakePrepared(animeID, episode int) (score.Result, bool) {
 	if p == nil {
 		return score.Result{}, false
@@ -477,6 +518,9 @@ func (p *Prefetcher) download(ctx context.Context, animeID, episode, season int,
 		case !running:
 			return nil
 		default:
+			// Claimed while it runs, so a startup quieting of unfinished torrents leaves it be.
+			done := p.claimWhile(rec.InfoHash)
+			defer done()
 			return p.awaitOrStop(ctx, id, stall)
 		}
 	}
@@ -493,12 +537,56 @@ func (p *Prefetcher) download(ctx context.Context, animeID, episode, season int,
 func (p *Prefetcher) awaitOrStop(ctx context.Context, id int, stall time.Duration) error {
 	err := p.torrent.Await(ctx, id, stall)
 	if err != nil && !errors.Is(err, torrent.ErrPaused) {
-		p.log.Info("stopping a download that did not finish", "torrent", id, "reason", err)
-		if perr := p.torrent.Pause(context.WithoutCancel(ctx), id); perr != nil {
-			p.log.Warn("stop abandoned download", "torrent", id, "err", perr)
-		}
+		p.stop(context.WithoutCancel(ctx), id, "did not finish", err)
 	}
 	return err
+}
+
+// stop pauses a download the fetch gives up on, unless it is playing: a paused torrent freezes its stream.
+func (p *Prefetcher) stop(ctx context.Context, id int, what string, reason error) {
+	if p.playing(ctx, id) {
+		p.log.Info("leaving a download that "+what+" running: it is playing", "torrent", id, "reason", reason)
+		return
+	}
+	p.log.Info("stopping a download that "+what, "torrent", id, "reason", reason)
+	if err := p.torrent.Pause(ctx, id); err != nil {
+		p.log.Warn("stop abandoned download", "torrent", id, "err", err)
+	}
+}
+
+// playing reports a torrent whose episode is pinned: a stream has it open.
+func (p *Prefetcher) playing(ctx context.Context, id int) bool {
+	d, err := p.torrent.Details(ctx, id)
+	if err != nil {
+		return false
+	}
+	entries, err := p.store.CacheEntries(ctx)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Pinned && strings.EqualFold(e.InfoHash, d.InfoHash) {
+			return true
+		}
+	}
+	return false
+}
+
+// localCopy is the episode's library file if still on disk; a row whose file went is marked missing now.
+func localCopy(ctx context.Context, st *store.Store, log *slog.Logger, animeID, episode int) (store.LocalFile, bool) {
+	for {
+		f, err := st.LocalEpisode(ctx, animeID, episode)
+		if err != nil || f.ID == 0 {
+			return store.LocalFile{}, false
+		}
+		if _, err := os.Stat(f.Path); err == nil {
+			return f, true
+		}
+		log.Warn("library file gone; marking it missing", "path", f.Path)
+		if err := st.MarkLocalMissing(ctx, f.ID); err != nil {
+			return store.LocalFile{}, false
+		}
+	}
 }
 
 var errNotInEngine = errors.New("not held by the engine")
@@ -521,7 +609,6 @@ func (p *Prefetcher) resume(ctx context.Context, rec store.TorrentRecord) (id in
 		return id, false, nil
 	}
 
-	p.claim(rec.InfoHash)
 	if err := p.torrent.Start(ctx, id); err != nil {
 		p.log.Debug("resume part-downloaded episode", "torrent", id, "err", err)
 	}
@@ -546,8 +633,7 @@ func (p *Prefetcher) inEngine(ctx context.Context, animeID, episode int) bool {
 // Dead swarms cost the inspect timeout each; three is enough to get past them.
 const fetchAttempts = 3
 
-// How long a queued download may take for its first bytes: a slow swarm's first big piece, not forever.
-// Shrunk in tests.
+// How long a queued download may take for its first bytes (a slow swarm's first piece); shrunk in tests.
 var prefetchWarmCap = 5 * time.Minute
 
 // ErrSeedersSilent: peers answered the handshake and then sent nothing in all of prefetchWarmCap.
@@ -575,12 +661,11 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 	prior, _ := p.held(ctx, animeID, episode)
 
 	// Already in the library: downloading a copy of a file on disk is waste.
-	if f, err := p.store.LocalEpisode(ctx, animeID, episode); err == nil && f.ID != 0 {
+	if _, ok := localCopy(ctx, p.store, p.log, animeID, episode); ok {
 		return 0, false, nil
 	}
 
-	// Never let a prefetch push the cache over budget: the episode playing now
-	// matters more than the one that might play next.
+	// A prefetch never pushes the cache over budget: what plays now beats what might play next.
 	var usage store.CacheUsage
 	if !keep {
 		var err error
@@ -660,6 +745,8 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			EpKey:     epKey(episode),
 			FileIndex: index,
 			FilePath:  file.Name,
+			// Chosen by hand: the identity check does not get to replace it.
+			Manual: pick != "",
 		}
 	}
 
@@ -684,7 +771,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 	// keepDead records a torrent whose swarm gave nothing too, so the later try resumes it and the
 	// list shows it under its episode; false drops it, for a release the search is about to replace.
 	start := func(keepDead bool) error {
-		p.claim(best.Torrent.InfoHash)
+		p.claim(flight, best.Torrent.InfoHash)
 		p.setTorrent(flight, torrentRecord())
 		err := p.torrent.WaitLive(ctx, added.ID, 2*time.Minute)
 		if err == nil {
@@ -695,6 +782,10 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 				err = fmt.Errorf("%w: %v", ErrSeedersSilent, err)
 			}
+		}
+		// Play took the torrent over meanwhile: it is play's to warm, pause or drop, not this fetch's.
+		if err != nil && p.takenOver(flight) {
+			return errOvertaken
 		}
 		if err != nil && (ctx.Err() != nil || keepDead) {
 			// Interrupted, or dead for now: recorded, kept if asked for, so the retry resumes this very
@@ -710,10 +801,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 		}
 		if err != nil {
 			// Cancelled or dead half way: stopped, not left fetching unrecorded.
-			p.log.Info("stopping a download that did not start", "torrent", added.ID, "reason", err)
-			if perr := p.torrent.Pause(context.WithoutCancel(ctx), added.ID); perr != nil {
-				p.log.Warn("stop abandoned download", "torrent", added.ID, "err", perr)
-			}
+			p.stop(context.WithoutCancel(ctx), added.ID, "did not start", err)
 		}
 		return err
 	}
@@ -722,7 +810,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 	if pick == "" {
 		p.awaitResolve(ctx, animeID, episode, time.After(prepareWait))
 	}
-	if rel, ok := p.TakePrepared(animeID, episode); ok && pick == "" {
+	if rel, ok := p.takePreparedUnless(animeID, episode, pick != ""); ok {
 		if err := addFirst([]score.Result{rel}); err != nil {
 			// Refused for space, not for being bad: play still wants it when the episode starts.
 			p.storePrepared(animeID, episode, rel)
@@ -730,7 +818,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 		}
 		if added != nil {
 			err := start(false)
-			if err != nil && ctx.Err() != nil {
+			if err != nil && (ctx.Err() != nil || errors.Is(err, errOvertaken)) {
 				return 0, false, err
 			}
 			if err != nil {

@@ -14,7 +14,7 @@ func TestUnknownMemberSortsLast(t *testing.T) {
 	s.w.ExecContext(ctx, `UPDATE anime SET start_date = '2020-01-01' WHERE id = 50`)
 	s.w.ExecContext(ctx, `UPDATE anime SET start_date = '2022-01-01' WHERE id = 60`)
 
-	if err := s.SaveRelations(ctx, []Relation{
+	if err := s.SaveRelations(ctx, nil, []Relation{
 		{AnimeID: 50, RelatedID: 60, Kind: "SEQUEL"},
 		{AnimeID: 60, RelatedID: 7, Kind: "SEQUEL"},
 	}); err != nil {

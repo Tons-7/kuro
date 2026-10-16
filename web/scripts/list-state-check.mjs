@@ -1,6 +1,4 @@
-// A card has to show the list tag it already carries: a completed show reads
-// "Completed", not "Add to list". And a long-runner with no announced total
-// still shows how far along it is.
+// A card shows its list tag ("Completed", not "Add to list") and a long-runner's progress.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -36,9 +34,7 @@ check(!!item, 'the show is in the browse results')
 check(item?.onList === true, 'the API says it is on the list')
 check(item?.listStatus === 'COMPLETED', 'the API says which list', String(item?.listStatus))
 
-// Home's rails come from a different endpoint, which used to build its cards
-// with its own copy of the code and forget the list tag. Tag one of its own
-// results so the assertion cannot pass by finding nothing.
+// Home's rails come from another endpoint; tag one of its results so the check can't pass on nothing.
 const trending = await (await fetch(`${BASE}/api/discover?sort=trending&perPage=20`)).json()
 const pick = (trending.items ?? [])[0]
 check(!!pick, 'the home rail returned something to tag')

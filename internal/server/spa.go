@@ -31,13 +31,11 @@ func spa(assets fs.FS) http.Handler {
 			return
 		}
 
-		// assets/ names carry a content hash, so cache hard. index.html must never
-		// be, or a new build keeps loading the previous bundle.
+		// Hashed assets/ cache hard; index.html never, or a new build loads the old bundle.
 		if strings.HasPrefix(name, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
-		// Go does not know this extension, and a manifest served as plain text
-		// is ignored, so the app cannot be installed to a home screen.
+		// Go doesn't know this extension, and a plain-text manifest blocks installing the app.
 		if strings.HasSuffix(name, ".webmanifest") {
 			w.Header().Set("Content-Type", "application/manifest+json")
 		}
@@ -57,8 +55,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(string(page)))
 }
 
-// apiOnly answers when no frontend was built into the binary, so the failure
-// reads as "run npm build" rather than a bare 404.
+// apiOnly answers when no frontend was built in, saying "run npm build" instead of a bare 404.
 func apiOnly() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusNotFound, map[string]any{

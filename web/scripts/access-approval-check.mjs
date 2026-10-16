@@ -1,5 +1,4 @@
-// Restricted access and HTTPS, end to end: a "phone" reaches kuro by the
-// certificate's name, waits, and gets in once the host accepts it on its own page.
+// A "phone" reaches kuro over HTTPS by name, waits, and gets in once the host accepts it.
 // Needs KURO_EXTRA_CONFIG with tls_cert/tls_key for a certificate naming phone.test.
 import { chromium } from 'playwright'
 

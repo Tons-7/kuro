@@ -18,14 +18,12 @@ func TestExeNameSuffixesOnlyOnWindows(t *testing.T) {
 	}
 }
 
-// Tool prefers a binary kuro downloaded into bin/, then one on PATH, so a
-// system install (brew/apt) works with nothing in bin/.
+// Tool prefers bin/, then PATH, so a brew/apt install works with nothing in bin/.
 func TestToolPrefersBinThenPath(t *testing.T) {
 	bin := t.TempDir()
 	c := Config{BinDir: bin}
 
-	// A tool nowhere falls back to the bin path, so an error names where kuro
-	// looked rather than an empty string.
+	// A tool found nowhere gives the bin path, so an error names where kuro looked.
 	if got := c.Tool("nedb-nonesuch"); got != filepath.Join(bin, ExeName("nedb-nonesuch")) {
 		t.Errorf("missing tool = %q, want the bin path", got)
 	}

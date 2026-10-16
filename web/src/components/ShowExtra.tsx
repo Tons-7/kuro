@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { TrailerOverlay, youtubeID } from './TrailerOverlay'
 
 interface Theme {
   title: string
@@ -22,54 +21,28 @@ interface Extra {
   trailer?: string
 }
 
-/**
- * Theme songs, credits, and a trailer — fixed once aired, and off the detail
- * payload because it costs two more upstream requests.
- */
-export function ShowExtra({ animeId }: { animeId: number }) {
-  const [trailer, setTrailer] = useState(false)
-  const { data } = useQuery({
+/** A show's themes, staff and trailer, fetched apart from the details as two more requests. */
+export function useAnimeExtra(animeId: number) {
+  return useQuery({
     enabled: animeId > 0,
     queryKey: ['anime-extra', animeId],
     queryFn: () => api.get<Extra>(`/api/anime/${animeId}/extra`),
     staleTime: 12 * 60 * 60_000,
   })
+}
+
+/** Theme songs and credits; the trailer is the hero's Trailer button. */
+export function ShowExtra({ animeId }: { animeId: number }) {
+  const { data } = useAnimeExtra(animeId)
 
   const openings = data?.openings ?? []
   const endings = data?.endings ?? []
   const staff = data?.staff ?? []
-  // A trailer alone still earns the section; without it the button vanished
-  // for every show missing themes and staff.
-  if (openings.length === 0 && endings.length === 0 && staff.length === 0 && !data?.trailer) return null
+  if (openings.length === 0 && endings.length === 0 && staff.length === 0) return null
 
   return (
     <section className="space-y-3">
-      <div className="flex items-baseline justify-between">
-        <h2 className="section-title">
-          {openings.length + endings.length + staff.length > 0 ? 'Music & staff' : 'Trailer'}
-        </h2>
-        {data?.trailer &&
-          (youtubeID(data.trailer) ? (
-            <button
-              onClick={() => setTrailer(true)}
-              className="text-sm text-accent-400 transition-colors hover:text-accent-300"
-            >
-              Watch the trailer
-            </button>
-          ) : (
-            <a
-              href={data.trailer}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-accent-400 transition-colors hover:text-accent-300"
-            >
-              Watch the trailer
-            </a>
-          ))}
-      </div>
-      {trailer && youtubeID(data?.trailer) && (
-        <TrailerOverlay videoId={youtubeID(data?.trailer)!} onClose={() => setTrailer(false)} />
-      )}
+      <h2 className="section-title">Music & staff</h2>
 
       <div className="grid gap-2 lg:grid-cols-2">
         {(openings.length > 0 || endings.length > 0) && (
@@ -85,9 +58,9 @@ export function ShowExtra({ animeId }: { animeId: number }) {
             <ul className="space-y-1.5">
               {staff.slice(0, 8).map((c) => (
                 <li key={`${c.role}-${c.name}`} className="flex items-baseline gap-3 text-sm">
-                  {/* Fixed column so the names line up rather than stepping in
-                      and out with the length of each role. */}
-                  <span className="w-24 shrink-0 truncate text-xs text-base-500 sm:w-36" title={c.role}>
+                  {/* A fixed column, so names line up whatever the role's length. */}
+                  {/* Wraps on a phone, where the column is too narrow for a whole role. */}
+                  <span className="w-24 shrink-0 text-xs leading-tight text-base-500 sm:w-36 sm:truncate" title={c.role}>
                     {c.role}
                   </span>
                   <span className="min-w-0 truncate text-base-200">{c.name}</span>
@@ -122,7 +95,7 @@ function ThemeList({ label, themes }: { label: string; themes: Theme[] }) {
             </span>
             <span className="min-w-0">
               <span className="text-base-100">{t.title}</span>
-              {t.artist && <span className="text-base-400"> — {t.artist}</span>}
+              {t.artist && <span className="text-base-400"> · {t.artist}</span>}
               {t.episodes && <span className="text-base-600"> · eps {t.episodes}</span>}
             </span>
           </li>

@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// An adopted download and a later playback write two file rows for one torrent,
-// which joined plainly would list the same download twice.
+// An adopted download and a later play write two rows for one torrent, listed once.
 func TestDownloadStatusListsEachTorrentOnce(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

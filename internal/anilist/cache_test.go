@@ -29,8 +29,7 @@ func cachingServer(t *testing.T, hits *atomic.Int64) *Client {
 	return New(slog.New(slog.DiscardHandler), WithEndpoint(srv.URL), WithoutRateLimit())
 }
 
-// A week of schedule is nine requests out of a budget of thirty a minute, and
-// every page showing what airs tonight asks for it.
+// A week of schedule is nine of thirty requests a minute, and every page showing tonight asks for it.
 func TestRepeatedQueryHitsTheNetworkOnce(t *testing.T) {
 	var hits atomic.Int64
 	c := cachingServer(t, &hits)
@@ -73,23 +72,20 @@ func TestMutationIsNeverCached(t *testing.T) {
 	}
 }
 
-// Opening the app fires several identical queries at once. Without this they
-// all miss the empty cache and each spend a request.
+// Several identical queries at once share one request instead of each missing the empty cache.
 func TestConcurrentIdenticalQueriesShareOneRequest(t *testing.T) {
 	var hits atomic.Int64
 	c := cachingServer(t, &hits)
 
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var out struct{}
 			if err := c.Query(context.Background(),
 				`query Q { Page { media { id } } }`, nil, &out); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -32,8 +32,7 @@ func sentVars(t *testing.T, b Browse) map[string]any {
 	return vars
 }
 
-// Every hentai title is adult, so the old isAdult:false alongside the genre
-// returned an empty page for the one filter that asks for it.
+// The Hentai genre drops isAdult:false, which emptied the one filter asking for it.
 func TestBrowseHentaiGenreIncludesAdultTitles(t *testing.T) {
 	if got := sentVars(t, Browse{Genres: []string{"Action"}})["isAdult"]; got != false {
 		t.Fatalf("isAdult = %v for a normal genre, want false", got)
@@ -52,8 +51,7 @@ func sortVar(t *testing.T, vars map[string]any) string {
 	return list[0].(string)
 }
 
-// Choosing a sort used to be dropped whenever a search term was present, so
-// the Browse page ignored every sort once something was typed.
+// A chosen sort survives a search term; it was dropped once something was typed.
 func TestBrowseKeepsTheSortTheUserChose(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -6,7 +6,7 @@ import { useFilters } from '../lib/queries'
 import { FilterMenu } from '../components/FilterMenu'
 import { StudioFilter } from '../components/StudioFilter'
 import { PosterCard, PosterGrid, toCard } from '../components/PosterCard'
-import { Button, Empty, ErrorState, PageHeader, SearchInput, Skeleton, useDebounced } from '../components/ui'
+import { Button, Empty, ErrorState, PageHeader, Pager, SearchInput, Skeleton, useDebounced } from '../components/ui'
 
 interface Vocabulary {
   genres: string[]
@@ -130,7 +130,6 @@ export function Browse() {
     const next = new URLSearchParams(params)
     next.set('page', String(n))
     setParams(next)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   // One chip per value in force, so a single one can go without reopening its menu.
@@ -184,8 +183,7 @@ export function Browse() {
 
       {/* Phone: one swipeable line. */}
       <div className="no-scrollbar flex items-center gap-2 max-sm:-mx-3 max-sm:overflow-x-auto max-sm:px-3 sm:flex-wrap">
-        {/* Genre, format and status take several values at once — the API has
-            always accepted a list; only this could not send one. */}
+        {/* Genre, format and status take several values at once. */}
         <FilterMenu
           label="Genre"
           values={csv(active.genres)}
@@ -239,7 +237,8 @@ export function Browse() {
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <span className="text-xs font-medium text-base-500 max-sm:hidden">Sort</span>
           <FilterMenu
-            label="Most popular"
+            // A typed search with no sort chosen is ordered by match, as the server does.
+            label={active.q ? 'Best match' : 'Most popular'}
             multiple={false}
             values={csv(active.sort)}
             options={vocab?.sorts ?? []}
@@ -252,7 +251,7 @@ export function Browse() {
       {/* What is narrowing the results now, each removable on its own. */}
       <div className="flex min-h-7 flex-wrap items-center gap-1.5 border-t border-white/[0.05] pt-3">
         {chips.length === 0 ? (
-          <span className="text-xs text-base-500">No filters — showing everything.</span>
+          <span className="text-xs text-base-500">No filters: showing everything.</span>
         ) : (
           chips.map((c) => (
             <button
@@ -313,18 +312,7 @@ export function Browse() {
             ))}
           </PosterGrid>
 
-          <div className="flex items-center justify-center gap-3 pt-4">
-            <PageButton disabled={page <= 1} onClick={() => goToPage(page - 1)} label="Previous" />
-            <span className="text-sm text-base-400 tabular-nums">
-              Page <span className="font-semibold text-white">{page}</span>
-              {lastPage !== undefined && ` of ${lastPage.toLocaleString()}`}
-            </span>
-            <PageButton
-              disabled={!results.data.hasMore}
-              onClick={() => goToPage(page + 1)}
-              label="Next"
-            />
-          </div>
+          <Pager page={page} hasMore={results.data.hasMore} last={lastPage} onPage={goToPage} />
         </>
       )}
     </div>
@@ -348,20 +336,4 @@ function ShuffleIcon() {
 
 function csv(value?: string): string[] {
   return value ? value.split(',').filter(Boolean) : []
-}
-
-function PageButton({
-  disabled,
-  onClick,
-  label,
-}: {
-  disabled: boolean
-  onClick: () => void
-  label: string
-}) {
-  return (
-    <Button disabled={disabled} onClick={onClick}>
-      {label}
-    </Button>
-  )
 }

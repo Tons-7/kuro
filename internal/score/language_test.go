@@ -15,8 +15,7 @@ func subCandidate(title string, seeders int) Candidate {
 	}
 }
 
-// The adult title found thirteen releases, and the Chinese fansub group
-// outscored the English one on quality and seeders alone.
+// Of thirteen releases, a Chinese fansub outscored the English one on quality and seeders alone.
 func TestEnglishBeatsChineseHardsub(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -85,8 +84,7 @@ func TestUnlabelledReleaseIsNotPenalised(t *testing.T) {
 	}
 }
 
-// The wrong language is a reason to rank lower, never a reason to refuse: for
-// some shows it is the only release that exists.
+// The wrong language ranks lower but is never refused: for some shows it's the only release.
 func TestWrongLanguageStillPlayable(t *testing.T) {
 	prefs := DefaultPreferences()
 	only := subCandidate("[Group] Show - 01 [1080p][简体内嵌]", 120)
@@ -94,5 +92,26 @@ func TestWrongLanguageStillPlayable(t *testing.T) {
 	ranked := Rank([]Candidate{only}, prefs)
 	if !ranked[0].AutoPick {
 		t.Errorf("blocked as %q; the wrong subtitles should rank down, not refuse", ranked[0].Blocked)
+	}
+}
+
+// Resolution first; within one, readable subtitles beat playability and seeders.
+func TestReadableWinsWithinAResolution(t *testing.T) {
+	prefs := DefaultPreferences()
+
+	english := subCandidate("[Group] Show - 05 [720p][English Sub]", 20)
+	chinese := subCandidate("[Group] Show - 05 [1080P][简体内嵌]", 400)
+	if ranked := Rank([]Candidate{english, chinese}, prefs); ranked[0].Torrent.Title != chinese.Torrent.Title {
+		t.Errorf("ranked first: %s, want the 1080p: resolution comes first", ranked[0].Torrent.Title)
+	}
+
+	hevc := subCandidate("[ASW] Show - 05 [1080p HEVC][English Sub]", 50)
+	cht := subCandidate("[ANi] Show - 05 [1080P][Baha][WEB-DL][AAC AVC][CHT]", 50)
+	ranked := Rank([]Candidate{cht, hevc}, prefs)
+	if ranked[0].Torrent.Title != hevc.Torrent.Title {
+		t.Errorf("ranked first: %s, want the English HEVC over the CHT-only AVC", ranked[0].Torrent.Title)
+	}
+	if !ranked[0].AutoPick || ranked[0].Playable {
+		t.Fatalf("setup: the HEVC release should be an auto-pick this machine transcodes, got %+v", ranked[0])
 	}
 }

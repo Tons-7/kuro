@@ -45,8 +45,7 @@ const (
 	FilterTrusted  Filter = 2
 )
 
-// Nyaa category codes. English-translated guarantees subtitles exist; Raw is a
-// Japanese broadcast capture with none.
+// Nyaa categories: English-translated has subtitles; Raw is a broadcast capture with none.
 const (
 	CategoryAnime          = "1_0"
 	CategoryEnglishSubbed  = "1_2"
@@ -90,8 +89,7 @@ type Multi struct {
 
 func (m Multi) Name() string { return "multi" }
 
-// Search asks every source at once. Sequentially, one slow indexer set the
-// wait for all of them, and these routinely take seconds each.
+// Search asks every source at once, so one slow indexer doesn't set the wait for all.
 func (m Multi) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	type result struct {
 		torrents []Torrent
@@ -101,15 +99,13 @@ func (m Multi) Search(ctx context.Context, q Query) ([]Torrent, error) {
 
 	var wg sync.WaitGroup
 	for i, src := range m.Sources {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			t, err := src.Search(ctx, q)
 			if err != nil {
 				err = fmt.Errorf("%s: %w", src.Name(), err)
 			}
 			results[i] = result{torrents: t, err: err}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -117,8 +113,7 @@ func (m Multi) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	var out []Torrent
 	var errs []error
 
-	// Merged in source order so the preferred indexer decides the record kept
-	// for a torrent both of them carry.
+	// Merged in source order, so the preferred indexer's record wins a shared torrent.
 	for _, r := range results {
 		if r.err != nil {
 			errs = append(errs, r.err)

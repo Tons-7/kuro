@@ -8,8 +8,7 @@ import { Skeleton } from './ui'
 
 const ROTATE_MS = 9000
 
-// How far ahead of the current slide artwork is fetched. Two rotations of lead
-// is enough for a banner to arrive on a slow connection.
+// Artwork is fetched two slides ahead, time enough on a slow connection.
 const PRELOAD = 2
 
 export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boolean }) {
@@ -49,14 +48,16 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
   if (loading) {
     return <Skeleton className="h-[clamp(22rem,46vw,34rem)] w-full rounded-2xl" />
   }
-  // Trending failed or came back empty: nothing to feature, and a skeleton
-  // that never resolves reads as broken.
+  // Trending failed or is empty: nothing to feature, and an endless skeleton reads as broken.
   if (slides.length === 0) return null
 
   const active = slides[Math.min(index, slides.length - 1)]
+  // Nothing to play: finished, unaired, or caught up with what has aired (PosterCard's rule).
+  const aired = active.nextEpisode ? active.nextEpisode - 1 : active.episodes
   const caughtUp =
     active.listStatus === 'COMPLETED' ||
-    (!!active.episodes && (active.progress ?? 0) >= active.episodes)
+    active.status === 'NOT_YET_RELEASED' ||
+    (!!aired && (active.progress ?? 0) >= aired)
 
   return (
     <section
@@ -160,8 +161,7 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
           )}
 
           <div className="mt-6 flex items-center gap-2">
-            {/* Finished or caught up: there is no next episode to link to, so
-                the show page decides (rewatch, or wait for the next one). */}
+            {/* No next episode to link to, so the show page decides. */}
             {caughtUp ? null : (
               <Link
                 to={`/watch/${active.id}/${(active.progress ?? 0) + 1}`}

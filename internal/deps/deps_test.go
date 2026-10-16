@@ -244,3 +244,25 @@ func TestRemoveObsolete(t *testing.T) {
 		t.Errorf("versions.json = %s", raw)
 	}
 }
+
+// An install a kill interrupted leaves its staging folder; the startup sweep takes it, and only it.
+func TestRemoveObsoleteSweepsInterruptedInstalls(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir, nil)
+	os.MkdirAll(filepath.Join(dir, ".install-123", "ffmpeg"), 0o755)
+	os.WriteFile(filepath.Join(dir, "mpv.exe.new"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "ffmpeg.exe"), []byte("x"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "shaders"), 0o755)
+
+	m.RemoveObsolete()
+	for _, gone := range []string{".install-123", "mpv.exe.new"} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
+			t.Errorf("%s was left behind", gone)
+		}
+	}
+	for _, kept := range []string{"ffmpeg.exe", "shaders"} {
+		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
+			t.Errorf("%s was removed", kept)
+		}
+	}
+}

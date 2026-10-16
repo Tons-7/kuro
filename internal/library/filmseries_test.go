@@ -80,7 +80,7 @@ func gardenStore(t *testing.T) *store.Store {
 		rels = append(rels, store.Relation{AnimeID: chain[i-1], RelatedID: chain[i], Kind: "SEQUEL"})
 	}
 	rels = append(rels, store.Relation{AnimeID: knkFuture, RelatedID: knkChorus, Kind: "SIDE_STORY"})
-	if err := st.SaveRelations(ctx, rels); err != nil {
+	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.RebuildFranchises(ctx); err != nil {
@@ -280,7 +280,7 @@ func TestFilmAttachedToAShowIsSearchedAsBefore(t *testing.T) {
 	rels := []store.Relation{
 		{AnimeID: 1, RelatedID: 2, Kind: "SEQUEL"}, {AnimeID: 2, RelatedID: 3, Kind: "SEQUEL"},
 	}
-	if err := st.SaveRelations(ctx, rels); err != nil {
+	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.RebuildFranchises(ctx); err != nil {
@@ -362,7 +362,7 @@ func TestSearchLearnsTheSeriesBeforeLooking(t *testing.T) {
 	asked := 0
 	f.WithFranchise(func(ctx context.Context, id int) error {
 		asked++
-		if err := st.SaveRelations(ctx, []store.Relation{{AnimeID: knkCh1, RelatedID: knkCh6, Kind: "SEQUEL"}}); err != nil {
+		if err := st.SaveRelations(ctx, nil, []store.Relation{{AnimeID: knkCh1, RelatedID: knkCh6, Kind: "SEQUEL"}}); err != nil {
 			return err
 		}
 		_, err := st.RebuildFranchises(ctx)
@@ -415,5 +415,29 @@ func TestWholeSeriesSpotsABatchOfEveryFilm(t *testing.T) {
 		if got := wholeSeries.MatchString(name); got != want {
 			t.Errorf("%q = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// A film shipped with extras: the film is the big one, and a trailer under Extras never plays as it.
+func TestStandaloneFilmWithExtrasPlaysTheFilm(t *testing.T) {
+	own := score.Result{Candidate: score.Candidate{Numbers: []int{1}, Episode: 1, TotalEpisodes: 1}}
+	files := []torrent.File{
+		{Name: "Film/Extras/[G] Film - Trailer 01.mkv", Length: 40 << 20},
+		{Name: "Film/Extras/[G] Film - Trailer 02.mkv", Length: 40 << 20},
+		{Name: "Film/Extras/menu.mkv", Length: 30 << 20},
+		{Name: "Film/[G] Film (2016) [BD 1080p].mkv", Length: 8 << 30},
+	}
+	if file, _, ok := pickFile(files, own); !ok || file.Name != "Film/[G] Film (2016) [BD 1080p].mkv" {
+		t.Errorf("picked %q, %v", file.Name, ok)
+	}
+	// A batch gets no such benefit: its big file may be any film.
+	batch := own
+	batch.Release.Batch = true
+	unnamed := []torrent.File{{Name: "a.mkv", Length: 8 << 30}, {Name: "b.mkv", Length: 7 << 30}}
+	if _, _, ok := pickFile(unnamed, batch); ok {
+		t.Error("a batch's largest file was taken on trust")
+	}
+	if file, _, ok := pickFile(unnamed, own); !ok || file.Name != "a.mkv" {
+		t.Errorf("own release: picked %q, %v", file.Name, ok)
 	}
 }

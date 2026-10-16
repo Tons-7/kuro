@@ -217,8 +217,7 @@ func TestPaginationReportsMore(t *testing.T) {
 	}
 }
 
-// Local state references anime(id), but that table only holds the imported
-// list. Following anything from the wider corpus has to work.
+// Local state references anime(id), yet following a corpus-only show works.
 func TestLocalStateWorksForCorpusOnlyAnime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"kuro/internal/torrent"
@@ -16,6 +17,21 @@ import (
 // How far a stream reads ahead of the player: a few seconds of a 1080p
 // episode, enough to ride out a slow block without starving other files.
 const streamReadahead = 16 << 20
+
+// guard keeps the API to kuro, ffmpeg and mpv: no browser headers or rebound name, and the secret off the streams.
+func (e *Engine) guard(addr string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("Sec-Fetch-Mode") != "" || r.Host != addr {
+			http.Error(w, "not for browsers", http.StatusForbidden)
+			return
+		}
+		if !strings.Contains(r.URL.Path, "/stream/") && r.Header.Get(torrent.SecretHeader) != e.secret {
+			http.Error(w, "missing engine secret", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (e *Engine) routes() http.Handler {
 	mux := http.NewServeMux()
@@ -100,7 +116,7 @@ func (e *Engine) handleList(w http.ResponseWriter, r *http.Request) {
 	e.mu.Lock()
 	list := make([]item, 0, len(e.byID))
 	for _, en := range e.byID {
-		list = append(list, item{en.id, en.t.InfoHash().HexString(), en.t.Name(), outputFolder(e.opts.CacheDir, en.t)})
+		list = append(list, item{en.id, en.t.InfoHash().HexString(), en.t.Name(), e.names.folder(en.t)})
 	}
 	e.mu.Unlock()
 	reply(w, map[string]any{"torrents": list})

@@ -198,7 +198,7 @@ func TestStudioListIsFetchedOnceAndKept(t *testing.T) {
 func TestStudioFirstPageIsAnsweredBeforeTheListIsWhole(t *testing.T) {
 	h, asked := studioHarness(t)
 	ids, body := browseIDs(t, h, "/api/browse?studio=569&sort=score")
-	if fmt.Sprint(ids) != "[1 2]" || body["total"] != 6.0 || body["hasMore"] != true {
+	if fmt.Sprint(ids) != "[1 2]" || body["total"] != 5.0 || body["hasMore"] != true {
 		t.Fatalf("first page: items %v, total %v, more %v; want the catalogue's own first page", ids, body["total"], body["hasMore"])
 	}
 	first := asked()

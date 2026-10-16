@@ -1,5 +1,4 @@
-// Screenshots of every page at desktop and phone width, for reviewing the UI,
-// and a check that none of them throws or scrolls sideways.
+// Every page at desktop and phone width: screenshots for review, and none throws or scrolls sideways.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'

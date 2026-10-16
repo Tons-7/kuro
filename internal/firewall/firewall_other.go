@@ -11,9 +11,7 @@ import (
 	"strings"
 )
 
-// Check only looks, and never needs root. Most Linux desktops run no firewall;
-// Fedora (firewalld) and some Ubuntu installs (ufw) do and block the port.
-// macOS asks on its own the first time kuro listens beyond loopback.
+// Check only looks, never needing root: firewalld or ufw may block the port; macOS asks on its own.
 func Check(ctx context.Context, port int, _ string) (Status, error) {
 	switch runtime.GOOS {
 	case "linux":

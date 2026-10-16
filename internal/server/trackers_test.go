@@ -3,12 +3,16 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"kuro/internal/config"
+	"kuro/internal/library"
+	"kuro/internal/mal"
 	"kuro/internal/store"
 )
 
@@ -134,6 +138,35 @@ func TestTrackerSecretIsNeverReturned(t *testing.T) {
 	}
 	if !store.Secret("anilist.client_secret") {
 		t.Fatal("anilist.client_secret is not classified as a secret")
+	}
+}
+
+// A token MAL refused reads as "reconnect", and a new login or a logout clears it.
+func TestMALRefusalReadsAsReconnect(t *testing.T) {
+	client := mal.New(slog.New(slog.NewTextHandler(io.Discard, nil)), mal.WithCredentials("id", ""))
+	client.SetToken(mal.Token{Access: "acc", Refresh: "ref"})
+	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil, func(d *Deps) { d.MAL = client })
+	ctx := t.Context()
+
+	if got := trackerByName(t, h, "mal")["reconnect"]; got != false {
+		t.Fatalf("reconnect = %v with a working token", got)
+	}
+	h.store.SetSetting(ctx, library.MALAuthErrorSetting, "true")
+	if got := trackerByName(t, h, "mal"); got["reconnect"] != true || got["connected"] != true {
+		t.Fatalf("entry = %v, want connected but asking for a reconnect", got)
+	}
+
+	if err := h.server.saveMALToken(ctx, mal.Token{Access: "new"}, "tony"); err != nil {
+		t.Fatal(err)
+	}
+	if got := trackerByName(t, h, "mal")["reconnect"]; got != false {
+		t.Fatal("a new login should clear the reconnect flag")
+	}
+
+	h.store.SetSetting(ctx, library.MALAuthErrorSetting, "true")
+	h.do(t, "POST", "/api/mal/auth/logout")
+	if v, _ := h.store.Setting(ctx, library.MALAuthErrorSetting); v != "" || client.Authenticated() {
+		t.Fatalf("after logout flag=%q authenticated=%v", v, client.Authenticated())
 	}
 }
 

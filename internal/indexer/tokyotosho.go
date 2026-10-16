@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	// Every uncached search waits on this source too, so it is paced like the
-	// aggregator it replaced rather than like Nyaa.
+	// Every uncached search waits on it too, so it is paced like the aggregator it replaced.
 	tokyoDelay = 1200 * time.Millisecond
 
 	// rss.php's category filter. 1 is Anime.
@@ -109,8 +108,7 @@ func (t *TokyoTosho) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		return nil, err
 	}
 
-	// A query with no matches answers with the closing tags alone, which is not
-	// a document. No items is no results, not a failure.
+	// No matches answers closing tags alone, not a document: no results, not a failure.
 	if !bytes.Contains(body, []byte("<item>")) {
 		return nil, nil
 	}

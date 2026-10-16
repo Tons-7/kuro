@@ -157,8 +157,7 @@ func TestMPVSeek(t *testing.T) {
 	}
 }
 
-// The whole point of auto-skip: the controller watches position and jumps the
-// range without the user touching anything.
+// Auto-skip: the controller watches position and jumps the range untouched.
 func TestMPVAutoSkip(t *testing.T) {
 	mpv, ffmpeg := binaries(t)
 	clip := testClip(t, ffmpeg, 30)

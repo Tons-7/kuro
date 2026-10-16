@@ -87,9 +87,7 @@ func orDash(s string) string {
 	return s
 }
 
-// importLibrary merges a file exported here, or a MyAnimeList export. Anything
-// already watched further stays where it is; what applies is queued for the
-// trackers.
+// importLibrary merges a kuro or MAL export; progress never goes back, and changes queue for the trackers.
 func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {

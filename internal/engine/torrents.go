@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,11 +79,10 @@ func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, er
 	if managed {
 		return e.detail(en), nil
 	}
-	return detailOf(in.t, e.opts.CacheDir, nil), nil
+	return detailOf(in.t, e.names, nil), nil
 }
 
-// add starts a torrent, or adds files to one already held: either way the
-// files matching only are selected and the rest kept as they were.
+// add starts a torrent or adds to one held, selecting the files matching only, the rest as they were.
 func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	hash, trackers, err := hashOf(magnet)
 	if err != nil {
@@ -130,12 +130,10 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	return en, nil
 }
 
-// forgetMissing clears completion records for pieces whose file is gone (the
-// cache or the user deleted it), or later writes extending the file would
-// make those records look true over zero-filled holes.
+// forgetMissing clears records of deleted files' pieces, or a regrown file would pass zero-filled holes.
 func (e *Engine) forgetMissing(t *atorrent.Torrent) {
 	for _, f := range t.Files() {
-		if _, err := os.Stat(filePath(e.opts.CacheDir, t, f)); err == nil {
+		if _, err := os.Stat(e.names.filePath(t, f)); err == nil {
 			continue
 		}
 		for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
@@ -163,7 +161,7 @@ func (e *Engine) apply(en *entry) {
 		return
 	}
 	e.mu.Lock()
-	selected := maps(en.selected)
+	selected := maps.Clone(en.selected)
 	paused := en.paused
 	e.mu.Unlock()
 	for i, f := range en.t.Files() {
@@ -178,14 +176,6 @@ func (e *Engine) apply(en *entry) {
 	} else {
 		en.t.AllowDataDownload()
 	}
-}
-
-func maps(m map[int]bool) map[int]bool {
-	out := make(map[int]bool, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 func (e *Engine) setPaused(en *entry, paused bool) {
@@ -207,18 +197,24 @@ func (e *Engine) remove(en *entry, data bool) error {
 	var paths []string
 	var pieces int
 	if info := en.t.Info(); info != nil && data {
+		// A file another held torrent maps to is its now, whatever the names say.
+		others := e.held()
 		for _, f := range en.t.Files() {
-			paths = append(paths, filePath(e.opts.CacheDir, en.t, f))
+			if p := e.names.filePath(en.t, f); !e.names.shared(p, en.t.InfoHash(), others) {
+				paths = append(paths, p)
+			}
 		}
 		pieces = info.NumPieces()
 	}
 	hash := en.t.InfoHash()
+	folder := e.names.folder(en.t)
 	en.t.Drop()
 	<-en.t.Closed()
 
 	os.Remove(filepath.Join(e.opts.SessionDir, hash.HexString()+".torrent"))
 	e.saveSession()
 	if !data {
+		e.names.forget(hash)
 		return nil
 	}
 	// Completion would otherwise claim pieces whose bytes are gone.
@@ -231,13 +227,25 @@ func (e *Engine) remove(en *entry, data bool) error {
 			failed = append(failed, p)
 		}
 	}
-	if folder := outputFolder(e.opts.CacheDir, en.t); folder != filepath.Clean(e.opts.CacheDir) {
+	if folder != filepath.Clean(e.opts.CacheDir) {
 		removeEmptyDirs(folder)
 	}
+	e.names.forget(hash)
 	if len(failed) > 0 {
 		return fmt.Errorf("could not remove %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// held lists the torrents the engine manages.
+func (e *Engine) held() []*atorrent.Torrent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]*atorrent.Torrent, 0, len(e.byID))
+	for _, en := range e.byID {
+		out = append(out, en.t)
+	}
+	return out
 }
 
 // removeEmptyDirs deletes dir and empty folders below it, leaving any with files.
@@ -269,29 +277,15 @@ func components(t *atorrent.Torrent, f *atorrent.File) []string {
 	return slices.Clone(fi.BestPath())
 }
 
-// outputFolder is where a torrent's files go: the cache for one file, a folder
-// named after the torrent for several.
-func outputFolder(cacheDir string, t *atorrent.Torrent) string {
-	info := t.Info()
-	if info == nil || !info.IsDir() {
-		return filepath.Clean(cacheDir)
-	}
-	return filepath.Join(cacheDir, info.BestName())
-}
-
-func filePath(cacheDir string, t *atorrent.Torrent, f *atorrent.File) string {
-	return filepath.Join(append([]string{outputFolder(cacheDir, t)}, components(t, f)...)...)
-}
-
 func (e *Engine) detail(en *entry) torrent.Detail {
 	e.mu.Lock()
-	selected := maps(en.selected)
+	selected := maps.Clone(en.selected)
 	e.mu.Unlock()
-	return detailOf(en.t, e.opts.CacheDir, selected)
+	return detailOf(en.t, e.names, selected)
 }
 
-func detailOf(t *atorrent.Torrent, cacheDir string, selected map[int]bool) torrent.Detail {
-	d := torrent.Detail{InfoHash: t.InfoHash().HexString(), Name: t.Name(), OutputFolder: outputFolder(cacheDir, t)}
+func detailOf(t *atorrent.Torrent, names *layout, selected map[int]bool) torrent.Detail {
+	d := torrent.Detail{InfoHash: t.InfoHash().HexString(), Name: t.Name(), OutputFolder: names.folder(t)}
 	if t.Info() == nil {
 		return d
 	}
@@ -310,7 +304,7 @@ func detailOf(t *atorrent.Torrent, cacheDir string, selected map[int]bool) torre
 func (e *Engine) stats(en *entry) torrent.Stats {
 	var s torrent.Stats
 	e.mu.Lock()
-	selected := maps(en.selected)
+	selected := maps.Clone(en.selected)
 	paused, verifying, failure := en.paused, en.verifying, en.err
 	e.mu.Unlock()
 

@@ -14,8 +14,7 @@ import (
 	"testing"
 )
 
-// These downloads are executed, so a body that does not match the digest the
-// source published must never reach bin/.
+// A download not matching its published digest never reaches bin/: these get executed.
 func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 	const body = "not really ffmpeg"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

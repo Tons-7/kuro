@@ -23,6 +23,8 @@ import { PlayIcon } from '../components/PosterCard'
 import { buttonClass, Spinner, useDismiss } from '../components/ui'
 import { useAnime4K, type UpscaleTier } from './anime4k'
 import {
+  skipKind,
+  untilWatching,
   useAutoSkip,
   useDocumentPiP,
   useEmbeddedFonts,
@@ -36,8 +38,18 @@ import {
   type Sheet,
 } from './hooks'
 
-// A source swap loads the element paused without a pause event; playback that
-// was running carries on once the new source can play.
+// An iPhone has no element fullscreen, only the video's own.
+function toggleFullscreen(shell: HTMLElement | null, video: HTMLVideoElement | null) {
+  if (document.fullscreenElement) {
+    void document.exitFullscreen().catch(() => {})
+  } else if (shell?.requestFullscreen) {
+    void shell.requestFullscreen().catch(() => {})
+  } else {
+    ;(video as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null)?.webkitEnterFullscreen?.()
+  }
+}
+
+// A source swap loads the element paused with no pause event; what was playing resumes once it can.
 function resumeAfterRebuild(video: HTMLVideoElement | null, wasPlaying: boolean) {
   if (!video || !wasPlaying) return
   video.addEventListener('canplay', () => void video.play().catch(() => {}), { once: true })
@@ -59,15 +71,10 @@ const LANGUAGE_TAGS: Record<string, string[]> = {
   vi: ['vi', 'vie', 'vietnamese'],
   th: ['th', 'tha', 'thai'],
 }
-// A signs-and-songs track translates only on-screen text; playing it by default
-// looks like broken subtitles rather than the wrong track.
+// A signs-and-songs track by default looks like broken subtitles, not the wrong track.
 const SIGNS = /\b(signs?|songs?|s&s|forced)\b/i
 
-/**
- * Which track to show: the first preferred language that has one, dialogue
- * over signs. The file's default flag is trusted last: multi-language releases
- * often flag one arbitrarily, not the one anyone here can read.
- */
+/** The track to show: first preferred language, dialogue over signs; the file's default flag comes last. */
 export function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en']): SubtitleTrack {
   const dialogue = (t: SubtitleTrack) => !SIGNS.test(t.title ?? '')
   const speaks = (code: string) => (t: SubtitleTrack) =>
@@ -91,8 +98,7 @@ export function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en'
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
 
-// Volume, mute, speed and subtitle size carry from episode to episode; the
-// element itself starts every page at full volume.
+// Volume, mute, speed and subtitle size carry over; the element alone starts at full volume.
 const PERSIST_KEY = 'kuro.player'
 interface Persisted {
   volume?: number
@@ -139,8 +145,11 @@ export interface PlayerProps {
   sound?: { options: SoundOptions; onChange: (next: SoundOptions) => void }
   title: string
   subtitle?: string
+  /** The show's cover, for the system's media controls. */
+  artwork?: string
   /** played is media time that actually played since the last report. */
-  onProgress: (position: number, duration: number, played: number) => void
+  /** final: the episode's last report (its end, Next, leaving the page), worth waiting on. */
+  onProgress: (position: number, duration: number, played: number, final: boolean) => void
   onEnded: () => void
   onNext?: () => void
   /** Playing or seeking again, which after the end means the viewer went back. */
@@ -163,6 +172,7 @@ export function Player({
   sound,
   title,
   subtitle,
+  artwork,
   onProgress,
   onEnded,
   onNext,
@@ -222,8 +232,7 @@ export function Player({
     [showNotice],
   )
 
-  // Restore what the last episode was left at; a new source resets the
-  // element's playback rate, so it is reapplied on every load.
+  // Restore the last episode's settings; a new source resets the rate, so it's reapplied each load.
   useEffect(() => {
     if (!video) return
     const saved = loadPersisted()
@@ -244,9 +253,7 @@ export function Player({
     savePersisted({ rate: r })
   }, [])
 
-  // An audio switch re-encodes every segment, and a recovered session encodes
-  // afresh; either way old buffered segments and the new pass must not share a
-  // SourceBuffer, so the epoch forces a fresh HLS instance and resumeAt seeks it.
+  // After an audio switch or recovery, the epoch forces a fresh HLS instance so old segments aren't mixed in.
   const [audioTrack, setAudioTrack] = useState(0)
   const [soundState, setSoundState] = useState<SoundOptions>(sound?.options ?? DEFAULT_SOUND)
   const [epoch, setEpoch] = useState(0)
@@ -254,9 +261,7 @@ export function Player({
   // The session could not be reopened after the reaper took it.
   const [lostError, setLostError] = useState<string | null>(null)
 
-  // Reset during render, not in an effect: the player outlives an episode
-  // change now, and the HLS effect below runs first — it would attach the new
-  // stream at the previous episode's position.
+  // Reset during render: the HLS effect runs first and would attach at the last episode's position.
   const [attached, setAttached] = useState(stream?.id)
   if (stream?.id !== attached) {
     setAttached(stream?.id)
@@ -276,8 +281,7 @@ export function Player({
     ? `${stream.playlist}${epoch ? `?a=${epoch}` : ''}`
     : undefined
 
-  // Set once the viewer picks a track, even track 0: a rebuilt session picks
-  // from the sub/dub preference and would quietly undo the choice.
+  // Set on any pick, even track 0, or a rebuilt session's sub/dub pick undoes it.
   const audioChosen = useRef(false)
   const switchAudio = useCallback(
     (index: number) => {
@@ -288,6 +292,7 @@ export function Player({
       resumeAfterRebuild(video, !!video && !video.paused && !video.ended)
       setResumeAt(video?.currentTime ?? startAt)
       setAudioTrack(index)
+      setWaiting(true)
       setEpoch((e) => e + 1)
       void api.post(`/api/stream/${id}/audio?track=${index}`).catch(() => {})
     },
@@ -306,6 +311,7 @@ export function Player({
       resumeAfterRebuild(video, !!video && !video.paused && !video.ended)
       setResumeAt(video?.currentTime ?? startAt)
       setSoundState(next)
+      setWaiting(true)
       setEpoch((e) => e + 1)
       void api.post(`/api/stream/${id}/sound${soundQuery(patch)}`).catch(() => {})
       sound?.onChange(next)
@@ -331,6 +337,7 @@ export function Player({
     const snd = soundState
     void onSessionLost()
       .then(() => {
+        setLostError(null)
         // The rebuilt session picks the track from the sub/dub preference, so a
         // mid-episode switch has to be asked for again or the menu lies.
         if (audioChosen.current && stream?.id) {
@@ -340,6 +347,7 @@ export function Player({
           void api.post(`/api/stream/${stream.id}/sound${soundQuery(snd)}`).catch(() => {})
         }
         setResumeAt(video?.currentTime ?? startAt)
+        setWaiting(true)
         setEpoch((e) => e + 1)
         // The rebuild resets the element to paused; only autoplay restarts it.
         resumeAfterRebuild(video, wasPlaying)
@@ -354,9 +362,7 @@ export function Player({
   useStallWatchdog(video, hls)
   const fonts = useEmbeddedFonts(stream?.fontsUrl, epoch)
   const pip = useDocumentPiP(host)
-  // Picture in picture moves the player into a second document, which the
-  // subtitle renderer has to be rebuilt for: its canvas belongs to whichever
-  // document it was created in.
+  // Picture in picture moves the player to another document, so the subtitle canvas is rebuilt there.
   const subLook = useMemo(() => ({ scale: subScale, delay: subDelay }), [subScale, subDelay])
   useSubtitles(video, stream, track, fonts, pip.active, subLook)
   useAutoSkip(video, skips, autoSkip)
@@ -364,15 +370,12 @@ export function Player({
   const upscaleState = useAnime4K({
     video,
     canvas,
-    // Not while floating: the upscaler's canvas is bound to the surface of the
-    // document it was configured in, and following the player into another one
-    // leaves it rendering into nothing.
+    // Not while floating: the upscaler's canvas is bound to the document it was configured in.
     enabled: !!upscale?.enabled && !pip.active,
     mode: upscale?.mode ?? 'A',
     tier: upscale?.tier ?? 'full',
     onSlow: upscale?.onSlow,
-    // The playlist, not the session id: the id is the episode and does not
-    // change when a different release is picked for it.
+    // The playlist, not the session id, which stays when another release is picked.
     source: playlist,
   })
   // Only worth showing while it holds the current frame; seeking or a stopped
@@ -380,9 +383,7 @@ export function Player({
   const painted = useFreshFrames(video, upscaleState === 'on')
   const showUpscaled = upscaleState === 'on' && painted
 
-  // Keyed on the tracks themselves: the session id is the episode, so it is
-  // unchanged both by a recovery (where re-picking would drop the viewer's
-  // choice) and by a hand-picked release (where the old index is meaningless).
+  // Keyed on the tracks, not the session id, which a recovery and a hand-picked release both keep.
   const trackList = (stream?.subtitles ?? [])
     .map((s) => `${s.index}:${s.language ?? ''}:${s.title ?? ''}`)
     .join('|')
@@ -391,9 +392,7 @@ export function Player({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackList])
 
-  // The element is reused from one episode to the next so fullscreen survives,
-  // and its autoplay attribute only ever fires once. Read from a ref so
-  // flipping the switch mid-episode cannot resume a deliberate pause.
+  // The reused element's autoplay fires once; a ref, so flipping it mid-episode can't undo a pause.
   const autoPlayRef = useRef(autoPlay)
   autoPlayRef.current = autoPlay
   useEffect(() => {
@@ -410,12 +409,8 @@ export function Player({
   const endedRef = useRef(onEnded)
   endedRef.current = onEnded
 
-  // Report on a timer, not every timeupdate. Each report carries how much
-  // actually played: a step larger than a second or two is a seek, not play.
-  // Per stream, with that episode's reporter: leaving or pressing Next must
-  // send the last position for the episode that played, and the source is
-  // already torn down (time 0, no duration) by then, so the last known values
-  // are kept here.
+  // Reports on a timer with the time really played (a big step is a seek); per stream, keeping the last
+  // known position, since the source is torn down by the time Next or leaving sends it.
   useEffect(() => {
     if (!video || !stream?.id) return
     const reporter = reportRef.current
@@ -438,8 +433,8 @@ export function Player({
       last = video.currentTime
     }
 
-    const report = (at: number) => {
-      reporter(at, duration, played)
+    const report = (at: number, final = false) => {
+      reporter(at, duration, played, final)
       played = 0
     }
     const id = window.setInterval(() => {
@@ -450,7 +445,7 @@ export function Player({
       if (duration > 0) report(position)
     }
     const ended = () => {
-      if (duration > 0) report(duration)
+      if (duration > 0) report(duration, true)
       endedRef.current()
     }
     video.addEventListener('timeupdate', onTime)
@@ -465,7 +460,7 @@ export function Player({
       video.removeEventListener('pause', flush)
       video.removeEventListener('ended', ended)
       window.removeEventListener('pagehide', flush)
-      flush()
+      if (duration > 0) report(position, true)
     }
   }, [video, stream?.id])
 
@@ -482,6 +477,92 @@ export function Player({
     },
     [video],
   )
+
+  // The system's media controls (media keys, a headset button, the lock screen) show the episode and drive it.
+  const onNextRef = useRef(onNext)
+  onNextRef.current = onNext
+  const hasNext = !!onNext
+  useEffect(() => {
+    if (!video || !('mediaSession' in navigator)) return
+    const session = navigator.mediaSession
+    session.metadata = new MediaMetadata({
+      title: subtitle ?? title,
+      artist: subtitle ? title : '',
+      artwork: artwork ? [{ src: artwork }] : [],
+    })
+    const handlers: Array<[MediaSessionAction, MediaSessionActionHandler | null]> = [
+      ['play', () => void video.play().catch(() => {})],
+      ['pause', () => video.pause()],
+      ['seekbackward', (d) => seekBy(-(d.seekOffset ?? 10))],
+      ['seekforward', (d) => seekBy(d.seekOffset ?? 10)],
+      ['seekto', (d) => d.seekTime !== undefined && (video.currentTime = d.seekTime)],
+      ['nexttrack', hasNext ? () => onNextRef.current?.() : null],
+    ]
+    for (const [action, handler] of handlers) {
+      try {
+        session.setActionHandler(action, handler)
+      } catch {
+        // An action this browser doesn't know.
+      }
+    }
+    return () => {
+      for (const [action] of handlers) {
+        try {
+          session.setActionHandler(action, null)
+        } catch {
+          // As above.
+        }
+      }
+      session.metadata = null
+    }
+  }, [video, title, subtitle, artwork, seekBy, hasNext])
+
+  // The lock screen's scrubber follows the episode; it can't place itself on a stream it never saw load.
+  useEffect(() => {
+    if (!video || !('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
+    const update = () => {
+      const d = video.duration
+      if (!Number.isFinite(d) || d <= 0) return
+      try {
+        navigator.mediaSession.setPositionState({ duration: d, position: Math.min(video.currentTime, d), playbackRate: video.playbackRate || 1 })
+      } catch {
+        // A position past a duration still settling.
+      }
+    }
+    const events = ['loadedmetadata', 'durationchange', 'seeked', 'ratechange', 'play', 'pause']
+    for (const e of events) video.addEventListener(e, update)
+    return () => {
+      for (const e of events) video.removeEventListener(e, update)
+    }
+  }, [video])
+
+  useEffect(() => {
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'
+  }, [playing])
+
+  // The screen stays on while an episode plays, muted too, which the browser's own rule leaves to dim.
+  useEffect(() => {
+    if (!playing || !('wakeLock' in navigator)) return
+    let lock: WakeLockSentinel | null = null
+    let gone = false
+    const take = () => {
+      if (document.visibilityState !== 'visible' || (lock && !lock.released)) return
+      navigator.wakeLock.request('screen').then(
+        (l) => (gone ? void l.release() : (lock = l)),
+        () => {
+          // Refused: battery saver, or a page not over HTTPS.
+        },
+      )
+    }
+    take()
+    // A hidden page loses its lock; coming back takes it again.
+    document.addEventListener('visibilitychange', take)
+    return () => {
+      gone = true
+      document.removeEventListener('visibilitychange', take)
+      void lock?.release()
+    }
+  }, [playing])
 
   // Only a slow seek earns a spinner; otherwise every arrow press flashes one.
   const seekTimer = useRef<number>(0)
@@ -500,8 +581,7 @@ export function Player({
   const lastTap = useRef<{ at: number; x: number }>({ at: 0, x: 0 })
   const touchedAt = useRef(0)
   const [flash, setFlash] = useState<'back' | 'forward' | null>(null)
-  // A tap on a side third waits to see if a second follows; toggling at once
-  // left every double-tap seek paused.
+  // A tap on a side third waits for a second, or every double-tap seek pauses.
   const pendingTap = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(pendingTap.current), [])
   const onSurfaceTouch = useCallback(
@@ -581,20 +661,22 @@ export function Player({
       return
     }
     let stop = false
-    const poll = () =>
-      api
+    const poll = async () => {
+      if (video?.paused || document.visibilityState !== 'visible') return
+      return api
         .get<StreamHealth>(`/api/stream/${id}/health`)
         .then((h) => {
           if (!stop) setHealth(h)
         })
         .catch(() => {})
+    }
     void poll()
     const timer = window.setInterval(() => void poll(), 5000)
     return () => {
       stop = true
       window.clearInterval(timer)
     }
-  }, [stream?.id, stalledLong])
+  }, [stream?.id, stalledLong, video])
 
   const downloadInstead = async () => {
     const [animeId, episode] = (stream?.id ?? '').split('-').map(Number)
@@ -614,13 +696,12 @@ export function Player({
       setStalledFor(0)
       return
     }
-    const id = window.setInterval(() => setStalledFor((s) => s + 1), 1000)
+    // Paused is not stuck: counting on would start the health poll, and that keeps the session alive.
+    const id = window.setInterval(() => setStalledFor((s) => (stream && video?.paused ? s : s + 1)), 1000)
     return () => window.clearInterval(id)
-  }, [waiting, stream])
+  }, [waiting, stream, video])
 
-  // Floating in its own window, the player fills it; fullscreen is handled in
-  // CSS, which a second document's stylesheets still carry but `:fullscreen`
-  // never matches there.
+  // Floating, the player fills its window; fullscreen is CSS, since `:fullscreen` never matches there.
   const corners = pip.active ? '' : 'sm:rounded-xl'
 
   const body = (
@@ -628,19 +709,19 @@ export function Player({
       ref={shell}
       onMouseMove={nudge}
       onTouchStart={nudge}
+      // Tabbing onto a hidden control shows the bar, as a mouse would.
+      onFocusCapture={nudge}
       className={cx(
         // Never clipped or isolated: clipping a composited video paints it black,
         // and a stacking context put the subtitle menu behind the header.
         'group/player relative w-full bg-black select-none',
-        // Filling the floating window, which the user shapes; the 16:9 box
-        // would otherwise leave bands of its own inside it.
+        // Filling the user-shaped floating window, or the 16:9 box leaves bands.
         pip.active ? 'h-full' : 'aspect-video',
         corners,
         !controlsVisible && 'cursor-none',
       )}
     >
-      {/* Before the video: the subtitle renderer inserts its canvas right after
-          it, so anything declared later paints over the subtitles. */}
+      {/* Before the video, as the subtitle canvas goes right after it and later things paint over. */}
       {upscale?.enabled && (
         <canvas
           ref={setCanvas}
@@ -654,8 +735,7 @@ export function Player({
         />
       )}
 
-      {/* Never hidden: the canvas above only paints on a presented frame, so a
-          pause, a seek or a lost device would leave nothing on screen. */}
+      {/* Never hidden: the canvas above paints only on presented frames. */}
       <video
         ref={setVideo}
         playsInline
@@ -666,8 +746,7 @@ export function Player({
         onPlay={() => {
           setPlaying(true)
           onResume?.()
-          // Resuming by any route re-arms the hide timer; a keyboard resume
-          // moves no pointer, so nothing else would.
+          // Any resume re-arms the hide timer, as a keyboard one moves no pointer.
           nudge()
         }}
         onPause={() => {
@@ -704,8 +783,7 @@ export function Player({
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
           <div className="text-center">
             <Spinner className="mx-auto size-8" />
-            {/* No stream yet means a release is still being resolved; the stall
-                copy below would blame a download that has not started. */}
+            {/* No stream yet: still resolving, so the stall copy below doesn't apply. */}
             {!stream && (
               <>
                 <p className="mt-3 text-sm text-base-300">{starting?.title ?? 'Finding a release…'}</p>
@@ -716,8 +794,7 @@ export function Player({
                 )}
               </>
             )}
-            {/* A frozen frame with a spinner looks the same whether it is
-                buffering for a second or the swarm has stopped feeding us. */}
+            {/* A spinner looks the same buffering a second or with a dead swarm, so this says which. */}
             {stream && stalledFor > 12 && (
               <p className="mt-3 max-w-xs text-xs text-base-400">
                 {/* What is arriving, never whether it is enough: a slow line buffers and plays on, as on any site. */}
@@ -734,7 +811,7 @@ export function Player({
                   to="/downloads"
                   className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto mt-3')}
                 >
-                  Queued — open Downloads
+                  Queued · open Downloads
                 </Link>
               ) : (
                 <button
@@ -756,8 +833,10 @@ export function Player({
             <button
               onClick={() => {
                 if (error) {
-                  // A fresh source from where it stopped; the hook clears the error.
+                  // A fresh source from where it stopped, playing once it can; the hook clears the error.
                   setResumeAt(video?.currentTime || startAt)
+                  setWaiting(true)
+                  resumeAfterRebuild(video, true)
                   setEpoch((e) => e + 1)
                   return
                 }
@@ -788,15 +867,14 @@ export function Player({
           onClick={() => video && (video.currentTime = activeSkip.end)}
           className="absolute right-4 bottom-24 rounded-md bg-base-950/85 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/20 backdrop-blur-sm transition-transform hover:scale-105"
         >
-          Skip {activeSkip.kind.includes('ed') ? 'ending' : 'opening'}
+          Skip {skipKind(activeSkip.kind) ?? 'ahead'}
           <kbd className="ml-2 font-sans text-xs text-white/50 max-sm:hidden">S</kbd>
         </button>
       )}
 
       <div
         className={cx(
-          // The gradient itself passes taps through to the picture; on a phone
-          // it covers half of it. Only the controls inside accept input.
+          // The gradient passes taps to the picture (half of it on a phone); only its controls take input.
           'pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-3 pt-10 pb-3 transition-opacity duration-200 sm:px-4',
           pip.active ? '' : 'sm:rounded-b-xl',
           controlsVisible ? 'opacity-100' : 'opacity-0',
@@ -817,8 +895,7 @@ export function Player({
             {playing ? <PauseIcon /> : <PlayIcon />}
           </IconButton>
 
-          {/* On a phone the bar had no room for all of it: double tap seeks,
-              the hardware buttons set volume, speed stays in reach on desktop. */}
+          {/* Desktop only: on a phone double tap seeks and the hardware buttons set volume. */}
           <span className={cx('contents', !pip.active && 'max-sm:hidden')}>
           <IconButton label="Back 10 seconds" hint="J" onClick={() => seekBy(-10)}>
             <SeekIcon back />
@@ -859,8 +936,7 @@ export function Player({
               </span>
             )}
 
-            {/* The floating window keeps only what fits it: subtitles, and the
-                way back. Audio, speed and fullscreen wait in the tab. */}
+            {/* The floating window keeps only subtitles and the way back. */}
             {!pip.active && (stream?.audio?.length ?? 0) > 1 && (
               <AudioPicker
                 tracks={stream!.audio!}
@@ -914,8 +990,7 @@ export function Player({
                   label="Fullscreen"
                   hint="F"
                   onClick={() => {
-                    if (document.fullscreenElement) void document.exitFullscreen()
-                    else void shell.current?.requestFullscreen()
+                    toggleFullscreen(shell.current, video)
                   }}
                 >
                   <FullscreenIcon />
@@ -966,11 +1041,8 @@ export function Player({
 
 /** What an opening or ending is called, for the marker's tooltip. */
 function skipLabel(kind: string): string {
-  const k = kind.toLowerCase()
-  if (k.includes('op')) return 'Opening'
-  if (k.includes('ed')) return 'Ending'
-  if (k.includes('recap')) return 'Recap'
-  return kind
+  const k = skipKind(kind)
+  return k ? k[0].toUpperCase() + k.slice(1) : kind
 }
 
 function Scrubber({
@@ -1004,12 +1076,11 @@ function Scrubber({
 
   const shown = dragging && at !== null ? at * duration : time
   const percent = duration > 0 ? (shown / duration) * 100 : 0
-  const loaded = useLoadedRanges(streamId)
+  const loaded = useLoadedRanges(streamId, video)
 
   return (
     <div
-      // touch-none: otherwise the page scrolls instead of the bar scrubbing.
-      // Taller than the bar it draws, for fingers.
+      // touch-none, or the page scrolls instead of scrubbing; taller than the bar, for fingers.
       className="group/scrub relative -my-1 h-6 cursor-pointer touch-none"
       onPointerDown={(e) => {
         if (e.button !== 0) return
@@ -1045,9 +1116,7 @@ function Scrubber({
         <div className="relative h-full bg-accent-500" style={{ width: `${percent}%` }} />
       </div>
 
-      {/* Openings and endings in amber, so what is about to be skipped is
-          visible before the button appears — and legible against both the
-          filled and unfilled halves of the bar. */}
+      {/* Openings and endings in amber, so what is about to be skipped shows before the button. */}
       {duration > 0 &&
         skips.map((range) => (
           <div
@@ -1078,7 +1147,7 @@ function Scrubber({
 
 // The stretches that will play without waiting on the network, as [from, to] seconds: the lighter part of
 // the bar. Asked of the server; the browser's own buffer is a small window around the playhead, no more.
-function useLoadedRanges(streamId: string | undefined): Array<[number, number]> {
+function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement | null): Array<[number, number]> {
   const [ranges, setRanges] = useState<Array<[number, number]>>([])
   useEffect(() => {
     setRanges([])
@@ -1090,8 +1159,8 @@ function useLoadedRanges(streamId: string | undefined): Array<[number, number]> 
         const res = await api.get<{ complete: boolean; ranges: Array<[number, number]> }>(`/api/stream/${streamId}/loaded`)
         if (stopped) return
         setRanges(res.ranges)
-        // A finished episode cannot change; a download is asked again every few seconds.
-        if (!res.complete) timer = setTimeout(read, 4000)
+        // Asked again every few seconds while downloading, only while watched: a poll keeps the session alive.
+        if (!res.complete) timer = setTimeout(() => void untilWatching(video, () => stopped).then(read), 4000)
       } catch {
         if (!stopped) timer = setTimeout(read, 10_000)
       }
@@ -1101,15 +1170,11 @@ function useLoadedRanges(streamId: string | undefined): Array<[number, number]> 
       stopped = true
       clearTimeout(timer)
     }
-  }, [streamId])
+  }, [streamId, video])
   return ranges
 }
 
-/**
- * The frame under the pointer, with its timestamp. The frames arrive as one
- * sprite sheet and this offsets into it, so scrubbing costs no requests at all.
- * Until the sheet exists it is the time alone, which is still the useful half.
- */
+/** The frame under the pointer, cut from one sprite sheet (no requests), with its time; the time alone until then. */
 function ScrubPreview({
   at,
   time,
@@ -1179,16 +1244,13 @@ function Volume({
         value={muted ? 0 : volume}
         onChange={(e) => onChange(Number(e.target.value))}
         aria-label="Volume"
-        className="w-0 accent-[var(--color-accent-500)] opacity-0 transition-all duration-200 group-hover/vol:w-20 group-hover/vol:opacity-100"
+        className="w-0 accent-[var(--color-accent-500)] opacity-0 transition-all duration-200 group-hover/vol:w-20 group-hover/vol:opacity-100 group-focus-within/vol:w-20 group-focus-within/vol:opacity-100"
       />
     </div>
   )
 }
 
-/**
- * A native select is painted by the OS, so it comes out as a white menu over a
- * dark player no matter what CSS says. This is a plain menu instead.
- */
+/** A plain menu, as the OS paints a native select white over the dark player. */
 function SubtitlePicker({
   tracks,
   value,
@@ -1208,11 +1270,9 @@ function SubtitlePicker({
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
 
-  // Language first, because that is what is being chosen. The release's own
-  // name for the track only earns a place when it tells two of them apart —
-  // Erai-raws calls every track "CR", so a list of titles is a list of "CR".
+  // Language first; the release's track name only when it tells two apart (Erai-raws calls all "CR").
   const label = (t: StreamInfo['subtitles'][number]) => {
     const language = languageName(t.language)
     const sameLanguage = tracks.filter((o) => languageName(o.language) === language)
@@ -1294,7 +1354,7 @@ function Stepper({
   onMore: () => void
   onReset: () => void
 }) {
-  const step = 'grid size-6 place-items-center rounded text-base-200 hover:bg-base-750 hover:text-white'
+  const step = 'grid size-6 pointer-coarse:size-10 place-items-center rounded text-base-200 hover:bg-base-750 hover:text-white'
   return (
     <div className="flex items-center gap-1 px-3 py-1 text-sm">
       <span className="flex-1 text-base-400">{label}</span>
@@ -1329,7 +1389,7 @@ function AudioPicker({
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
 
   const label = (t: AudioTrack, i: number) => {
     const language = languageName(t.language)
@@ -1395,7 +1455,7 @@ function soundSummary(s: SoundOptions): string {
 function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const summary = soundSummary(value)
   const heading = 'px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase'
 
@@ -1462,7 +1522,7 @@ function VoiceIcon() {
 function SpeedPicker({ value, onChange }: { value: number; onChange: (rate: number) => void }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
 
   return (
     <div className="relative" ref={ref}>
@@ -1567,9 +1627,10 @@ function useKeyboard({
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
-      // A dialog or menu owns the keyboard while it is open; swallowing Space
-      // here would stop its buttons from activating.
+      // An open dialog or menu owns the keyboard, or Space wouldn't press its buttons.
       if (target?.closest('[role=dialog], [role=menu], [role=listbox], [data-portal-menu]')) return
+      // Space on a button outside the player is that button's own.
+      if (e.key === ' ' && target?.closest('button, a, [role=switch], [role=tab]') && !shell?.contains(target)) return
       // Ctrl+F, Ctrl+L and the like belong to the browser.
       if (e.ctrlKey || e.metaKey || e.altKey) return
       // The page must not scroll while the arrows seek or change volume.
@@ -1606,8 +1667,7 @@ function useKeyboard({
           showVolume()
           break
         case 'f':
-          if (document.fullscreenElement) void document.exitFullscreen()
-          else void shell?.requestFullscreen()
+          toggleFullscreen(shell, video)
           break
         case 'z':
         case 'x':
@@ -1656,7 +1716,7 @@ function IconButton({
       onClick={onClick}
       aria-label={label}
       title={hint ? `${label} (${hint})` : label}
-      className="grid size-9 place-items-center rounded-md text-white/90 transition-colors hover:bg-white/15 hover:text-white"
+      className="tap relative grid size-9 place-items-center rounded-md text-white/90 transition-colors hover:bg-white/15 hover:text-white"
     >
       {children}
     </button>

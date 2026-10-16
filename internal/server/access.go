@@ -24,17 +24,14 @@ import (
 const (
 	accessCookie  = "kuro_access"
 	accessSetting = "access.token"
-	// Whether the listener is open to the network. Kept in the database rather
-	// than config.toml so it can be a switch in the app.
+	// Whether the listener is open to the network; in the database so it can be a switch.
 	lanSetting = "access.lan"
 )
 
-// OnRebind hands the server a way to move its listener, so opening the app to
-// the network does not mean editing a file and restarting.
+// OnRebind lets the server move its listener, so opening to the network needs no restart.
 func (s *Server) OnRebind(rebind func(addr string) error) { s.rebind = rebind }
 
-// LANAddr is the address to listen on when the app is open to the network: the
-// port stays whatever was configured, only the host changes.
+// LANAddr is the address when open to the network: the configured port, another host.
 func LANAddr(configured string) string {
 	_, port, err := net.SplitHostPort(configured)
 	if err != nil {
@@ -43,8 +40,7 @@ func LANAddr(configured string) string {
 	return net.JoinHostPort("0.0.0.0", port)
 }
 
-// NewAccessToken is generated once on first run and stored; callers persist it
-// so paired devices survive a restart.
+// NewAccessToken is made once and persisted, so paired devices survive a restart.
 func NewAccessToken() string {
 	b := make([]byte, 24)
 	rand.Read(b)
@@ -66,9 +62,7 @@ func isLoopback(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// loopbackHost reports whether the request was addressed to this machine by a
-// loopback name. A page on any other name that resolves to 127.0.0.1 reaches
-// the same socket, so the address alone cannot earn the unguarded exemption.
+// loopbackHost: addressed by a loopback name, since any name resolving to 127.0.0.1 reaches this socket.
 func loopbackHost(host string) bool {
 	h, _, err := net.SplitHostPort(host)
 	if err != nil {
@@ -110,8 +104,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Closing the listener leaves kept-alive connections open; network off
-		// has to shut out the devices already on them.
+		// Closing the listener leaves kept-alive connections, so network off shuts them out too.
 		if !isLoopback(r.RemoteAddr) && s.rebind != nil && !s.bound() {
 			send(w, http.StatusForbidden, map[string]any{"error": "network access is off"})
 			return
@@ -265,8 +258,7 @@ func (s *Server) accessURLs() []string {
 	return urls
 }
 
-// PairingURLs is empty unless the listener is bound beyond loopback, which is
-// the only case where a phone could use them.
+// PairingURLs is empty unless bound beyond loopback, the only case a phone could use them.
 func (s *Server) PairingURLs() []string {
 	if !s.bound() {
 		return nil
@@ -275,8 +267,7 @@ func (s *Server) PairingURLs() []string {
 }
 
 func (s *Server) access(w http.ResponseWriter, r *http.Request) {
-	// The switch, firewall and sign-out are host-only routes; a paired device
-	// is not offered controls that would only answer 403.
+	// Host-only controls aren't offered to a paired device, which would only get a 403.
 	host := isLoopback(r.RemoteAddr) && loopbackHost(r.Host)
 	send(w, http.StatusOK, map[string]any{
 		"listening": s.listening(),
@@ -288,8 +279,7 @@ func (s *Server) access(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listening is where the app is actually bound, which is the configured address
-// unless the switch below has moved it.
+// listening is where the app is bound: the configured address unless the switch moved it.
 func (s *Server) listening() string {
 	if s.lanEnabled(context.Background()) {
 		return LANAddr(s.cfg.Addr)
@@ -329,8 +319,7 @@ func (s *Server) setAccessNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only recorded once the move worked, so a port already in use leaves the
-	// setting saying what is actually true.
+	// Recorded only once the move worked, so a busy port leaves the setting true.
 	if err := s.store.SetSetting(r.Context(), lanSetting, strconv.FormatBool(body.LAN)); err != nil {
 		s.fail(w, "save access setting", err)
 		return
@@ -355,8 +344,7 @@ func (s *Server) firewallStatus(ctx context.Context) (firewall.Status, error) {
 	return firewall.Check(ctx, port, exe)
 }
 
-// LogFirewall says in the log why a phone would or would not get in, which is
-// the first thing to look at when one cannot.
+// LogFirewall logs why a phone would or wouldn't get in, the first thing to check.
 func (s *Server) LogFirewall(ctx context.Context) {
 	st, err := s.firewallStatus(ctx)
 	if err != nil {
@@ -463,8 +451,7 @@ func (s *Server) openNetworkSettings(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"opened": true})
 }
 
-// accessQR renders the pairing URL as SVG. Typing a 32-character token into a
-// TV remote is not a thing anyone should have to do.
+// accessQR renders the pairing URL as SVG, sparing a 32-character token on a TV remote.
 func (s *Server) accessQR(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
@@ -489,8 +476,7 @@ func (s *Server) accessQR(w http.ResponseWriter, r *http.Request) {
 	w.Write(svg)
 }
 
-// rotate invalidates every paired device. Restricted to loopback so a stolen
-// token cannot be used to lock the owner out.
+// rotate unpairs every device; loopback only, so a stolen token can't lock the owner out.
 func (s *Server) rotateAccess(w http.ResponseWriter, r *http.Request) {
 	token := NewAccessToken()
 	if err := s.store.SetSetting(r.Context(), accessSetting, token); err != nil {

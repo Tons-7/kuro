@@ -25,9 +25,11 @@ type Options struct {
 // The boost in dB per level: twice and four times as loud, limited so nothing clips.
 var boostLevels = map[string]float64{"medium": 6, "high": 12}
 
-// The lift in dB per level, after broadcast guidance (MPEG-H dialogue enhancement): up to 6 dB is
-// typical, 12 dB the ceiling.
+// The dB lift per level, after MPEG-H dialogue enhancement: 6 dB typical, 12 dB the ceiling.
 var voiceLevels = map[string]float64{"medium": 6, "high": 12}
+
+// Levels are the settings' spellings: off, or a lift.
+var Levels = []string{"off", "medium", "high"}
 
 // ValidVoice accepts off, "" and the levels; ValidBoost the same for the volume boost.
 func ValidVoice(level string) bool {
@@ -77,8 +79,7 @@ const (
 	limiter = "alimiter=limit=0.98:level=0:latency=1"
 )
 
-// Chain is the ffmpeg filter graph for a track with that many channels, "" when nothing is asked for.
-// It always ends in stereo.
+// Chain is the ffmpeg filter graph for that many channels, ending in stereo; "" when nothing is asked.
 func Chain(o Options, channels int) string {
 	o = Normalized(o)
 	if !o.Any() {

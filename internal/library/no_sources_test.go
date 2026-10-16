@@ -8,8 +8,7 @@ import (
 	"kuro/internal/score"
 )
 
-// With no site configured a search is refused outright, with the fix named,
-// rather than reported as an episode nobody has released.
+// With no site configured a search is refused with the fix named, not "nobody released it".
 func TestFindWithoutSitesSaysSo(t *testing.T) {
 	st := bleachStore(t)
 	f := NewFinder(st, nil, discard())

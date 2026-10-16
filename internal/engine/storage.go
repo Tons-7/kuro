@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
@@ -14,23 +15,23 @@ import (
 	"kuro/internal/torrent"
 )
 
-// files is the engine's storage: plain files (see Options.CacheDir), opened for each
-// read or write and closed after. anacrolix's own file storage memory-maps
-// every file for good, and on Windows a mapped file cannot be deleted, which
-// is most of what the cache does.
+// files opens a file per read or write: anacrolix maps them, and Windows can't delete a mapped file.
 type files struct {
 	base   string
 	pieces storage.PieceCompletion
+	// names decides the folder or file name; nil means the torrent's own.
+	names *layout
 }
 
 func (s files) OpenTorrent(_ context.Context, info *metainfo.Info, hash metainfo.Hash) (storage.TorrentImpl, error) {
-	t := &fileTorrent{info: info, hash: hash, pieces: s.pieces}
+	t := &fileTorrent{info: info, hash: hash, pieces: s.pieces, sparse: map[string]bool{}}
+	top := s.names.top(info.BestName(), hash)
 	dir := filepath.Clean(s.base)
 	if info.IsDir() {
-		dir = filepath.Join(s.base, info.BestName())
+		dir = filepath.Join(s.base, top)
 	}
 	for fi := range info.UpvertedFilesIter() {
-		path := filepath.Join(dir, info.BestName())
+		path := filepath.Join(dir, top)
 		if info.IsDir() {
 			path = filepath.Join(append([]string{dir}, fi.BestPath()...)...)
 		}
@@ -60,6 +61,9 @@ type fileTorrent struct {
 	hash   metainfo.Hash
 	pieces storage.PieceCompletion
 	files  []segment
+	// sparse: files marked so on this run, once each.
+	mu     sync.Mutex
+	sparse map[string]bool
 }
 
 // each calls f for every file part of the torrent range [off, off+n).
@@ -124,6 +128,13 @@ func (fp filePiece) WriteAt(b []byte, off int64) (int, error) {
 		if err != nil {
 			return err
 		}
+		fp.t.mu.Lock()
+		first := !fp.t.sparse[s.path]
+		fp.t.sparse[s.path] = true
+		fp.t.mu.Unlock()
+		if first {
+			markSparse(f)
+		}
 		_, werr := f.WriteAt(b[bufOff:bufOff+n], fileOff)
 		if cerr := f.Close(); werr == nil {
 			werr = cerr
@@ -139,9 +150,7 @@ func (fp filePiece) WriteAt(b []byte, off int64) (int, error) {
 func (fp filePiece) MarkComplete() error    { return fp.t.pieces.Set(fp.key(), true) }
 func (fp filePiece) MarkNotComplete() error { return fp.t.pieces.Set(fp.key(), false) }
 
-// Completion trusts a record only while the piece's bytes are on disk: the
-// cache deletes episodes. With no record and no bytes the piece is plainly
-// incomplete; "unknown" would have anacrolix hash every piece of a new torrent.
+// Completion trusts a record only while the bytes are on disk; no bytes is a plain "no", not "unknown".
 func (fp filePiece) Completion() storage.Completion {
 	c, err := fp.t.pieces.Get(fp.key())
 	if err != nil || (c.Ok && !c.Complete) {

@@ -98,8 +98,7 @@ func TestUnknownModeAndSizeFallBack(t *testing.T) {
 	}
 }
 
-// Every name the chain can produce must exist in the upstream release, or the
-// shader argument silently disables upscaling at playback.
+// Every chain name exists upstream, or the shader argument silently disables upscaling.
 func TestEveryChainNameIsAKnownShader(t *testing.T) {
 	// The full file list from Anime4K v4.0.1.
 	known := map[string]bool{}

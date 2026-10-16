@@ -1,12 +1,11 @@
-// Package torrent is the client for kuro's torrent engine (internal/engine),
-// spoken over loopback HTTP. Its streaming endpoint blocks until the requested
-// pieces arrive; reading the file directly cannot, because a sparse region on
-// NTFS reads as zeroes with no error.
+// Package torrent is the engine's loopback client; its stream waits for pieces, where a sparse file reads zeroes.
 package torrent
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,32 +19,45 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kuro/internal/parse"
 )
 
 type Client struct {
 	http *http.Client
-	// No timeouts at all: stream reads take as long as the swarm, bounded by
-	// the caller's context. Even headers wait for the first piece, which on a
-	// slow swarm takes minutes.
+	// No timeouts: stream reads, even headers, take as long as the swarm; the caller's context bounds them.
 	stream *http.Client
 	base   string
 	engine Engine
 
-	// A magnet whose metadata would not resolve is remembered so play does not
-	// spend the inspect timeout on it again while the user retries. A swarm can
-	// revive, so the mark expires.
+	// Magnets whose metadata never resolved, so a retry skips the timeout; a swarm can revive, so it expires.
 	mu         sync.Mutex
 	badMagnets map[string]time.Time
+	secret     string
 }
 
-// Engine is what this client talks to. Wiring one in makes calls start it on
-// demand instead of failing when it is not up yet.
+// Engine is what this client talks to; wired in, calls start it on demand.
 type Engine interface {
 	Ensure(context.Context) error
 }
 
 func (c *Client) WithEngine(e Engine) *Client {
 	c.engine = e
+	return c
+}
+
+// SecretHeader carries the per-run secret the engine wants on every request that is not a stream.
+const SecretHeader = "X-Kuro-Engine"
+
+// NewSecret is a random token for one run.
+func NewSecret() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (c *Client) WithSecret(secret string) *Client {
+	c.secret = secret
 	return c
 }
 
@@ -59,8 +71,7 @@ func (c *Client) Addr() string {
 
 func (c *Client) url(path string) string { return c.base + path }
 
-// ErrUnavailable wraps every reason the engine cannot be reached, so callers
-// can tell "no engine" from "the engine said no".
+// ErrUnavailable wraps every unreachable engine, so "no engine" differs from "the engine said no".
 var ErrUnavailable = errors.New("torrent engine unavailable")
 
 // Within reports whether path is dir or inside it.
@@ -168,10 +179,7 @@ func (s Stats) Percent() float64 {
 // seconds, a dead one never does — short so a dead release doesn't stall the queue.
 const inspectTimeout = 25 * time.Second
 
-// Inspect fetches the file list without committing to a download, so the
-// caller can pick which file is the episode before anything is written. A
-// magnet that recently failed to resolve is refused at once, so a retry does
-// not pay the timeout again on a release that already proved undeliverable.
+// Inspect fetches the file list before any download; a magnet that just failed to resolve is refused at once.
 func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error) {
 	if until, bad := c.magnetFailedRecently(magnet); bad {
 		return nil, fmt.Errorf("metadata did not resolve; skipping for %s", time.Until(until).Round(time.Second))
@@ -181,8 +189,7 @@ func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error
 	defer cancel()
 
 	got, err := c.add(ctx, magnet, url.Values{"list_only": {"true"}})
-	// A caller cancelling says nothing about the swarm; marking it here made
-	// the next "try again" fail at once.
+	// A caller cancelling says nothing about the swarm, so it isn't marked.
 	if err != nil && parent.Err() == nil {
 		c.markMagnetFailed(magnet)
 	}
@@ -218,9 +225,7 @@ func (c *Client) markMagnetFailed(magnet string) {
 	c.mu.Unlock()
 }
 
-// Add downloads exactly one file. A season batch has a dozen episodes in it
-// and only the requested one should ever touch the disk. A pack already held
-// keeps its other selected files.
+// Add downloads exactly one file of a pack; one already held keeps its other selected files.
 func (c *Client) Add(ctx context.Context, magnet string, file File) (*Torrent, error) {
 	return c.add(ctx, magnet, url.Values{
 		"overwrite":        {"true"},
@@ -243,8 +248,7 @@ func (c *Client) add(ctx context.Context, magnet string, params url.Values) (*To
 	return &out, nil
 }
 
-// Details reports where the torrent's files landed, so their real cost on
-// disk can be measured rather than inferred from download progress.
+// Details reports where the files landed, so their disk cost is measured, not inferred.
 func (c *Client) Details(ctx context.Context, id int) (Detail, error) {
 	var d Detail
 	err := c.get(ctx, fmt.Sprintf("/torrents/%d", id), &d)
@@ -257,14 +261,12 @@ func (c *Client) Stats(ctx context.Context, id int) (Stats, error) {
 	return s, err
 }
 
-// StreamURL is handed straight to mpv or ffmpeg. The engine serves it with Range
-// support and fetches first wherever the player reads.
+// StreamURL goes to mpv or ffmpeg; ranged reads make the engine fetch there first.
 func (c *Client) StreamURL(id, fileIndex int) string {
 	return c.url(fmt.Sprintf("/torrents/%d/stream/%d", id, fileIndex))
 }
 
-// WaitLive blocks until the torrent leaves the initializing state; streaming
-// before then fails with "invalid state: initializing".
+// WaitLive blocks until the torrent is past "initializing", before which streaming fails.
 func (c *Client) WaitLive(ctx context.Context, id int, timeout time.Duration) error {
 	until := time.Now().Add(timeout)
 	var resumed bool
@@ -280,9 +282,7 @@ func (c *Client) WaitLive(ctx context.Context, id int, timeout time.Duration) er
 		case stats.State == "live" || stats.Finished:
 			return nil
 
-		// After a restart the engine re-checks carried-over files and answers stream
-		// reads with "invalid state: initializing"; extend the deadline while
-		// progress climbs so a swarm timeout doesn't expire on local disk work.
+		// While the engine re-checks files ("initializing"), the deadline extends as progress climbs.
 		case stats.State == "initializing" && stats.ProgressBytes > verified:
 			verified = stats.ProgressBytes
 			until = time.Now().Add(timeout)
@@ -350,8 +350,7 @@ func (c *Client) streamClient() *http.Client {
 	return http.DefaultClient
 }
 
-// A ranged read is also how the engine is told what to fetch next, so the bytes
-// are discarded but the request is the point.
+// A ranged read tells the engine what to fetch next; the bytes are discarded.
 func (c *Client) readRange(ctx context.Context, stream, spec string, window int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stream, nil)
 	if err != nil {
@@ -382,9 +381,7 @@ func (c *Client) readRange(ctx context.Context, stream, spec string, window int6
 	return nil
 }
 
-// PrioritiseAt moves the download window; a ranged read is the only way to say
-// "fetch here next". A fraction rather than bytes because the caller knows
-// seconds, and constant bitrate lands close enough.
+// PrioritiseAt moves the download window with a ranged read, at a fraction since callers know seconds.
 func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction float64) error {
 	if fraction <= 0 || fraction >= 1 {
 		return nil
@@ -416,8 +413,7 @@ func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction f
 	return nil
 }
 
-// ErrPaused separates a download someone stopped on purpose from one that
-// broke: the queue drops the first and reports the second.
+// ErrPaused marks a download stopped on purpose, which the queue drops instead of reporting.
 var ErrPaused = errors.New("download paused")
 
 // How often Await asks the engine where it is. Overridden in tests.
@@ -470,9 +466,7 @@ func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
 // Checking reports the engine verifying data on disk; progress climbs from zero.
 func (s Stats) Checking() bool { return s.State == "initializing" && !s.Finished }
 
-// PauseUnfinished stops every part-downloaded torrent at startup: the engine
-// resumes its whole session on launch, so without this all download at once.
-// keep exempts a torrent; ones still checking are counted for a later pass.
+// PauseUnfinished stops part-downloaded torrents the engine resumed on launch, except keep's.
 func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string) bool) (paused, kept int, checking []string, err error) {
 	list, err := c.List(ctx)
 	if err != nil {
@@ -548,8 +542,7 @@ func (c *Client) List(ctx context.Context) (listing, error) {
 	return out, err
 }
 
-// Live maps info hash to the engine's current id. Ids are per session, so one
-// recorded before a restart may name a different torrent.
+// Live maps info hash to the engine's current id, which changes per session.
 func (c *Client) Live(ctx context.Context) (map[string]int, error) {
 	list, err := c.List(ctx)
 	if err != nil {
@@ -593,6 +586,9 @@ func (c *Client) do(req *http.Request, out any) error {
 			return err
 		}
 	}
+	if c.secret != "" {
+		req.Header.Set(SecretHeader, c.secret)
+	}
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -615,12 +611,11 @@ func (c *Client) do(req *http.Request, out any) error {
 	return json.Unmarshal(body, out)
 }
 
-// PickVideo chooses the largest video file, which is correct for a single
-// release: batches also carry samples, subtitles and artwork.
+// PickVideo chooses the largest video file, right for a single release among samples and extras.
 func PickVideo(files []File) (File, int, bool) {
 	best, bestIdx := File{}, -1
 	for i, f := range files {
-		if !isVideo(f.Name) {
+		if !parse.IsVideo(f.Name) {
 			continue
 		}
 		if bestIdx == -1 || f.Length > best.Length {
@@ -630,24 +625,27 @@ func PickVideo(files []File) (File, int, bool) {
 	return best, bestIdx, bestIdx >= 0
 }
 
-// PickEpisode finds one episode inside a season pack by the number in each
-// filename; only files well below the median size are ruled out as extras.
-// numbers are every count the file may carry for it — the entry's own, a cour
-// counted through the whole season, absolute — the first being the one asked for.
+// PickEpisode finds an episode in a pack by filename number; numbers are every count it may carry, own first.
 func PickEpisode(files []File, numbers ...int) (File, int, bool) {
-	episode := 0
-	if len(numbers) > 0 {
+	if len(numbers) == 0 {
+		return PickVideo(files)
+	}
+	return PickNumbered(files, numbers[0], numbers)
+}
+
+// PickNumbered is PickEpisode knowing the episode asked, so it reads a pack's count ("12" or "23").
+func PickNumbered(files []File, episode int, numbers []int) (File, int, bool) {
+	numbers = slices.DeleteFunc(slices.Clone(numbers), func(n int) bool { return n <= 0 })
+	if episode <= 0 && len(numbers) > 0 {
 		episode = numbers[0]
 	}
 	if episode <= 0 {
 		return PickVideo(files)
 	}
 
-	wanted := func(n int) bool { return n > 0 && slices.Contains(numbers, n) }
-
 	var videos []int
 	for i, f := range files {
-		if isVideo(f.Name) {
+		if parse.IsVideo(f.Name) && !extra(f.Name) {
 			videos = append(videos, i)
 		}
 	}
@@ -655,29 +653,86 @@ func PickEpisode(files []File, numbers ...int) (File, int, bool) {
 		return File{}, -1, false
 	}
 
-	// A lone unnumbered file is only acceptable for a one-episode entry, else
-	// a film can play as a bogus episode number.
+	// A lone unnumbered file only for a one-episode entry, or a film plays as an episode.
 	if len(videos) == 1 {
 		only := files[videos[0]]
-		got := episodeInName(baseName(only.Name))
-		if wanted(got) || episode <= 1 {
+		got := episodeInName(parse.BaseName(only.Name))
+		if slices.Contains(numbers, got) || (got == 0 && episode <= 1) {
 			return only, videos[0], true
 		}
 		return File{}, -1, false
 	}
 
 	floor := medianLength(files, videos) / 4
-
+	numbered := map[int]int{}
+	lowest, highest := 0, 0
 	for _, i := range videos {
 		if files[i].Length < floor {
 			continue
 		}
-		if wanted(episodeInName(baseName(files[i].Name))) {
-			return files[i], i, true
+		if n := episodeInName(parse.BaseName(files[i].Name)); n > 0 {
+			numbered[i] = n
+			if lowest == 0 || n < lowest {
+				lowest = n
+			}
+			highest = max(highest, n)
 		}
 	}
-	return File{}, -1, false
+	want := packNumber(episode, numbers, lowest, highest)
+
+	best := -1
+	for _, i := range videos {
+		if numbered[i] == want && (best < 0 || files[i].Length > files[best].Length) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return File{}, -1, false
+	}
+	return files[best], best, true
 }
+
+// packNumber: of the counts the episode may carry, one the pack holds; of several, the one starting nearest 1.
+func packNumber(episode int, numbers []int, lowest, highest int) int {
+	if len(numbers) == 0 {
+		return 0
+	}
+	held := slices.DeleteFunc(slices.Clone(numbers), func(n int) bool { return n < lowest || n > highest })
+	if len(held) == 1 {
+		return held[0]
+	}
+	if len(held) == 0 {
+		return numbers[0]
+	}
+	best, distance := held[0], -1
+	for _, n := range held {
+		first := n - (episode - 1)
+		d := max(first-lowest, lowest-first)
+		if distance < 0 || d < distance {
+			best, distance = n, d
+		}
+	}
+	return best
+}
+
+// extra: in an extras folder, or named as an opening, ending, preview, commercial or menu.
+func extra(path string) bool {
+	path = strings.ReplaceAll(path, `\`, "/")
+	dirs := strings.Split(path, "/")
+	for _, d := range dirs[:len(dirs)-1] {
+		if extraDirs[strings.ToLower(d)] || strings.HasPrefix(strings.ToLower(d), "nc") {
+			return true
+		}
+	}
+	return extraName.MatchString(parse.BaseName(path))
+}
+
+var (
+	extraDirs = map[string]bool{"extras": true, "extra": true, "sample": true, "samples": true, "trailers": true,
+		"trailer": true, "featurettes": true, "specials": true, "sp": true, "menu": true, "menus": true, "bonus": true,
+		"cm": true, "pv": true}
+	extraName = regexp.MustCompile(`(?i)(?:^|[\s_.\-\[(])(?:NC(?:OP|ED)|OP|ED|PV|CM|Menu|Preview|Trailer|Sample)\s*\d{0,2}(?:$|[\s_.\-\]\)v])`)
+)
 
 func medianLength(files []File, idx []int) int64 {
 	lengths := make([]int64, 0, len(idx))
@@ -692,17 +747,28 @@ func medianLength(files []File, idx []int) int64 {
 // bracketed and tagged parts are stripped before looking for the episode.
 var (
 	episodeTags = regexp.MustCompile(`(?i)[\[\(][^\]\)]*[\]\)]|\b\d{3,4}[pi]\b|\bx?26[45]\b`)
+	// "[05]", "[05v2]": the episode in a bracket of its own, read before the tags go.
+	bracketNum = regexp.MustCompile(`\[(\d{1,4})(?:v\d)?\]`)
 	// A revision suffix is glued on ("05v2"), leaving no word boundary.
 	versionSuffix = regexp.MustCompile(`(?i)(\d{1,4})v\d\b`)
 	episodeNum    = regexp.MustCompile(`(?i)(?:\bS\d{1,2}E(\d{1,4})\b|(?:^|[\s_.-])(\d{1,4})(?:[\s_.-]|$))`)
-	seasonEpisode = regexp.MustCompile(`(?i)\bS\d{1,2}E(\d{1,4})\b`)
+	seasonEpisode = regexp.MustCompile(`(?i)\bS\d{1,2}[\s._]?E(\d{1,4})\b`)
+	// "E05", "EP05", "Ep. 5": the marked form without a season.
+	markedEpisode = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(])E(?:P|PISODE)?\.?\s*(\d{1,4})(?:v\d)?\b`)
 	// "Show - 11 - 511 Kinderheim": the dashed number, not the title's.
 	dashed = regexp.MustCompile(`[\s_]-[\s_]+(\d{1,4})(?:v\d)?(?:[\s_]|$)`)
 	// "FLAC.2.0", "DDP5.1": read as numbers, every file of a pack was episode 2.
 	audioLayout = regexp.MustCompile(`(?i)(?:^|[\s_.-]|[a-z])[2567]\.[01](?:[\s_.-]|$)`)
+	// "12.5": a recap between two episodes, not episode 12.
+	fractional = regexp.MustCompile(`(?:^|[\s_-])\d{1,4}\.\d(?:[\s_-]|$)`)
 )
 
 func episodeInName(name string) int {
+	if m := bracketNum.FindStringSubmatch(name); m != nil {
+		if n, _ := strconv.Atoi(m[1]); n > 0 && !(len(m[1]) == 4 && n >= 1900 && n <= 2099) {
+			return n
+		}
+	}
 	cleaned := episodeTags.ReplaceAllString(name, " ")
 	// SxxEyy wins over any other number.
 	if m := seasonEpisode.FindStringSubmatch(cleaned); m != nil {
@@ -710,7 +776,15 @@ func episodeInName(name string) int {
 			return n
 		}
 	}
+	if m := markedEpisode.FindStringSubmatch(cleaned); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n
+		}
+	}
 	cleaned = audioLayout.ReplaceAllString(cleaned, " ")
+	if fractional.MatchString(cleaned) {
+		return 0
+	}
 	if m := dashed.FindStringSubmatch(cleaned); m != nil {
 		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 && !(len(m[1]) == 4 && n >= 1900 && n <= 2099) {
 			return n
@@ -719,8 +793,8 @@ func episodeInName(name string) int {
 	cleaned = versionSuffix.ReplaceAllString(cleaned, "$1 ")
 
 	matches := episodeNum.FindAllStringSubmatch(cleaned, -1)
-	for i := len(matches) - 1; i >= 0; i-- {
-		for _, group := range matches[i][1:] {
+	for _, match := range slices.Backward(matches) {
+		for _, group := range match[1:] {
 			if group == "" {
 				continue
 			}
@@ -736,27 +810,6 @@ func episodeInName(name string) int {
 		}
 	}
 	return 0
-}
-
-func baseName(path string) string {
-	path = strings.ReplaceAll(path, `\`, "/")
-	if i := strings.LastIndexByte(path, '/'); i >= 0 {
-		path = path[i+1:]
-	}
-	if i := strings.LastIndexByte(path, '.'); i > 0 {
-		path = path[:i]
-	}
-	return path
-}
-
-func isVideo(name string) bool {
-	lower := strings.ToLower(name)
-	for _, ext := range []string{".mkv", ".mp4", ".avi", ".ts", ".m2ts", ".webm", ".mov"} {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
-	}
-	return false
 }
 
 // ByteRange is a stretch of a file, [From, To) in bytes.

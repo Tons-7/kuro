@@ -11,9 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Drive describes where a directory actually lives. kuro is disk-bound, so a
-// folder on a network share or USB stick makes it look slow; a path alone can't
-// tell (P:\kuro is an SSD to one person, a wifi share to another).
+// Drive is where a directory really lives, which a path alone can't tell; slow drives make kuro look slow.
 type Drive struct {
 	Kind string // fixed, network, removable, cdrom, ramdisk, unknown
 	Slow bool   // worth warning about before anyone blames kuro
@@ -60,9 +58,7 @@ func DriveOf(dir string) Drive {
 	}
 }
 
-// Windows reports a disk's "seek penalty" (its word for mechanical vs SSD).
-// Opened with no access rights so no elevation is needed; anything that can't
-// answer (RAID, virtual disk) is left alone rather than guessed at.
+// A disk's "seek penalty" (spinning vs SSD), read with no access rights so no elevation is needed.
 const (
 	ioctlStorageQueryProperty = 0x2D1400
 	seekPenaltyProperty       = 7
@@ -87,8 +83,7 @@ func spinning(root string) bool {
 	return err == nil && penalty
 }
 
-// Split out so a test can tell "solid state" from "could not ask" — both leave
-// the user unwarned, but only one means the check works.
+// Split out so a test tells "solid state" from "could not ask", which warn alike.
 func seekPenalty(root string) (bool, error) {
 	// The volume device, \\.\P:, takes no trailing backslash.
 	device := `\\.\` + strings.TrimSuffix(root, `\`)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -33,9 +34,7 @@ type Component struct {
 	// Latest is what is published, when known; newer than Version means an update is on offer.
 	Latest string `json:"latest,omitempty"`
 	Needs  string `json:"needs,omitempty"`
-	// Manual holds a package-manager command when kuro cannot fetch this
-	// component on this OS, so the page guides instead of offering a download
-	// that would fail.
+	// Manual: the package-manager command, where kuro cannot fetch this component on this OS.
 	Manual string `json:"manual,omitempty"`
 	// System: found on PATH rather than downloaded into bin/.
 	System bool `json:"system,omitempty"`
@@ -98,8 +97,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	// Versions come from the network; the page gets what was last resolved and a refresh runs behind it.
 	if s.deps != nil {
 		for i := range components {
-			// The built-in engine updates with kuro itself.
-			// A system install is its package manager's to update.
+			// The built-in engine updates with kuro; a system install, with its package manager.
 			if !components[i].Present || components[i].System || !deps.Known(components[i].Name) {
 				continue
 			}
@@ -112,8 +110,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 
 	cache, _ := s.store.SettingInt(r.Context(), "cache.budget_bytes")
 
-	// A nil slice marshals to null; the first-run page reads .length off this, so
-	// an empty slice is required rather than null.
+	// Empty, not nil: the first-run page reads .length off this, and nil marshals to null.
 	roots, _ := s.scannerRoots(r)
 	if roots == nil {
 		roots = []string{}
@@ -159,9 +156,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
-// setDataDir moves the database's home. The folder is written to config.toml
-// and the current database copied there, so a restart picks it up with
-// nothing lost. Empty means back to the default.
+// setDataDir writes the new folder to config.toml and copies the database there; empty means default.
 func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Path string `json:"path"`
@@ -213,7 +208,14 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "write config", err)
 		return
 	}
-	send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": copied, "restart": true})
+	// Restarted now: anything written to the old database after the copy would be lost.
+	if s.relaunch != nil {
+		go func() {
+			time.Sleep(time.Second)
+			s.relaunch()
+		}()
+	}
+	send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": copied, "restart": s.relaunch != nil})
 }
 
 func fileExists(path string) bool {
@@ -224,9 +226,7 @@ func fileExists(path string) bool {
 // Long enough that a failing lookup cannot be retried on every poll.
 const latestRetry = 10 * time.Minute
 
-// refreshLatest resolves a component's newest version in the background, one
-// lookup at a time per component so failed ones don't pile up against the
-// rate limit as the page polls.
+// refreshLatest looks up a component's newest version in the background, one lookup per component at a time.
 func (s *Server) refreshLatest(name string) {
 	s.latestMu.Lock()
 	if s.latestJobs == nil {
@@ -246,8 +246,7 @@ func (s *Server) refreshLatest(name string) {
 	}
 }
 
-// installComponent starts a download and returns immediately: ffmpeg is 420 MB
-// and the page polls setup for progress.
+// installComponent starts a download and returns at once; the page polls for progress.
 func (s *Server) installComponent(w http.ResponseWriter, r *http.Request) {
 	if s.deps == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{
@@ -274,9 +273,7 @@ type systemTool struct {
 	canEncode bool
 }
 
-// describeSystemFFmpeg fills in an ffmpeg found on PATH: its version, and
-// whether it can encode at all. One that cannot counts as missing, so Setup
-// offers kuro's own, which then takes precedence from bin/.
+// describeSystemFFmpeg reads a PATH ffmpeg's version; one that can't encode counts as missing.
 func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
 	path := s.cfg.Tool("ffmpeg")
 	if torrent.Within(s.cfg.BinDir, path) {
@@ -312,9 +309,7 @@ func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
 	}
 }
 
-// hasBinary is true when kuro downloaded the tool into bin/ or the OS provides
-// it on PATH (a Homebrew/apt install), which is how macOS and Linux supply the
-// engines kuro cannot fetch itself.
+// hasBinary: the tool is in bin/ or on PATH, as macOS and Linux supply what kuro can't fetch.
 func (s *Server) hasBinary(name string) bool {
 	info, err := os.Stat(s.cfg.Path(config.ExeName(name)))
 	if err == nil && !info.IsDir() && info.Size() > 0 {
@@ -348,8 +343,7 @@ func (s *Server) scannerRoots(r *http.Request) ([]string, error) {
 	return s.scanner.Roots(r.Context())
 }
 
-// installedVersions reads what fetch-deps recorded. Absent on a hand-assembled
-// bin directory, which is not an error, just unknown.
+// installedVersions reads what fetch-deps recorded; a hand-assembled bin has none, which is fine.
 func (s *Server) installedVersions() map[string]string {
 	out := map[string]string{}
 
@@ -357,6 +351,7 @@ func (s *Server) installedVersions() map[string]string {
 	if err != nil {
 		return out
 	}
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return map[string]string{}
 	}

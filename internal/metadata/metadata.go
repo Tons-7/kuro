@@ -1,6 +1,4 @@
-// Package metadata fetches per-episode data that AniList does not provide:
-// episode titles and stills, filler classification, and opening/ending
-// timestamps.
+// Package metadata fetches what AniList lacks: episode titles and stills, filler flags, op/ed timestamps.
 package metadata
 
 import (
@@ -59,10 +57,7 @@ func (c *Client) url(name, fallback string) string {
 }
 
 type Episode struct {
-	// Number is the entry's own count from one, what AniList, MAL, the airing
-	// schedule and most release groups use. TvdbNumber is TheTVDB's position in
-	// its season, which files a later cour past one (Bleach TYBW part 4 is
-	// 41-50 there) — kept as an alias some groups release under.
+	// Number is the entry's own 1..N; TvdbNumber, TheTVDB's in-season one, is an alias some groups use.
 	Number     int
 	TvdbNumber int
 	Absolute   int
@@ -124,8 +119,7 @@ type Mapping struct {
 	Episodes []Episode
 }
 
-// Episodes fetches per-episode data. Specials keyed "S1".."Sn" are skipped:
-// they do not belong in a season's episode list.
+// Episodes fetches per-episode data, skipping specials keyed "S1".."Sn".
 func (c *Client) Episodes(ctx context.Context, anilistID int) (Mapping, error) {
 	url := c.url("anizip", fmt.Sprintf(AniZipURL, anilistID))
 
@@ -305,7 +299,7 @@ func (c *Client) FillerSiteShows(ctx context.Context) (map[string]string, error)
 		slug, title := m[1], html.UnescapeString(m[2])
 		// Titles often carry the romanisation in brackets — "A Certain Magical
 		// Index (Toaru Majutsu No Index)" — and either half may be what we hold.
-		for _, part := range strings.Split(strings.NewReplacer("(", "|", ")", "").Replace(title), "|") {
+		for part := range strings.SplitSeq(strings.NewReplacer("(", "|", ")", "").Replace(title), "|") {
 			if key := NormaliseTitle(part); key != "" {
 				if _, taken := out[key]; !taken {
 					out[key] = slug
@@ -360,8 +354,7 @@ func NormaliseTitle(s string) string {
 	return b.String()
 }
 
-// The dataset separates manga canon from anime canon and marks partially
-// adapted episodes, which a filler boolean would throw away.
+// The dataset tells manga from anime canon and marks mixed episodes, which a boolean would lose.
 func normaliseKind(kind string) string {
 	switch k := strings.ToLower(strings.TrimSpace(kind)); k {
 	case "manga-canon", "manga canon", "manga":
@@ -385,8 +378,7 @@ type EpisodeFlags struct {
 	Recap   bool
 }
 
-// Voice is one performance of a character. Only the two languages anyone picks
-// between are kept, so a card can follow subbed vs dubbed.
+// Voice is one performance, Japanese or English only, so a card can follow sub vs dub.
 type Voice struct {
 	Name     string `json:"name"`
 	Image    string `json:"image,omitempty"`
@@ -457,8 +449,7 @@ func (c *Client) Characters(ctx context.Context, malID int) ([]Character, error)
 			Favorites: entry.Favorites,
 		}
 
-		// Japanese first: it is the performance the show was made with, and it
-		// is what a card falls back to when nothing was dubbed.
+		// Japanese first: the original performance, and the fallback when nothing was dubbed.
 		for _, want := range []string{"Japanese", "English"} {
 			for _, va := range entry.VoiceActors {
 				if va.Language != want {
@@ -497,12 +488,10 @@ type jikanResponse struct {
 	} `json:"pagination"`
 }
 
-// Flags fetches per-episode filler and recap booleans; recap exists nowhere in
-// the filler dataset, so this is its only source. Called lazily per show since
-// Jikan paginates at 100 and allows ~3 req/s.
 // ErrNotListed: no source lists the show's episodes yet.
 var ErrNotListed = errors.New("episode flags: episodes not listed yet")
 
+// Flags fetches per-episode filler and recap flags, the only recap source; lazily, as Jikan pages slowly.
 func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 	listing, err := c.Listing(ctx, malID)
 	return listing.Flags, err
@@ -523,9 +512,7 @@ func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
 		return out, nil
 	}
 
-	// Tenrai first (maintained and answering; Jikan often 504s), Jikan as
-	// fallback since both mirror the same catalogue. Whichever host answers page
-	// one serves the rest, to avoid paying a dead host's timeout on every page.
+	// Tenrai first, Jikan (often 504s) as fallback; whichever answers page one serves the rest.
 	hosts := []struct{ name, pattern string }{
 		{"tenrai", TenraiURL},
 		{"jikan", JikanURL},
@@ -591,8 +578,7 @@ func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
 		if !res.Pagination.HasNextPage {
 			break
 		}
-		// Paging faster than this silently returns empty pages, which
-		// truncates long-running shows rather than erroring.
+		// Faster paging silently returns empty pages, truncating long-running shows.
 		select {
 		case <-ctx.Done():
 			return out, ctx.Err()
@@ -616,8 +602,7 @@ func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	}
 	defer res.Body.Close()
 
-	// A per-anime lookup that 404s just means no entry exists, which is a
-	// normal outcome rather than a failure.
+	// A per-anime 404 just means no entry exists, not a failure.
 	if res.StatusCode == http.StatusNotFound {
 		return []byte("{}"), nil
 	}

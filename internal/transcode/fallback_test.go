@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,18 +24,15 @@ func TestMain(m *testing.M) {
 }
 
 func fakeFFmpeg(real, refuse string, args []string) int {
-	for _, a := range args {
-		if a == refuse {
-			fmt.Fprintf(os.Stderr, "[%s @ 0] InitializeEncoder failed: invalid param (8)\n", refuse)
-			fmt.Fprintf(os.Stderr, "[vost#0:0/%s @ 0] Task finished with error code: -22 (Invalid argument)\n", refuse)
-			return 1
-		}
+	if slices.Contains(args, refuse) {
+		fmt.Fprintf(os.Stderr, "[%s @ 0] InitializeEncoder failed: invalid param (8)\n", refuse)
+		fmt.Fprintf(os.Stderr, "[vost#0:0/%s @ 0] Task finished with error code: -22 (Invalid argument)\n", refuse)
+		return 1
 	}
 	cmd := exec.Command(real, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			return exit.ExitCode()
 		}
 		return 1
@@ -71,8 +69,7 @@ func tenBitClip(t *testing.T, ffmpeg string, seconds int) string {
 	return path
 }
 
-// A hardware encoder that ffmpeg lists but dies at the first frame must be
-// noticed, and the job finished in software.
+// A listed hardware encoder that dies at the first frame is noticed, and software finishes.
 func TestHardwareEncoderFailureFallsBackToSoftware(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := tenBitClip(t, ffmpeg, 4)
@@ -105,8 +102,7 @@ func TestHardwareEncoderFailureFallsBackToSoftware(t *testing.T) {
 	}
 }
 
-// A software failure is not retried: there is nothing left to fall back to,
-// and a loop of restarts would hide the real error.
+// A software failure isn't retried: nothing is left, and restarts would hide the error.
 func TestSoftwareFailureIsNotRetried(t *testing.T) {
 	const initFail = "InitializeEncoder failed: invalid param (8)"
 
@@ -130,15 +126,13 @@ func TestSoftwareFailureIsNotRetried(t *testing.T) {
 		t.Error("a pass that produced nothing after an init failure is a fallback")
 	}
 
-	// A lost input exits non-zero like an init failure but software cannot help;
-	// switching would pin the whole run to libx264 for nothing.
+	// A lost input exits like an init failure, but switching to software wouldn't help.
 	if s.canFallBack(4, "tcp://127.0.0.1: Connection refused\nError opening input") {
 		t.Error("a source read error is not an encoder failure")
 	}
 }
 
-// Startup detection runs a real encode rather than reading the encoder list,
-// because the list is the same on every machine.
+// Detection runs a real encode, as the encoder list is the same everywhere.
 func TestDetectEncoderSkipsOneThatCannotEncode(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	ctx := context.Background()
@@ -190,8 +184,7 @@ func TestLastLinesKeepsTheCause(t *testing.T) {
 	}
 }
 
-// clipWithCues muxes a subtitle track holding n cues, standing in for a file
-// at successive stages of a download.
+// clipWithCues muxes n cues, standing in for a file at stages of a download.
 func clipWithCues(t *testing.T, ffmpeg string, n int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -236,9 +229,7 @@ func backdate(t *testing.T, path string) {
 	}
 }
 
-// A track from a still-downloading file stops where the download reached. It
-// must be read again while the source can grow, and never replaced by a read
-// that recovered less.
+// A growing file's track is reread, never replaced by a read that recovered less.
 func TestPartialTrackIsReadAgainUntilComplete(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	s := NewSubtitles(ffmpeg)
@@ -256,8 +247,7 @@ func TestPartialTrackIsReadAgainUntilComplete(t *testing.T) {
 		t.Fatalf("first read: %d cues, want 2", got)
 	}
 
-	// More of the file arrives. A request straight away is served from the
-	// recent read; one later sees the growth.
+	// More arrives: an immediate request gets the recent read, a later one the growth.
 	copyFile(t, clipWithCues(t, ffmpeg, 5), source)
 	if _, err := s.Extract(ctx, source, dir, track, "ass", false); err != nil {
 		t.Fatal(err)

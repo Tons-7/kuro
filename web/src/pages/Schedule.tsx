@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { airTime, cx, relativeTime } from '../lib/format'
 import { useNow, useSchedule } from '../lib/queries'
-import { Badge, Empty, ErrorState, FilterToggle, PageHeader, Skeleton } from '../components/ui'
+import { Badge, Empty, ErrorState, FilterToggle, PageHeader, RefreshFailed, Skeleton } from '../components/ui'
 
 function dayLabel(date: string) {
   return new Date(`${date}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
@@ -22,8 +22,7 @@ export function SchedulePage() {
   // The "now" line sits between what has aired and what has not.
   const nowLine = active?.today && nextUp && active.items[0] !== nextUp
 
-  // Scroll to what airs next. Keyed on the date, not the object, so the refetch
-  // doesn't scroll the page out from under a reader.
+  // Scroll to what airs next, keyed on the date so a refetch doesn't scroll under a reader.
   const upcoming = useRef<HTMLLIElement>(null)
   useEffect(() => {
     const el = upcoming.current
@@ -32,8 +31,6 @@ export function SchedulePage() {
     if (box.top >= 0 && box.bottom <= window.innerHeight) return
     el.scrollIntoView({ block: 'center', behavior: 'auto' })
   }, [active?.date])
-
-  if (isError) return <ErrorState error={error} retry={() => refetch()} />
 
   return (
     <div className="space-y-5">
@@ -47,7 +44,11 @@ export function SchedulePage() {
         }
       />
 
-      {isPending ? (
+      {isError && data && <RefreshFailed retry={() => refetch()} />}
+      {/* Below the header, so the "Only my list" toggle stays reachable. */}
+      {isError && !data ? (
+        <ErrorState error={error} retry={() => refetch()} />
+      ) : isPending ? (
         <Skeleton className="h-96 w-full" />
       ) : (
         <>
@@ -91,6 +92,14 @@ export function SchedulePage() {
               {active.items.map((item) => {
                 const aired = item.airingAt <= now
                 const isNext = item === nextUp
+                const badges = (
+                  <>
+                    {isNext && <Badge tone="accent">Next</Badge>}
+                    {item.watched && <Badge tone="success">Watched</Badge>}
+                    {item.behind > 0 && <Badge tone="accent">{item.behind} behind</Badge>}
+                    {item.onList && !item.watched && item.behind === 0 && <Badge>On list</Badge>}
+                  </>
+                )
 
                 return (
                   <li
@@ -117,13 +126,14 @@ export function SchedulePage() {
                         aired && !item.watched && 'pr-14',
                       )}
                     >
-                      <div className="w-20 shrink-0 text-right">
+                      {/* Narrower on a phone, where the title needs the width. */}
+                      <div className="w-20 shrink-0 text-right max-sm:w-14">
                         <p className="text-sm font-medium whitespace-nowrap tabular-nums text-base-100">
                           {airTime(item.airingAt)}
                         </p>
                         <p
                           className={cx(
-                            'text-[11px] whitespace-nowrap',
+                            'text-[11px] whitespace-nowrap max-sm:hidden',
                             isNext ? 'text-accent-400' : 'text-base-500',
                           )}
                         >
@@ -146,25 +156,21 @@ export function SchedulePage() {
                         <p className="line-clamp-1 text-sm font-medium text-base-100">{item.title}</p>
                         <p className="mt-0.5 text-xs text-base-500">
                           Episode {item.episode}
-                          {/* A late-night broadcast is a different weekday in Japan,
-                              which is the one release groups label it with. */}
+                          {/* Late-night broadcasts are a different weekday in Japan, as groups label them. */}
                           {item.jstWeekday !== active.weekday && ` · ${item.jstWeekday} JST`}
                         </p>
+                        {/* On a phone the badges go under the title, which keeps the row's width. */}
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:hidden">{badges}</div>
                       </div>
 
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        {isNext && <Badge tone="accent">Next</Badge>}
-                        {item.watched && <Badge tone="success">Watched</Badge>}
-                        {item.behind > 0 && <Badge tone="accent">{item.behind} behind</Badge>}
-                        {item.onList && !item.watched && item.behind === 0 && <Badge>On list</Badge>}
-                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5 max-sm:hidden">{badges}</div>
                     </Link>
                     {/* Out already: one click to watch, not two via the show. */}
                     {aired && !item.watched && (
                       <Link
                         to={`/watch/${item.animeId}/${item.episode}`}
                         aria-label={`Play episode ${item.episode} of ${item.title}`}
-                        className="absolute top-1/2 right-3 grid size-8 -translate-y-1/2 place-items-center rounded-full bg-accent-500 text-white opacity-0 shadow-lg transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+                        className="tap absolute top-1/2 right-3 grid size-8 -translate-y-1/2 place-items-center rounded-full bg-accent-500 text-white shadow-lg transition-colors hover:bg-accent-400"
                       >
                         <svg viewBox="0 0 24 24" className="size-3.5 translate-x-px" aria-hidden>
                           <path d="M8 5.5v13l11-6.5-11-6.5Z" fill="currentColor" />

@@ -4,22 +4,23 @@ import { LIST_STATUSES, type LibraryItem } from '../lib/api'
 import { useFavourites, useLibrary, useLibraryCounts } from '../lib/queries'
 import { PosterCard, PosterGrid, toCard } from '../components/PosterCard'
 import {
-  Button,
   Empty,
   ErrorState,
   LinkButton,
   PageHeader,
+  Pager,
+  RefreshFailed,
   SearchInput,
   Segmented,
   Select,
   Skeleton,
+  useClampPage,
   useDebounced,
 } from '../components/ui'
 
 const FAVOURITES = 'favourites'
 
-// Episodes to measure progress against: the announced total, or what has
-// aired for a show still running without one.
+// Progress is measured against the announced total, else what has aired.
 function total(item: LibraryItem): number | null {
   return item.episodes ?? (item.nextEpisode ? item.nextEpisode - 1 : null)
 }
@@ -63,19 +64,19 @@ export function Library() {
     next.delete('page')
     setParams(next)
   }
-  const setPage = (n: number) => {
+  const setPage = (n: number, replace = false) => {
     const next = new URLSearchParams(params)
     next.set('page', String(n))
-    setParams(next)
-    // The pager sits under the grid; the next page starts at the top.
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setParams(next, { replace })
   }
+  // A status changed from the last card of a later page empties it.
+  useClampPage(data?.items.length === 0, page, data?.total, data?.perPage ?? 60, (n) => setPage(n, true))
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="My library"
-        meta={!isPending && !isError ? `${data.total} anime` : undefined}
+        meta={data ? `${data.total} anime` : undefined}
         actions={
           !favourites && (
             <>
@@ -112,7 +113,8 @@ export function Library() {
         onChange={setStatus}
       />
 
-      {isError ? (
+      {isError && data && <RefreshFailed retry={() => refetch()} />}
+      {isError && !data ? (
         <ErrorState error={error} retry={() => refetch()} />
       ) : isPending ? (
         <PosterGrid>
@@ -125,18 +127,21 @@ export function Library() {
         </PosterGrid>
       ) : data.items.length === 0 ? (
         <Empty
-          title={q ? 'No match in your list' : 'Nothing here yet'}
+          // Favourites first: the shelf ignores the search box, which it also hides.
+          title={q && !favourites ? 'No match in your list' : 'Nothing here yet'}
           hint={
-            q
-              ? 'Try another spelling, or search all of AniList.'
-              : favourites
-                ? 'Press ♡ on a show to keep it here.'
+            favourites
+              ? 'Press ♡ on a show to keep it here.'
+              : q
+                ? 'Try another spelling, or search all of AniList.'
                 : status
                   ? 'Tag a show with this status and it will appear here.'
                   : 'Connect AniList in settings to import your list, or browse and tag shows yourself.'
           }
           action={
-            q ? (
+            favourites ? (
+              <LinkButton to="/browse">Browse anime</LinkButton>
+            ) : q ? (
               <LinkButton to={`/browse?q=${encodeURIComponent(q)}`}>Search AniList</LinkButton>
             ) : status ? (
               <LinkButton to="/browse">Browse anime</LinkButton>
@@ -155,8 +160,7 @@ export function Library() {
                 key={item.id}
                 anime={{
                   ...toCard(item),
-                  // A show with no announced total still has a bar and a count,
-                  // measured against what has aired.
+                  // No announced total still gets a bar and count, against what has aired.
                   percent: total(item) ? (item.progress / total(item)!) * 100 : 0,
                   badge:
                     item.progress > 0 && total(item)
@@ -168,17 +172,7 @@ export function Library() {
             ))}
           </PosterGrid>
 
-          {(page > 1 || data.hasMore) && (
-            <div className="flex items-center justify-center gap-2 pt-2">
-              <Button disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                Previous
-              </Button>
-              <span className="text-sm text-base-400">Page {page}</span>
-              <Button disabled={!data.hasMore} onClick={() => setPage(page + 1)}>
-                Next
-              </Button>
-            </div>
-          )}
+          <Pager page={page} hasMore={data.hasMore} onPage={setPage} />
         </>
       )}
     </div>

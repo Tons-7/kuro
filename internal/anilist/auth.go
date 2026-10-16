@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -66,24 +69,51 @@ func (c *Client) Exchange(ctx context.Context, clientID, clientSecret, redirectU
 		return Token{}, err
 	}
 	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	if err != nil {
+		return Token{}, err
+	}
 
 	if res.StatusCode != http.StatusOK {
-		var e struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		json.NewDecoder(res.Body).Decode(&e)
-		return Token{}, fmt.Errorf("anilist token exchange (HTTP %d): %s %s", res.StatusCode, e.Error, e.Message)
+		return Token{}, fmt.Errorf("anilist token exchange (HTTP %d): %s", res.StatusCode, exchangeError(raw))
 	}
 
 	var token Token
-	if err := json.NewDecoder(res.Body).Decode(&token); err != nil {
-		return Token{}, err
+	if err := json.Unmarshal(raw, &token); err != nil {
+		return Token{}, fmt.Errorf("anilist token exchange: %w: %s", err, snippet(raw))
 	}
 	if token.AccessToken == "" {
 		return Token{}, fmt.Errorf("anilist token exchange: empty access_token")
 	}
 	return token, nil
+}
+
+// exchangeError is what the OAuth server said: its JSON fields, or the start of a CDN or WAF page.
+func exchangeError(raw []byte) string {
+	var e struct {
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
+		Hint        string `json:"hint"`
+		Message     string `json:"message"`
+	}
+	if json.Unmarshal(raw, &e) == nil {
+		if said := strings.Join(slices.DeleteFunc([]string{e.Error, e.Description, e.Hint, e.Message},
+			func(s string) bool { return s == "" }), ": "); said != "" {
+			return said
+		}
+	}
+	return snippet(raw)
+}
+
+func snippet(raw []byte) string {
+	s := strings.Join(strings.Fields(string(raw)), " ")
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	if s == "" {
+		return "(empty body)"
+	}
+	return s
 }
 
 const viewerQuery = `query { Viewer { id name mediaListOptions { scoreFormat } } }`
@@ -103,4 +133,9 @@ func (c *Client) Viewer(ctx context.Context) (Viewer, error) {
 	}
 	err := c.Query(ctx, viewerQuery, nil, &out)
 	return out.Viewer, err
+}
+
+// ViewerWith asks who a token belongs to without installing it: a login that fails halfway changes nothing.
+func (c *Client) ViewerWith(ctx context.Context, token string) (Viewer, error) {
+	return c.Viewer(context.WithValue(ctx, tokenKey{}, token))
 }

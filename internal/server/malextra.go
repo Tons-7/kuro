@@ -128,8 +128,7 @@ func looksLikeXML(b []byte) bool {
 	return bytes.HasPrefix(bytes.TrimLeft(b, "\xef\xbb\xbf \t\r\n"), []byte("<"))
 }
 
-// malEntries turns a MAL export into library entries. Ids the catalogue cannot
-// place are counted, not guessed.
+// malEntries turns a MAL export into library entries; unplaceable ids are counted, not guessed.
 func (s *Server) malEntries(ctx context.Context, raw []byte) ([]store.ExportEntry, int, error) {
 	if isGzip(raw) {
 		zr, err := gzip.NewReader(bytes.NewReader(raw))

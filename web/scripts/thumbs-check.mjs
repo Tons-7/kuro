@@ -1,6 +1,4 @@
-// Scrub-preview thumbnails against a complete local episode: the sheet is
-// built, its tiles carry a real picture rather than black, and hovering the
-// progress bar shows the tile for that time.
+// Scrub thumbnails of a local episode: the sheet is built, tiles aren't black, the bar shows the right tile.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -115,8 +113,7 @@ check(
 )
 
 // ---------------------------------------------------------------- hovering the bar
-// A fresh mount asks for the sheet at once, which is what a viewer who opens
-// an already-cached episode gets.
+// A fresh mount asks for the sheet at once, as for a viewer opening a cached episode.
 await page.reload({ waitUntil: 'domcontentloaded' })
 await page.waitForFunction(() => (document.querySelector('video')?.currentTime ?? 0) > 1, null, { timeout: 30_000 }).catch(() => {})
 const bar = page.locator('div.group\\/scrub').first()

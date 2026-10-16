@@ -29,10 +29,7 @@ export function TrailerOverlay({ videoId, onClose }: { videoId: string; onClose:
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
       onClick={close}
     >
-      {/* On the screen's corner, not above the video: on a landscape phone the
-          video fills the height and anything above it is off-screen. Escape
-          stops reaching the page once the player has focus, so this has to be
-          always reachable. */}
+      {/* In the corner, not above the video (off-screen on a landscape phone), and always reachable. */}
       <button
         onClick={close}
         aria-label="Close trailer"

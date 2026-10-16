@@ -10,9 +10,7 @@ import (
 	"kuro/internal/metadata"
 )
 
-// Episodes used to be keyed by TheTVDB's count through its season, so a later
-// cour started past one while everything else counted it from one. The
-// migration re-keys such shows and everything filed under the old keys.
+// The migration re-keys TheTVDB-numbered cours from one, with everything filed under the old keys.
 func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

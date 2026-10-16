@@ -112,13 +112,13 @@ func TestLibrarySortAndFilter(t *testing.T) {
 	ctx := context.Background()
 	air1, air2 := 100, 50
 	s.ImportList(ctx, []Anime{
-		{ID: 1, Romaji: "Zeta", English: ptrStr("Alpha Show"), NextAiringAt: &air1},
+		{ID: 1, Romaji: "Zeta", English: new("Alpha Show"), NextAiringAt: &air1},
 		{ID: 2, Romaji: "Beta", Synonyms: `["Cake"]`, NextAiringAt: &air2},
 		{ID: 3, Romaji: "Gamma"},
 	}, []Entry{
-		{ID: 11, AnimeID: 1, Status: ptrStr("CURRENT"), Progress: 2, Score: 50, UpdatedAt: 1},
-		{ID: 12, AnimeID: 2, Status: ptrStr("CURRENT"), Progress: 9, Score: 90, UpdatedAt: 2},
-		{ID: 13, AnimeID: 3, Status: ptrStr("COMPLETED"), Progress: 5, Score: 70, UpdatedAt: 3},
+		{ID: 11, AnimeID: 1, Status: new("CURRENT"), Progress: 2, Score: 50, UpdatedAt: 1},
+		{ID: 12, AnimeID: 2, Status: new("CURRENT"), Progress: 9, Score: 90, UpdatedAt: 2},
+		{ID: 13, AnimeID: 3, Status: new("COMPLETED"), Progress: 5, Score: 70, UpdatedAt: 3},
 	}, ImportMerge)
 	all := Paging{Page: 1, PerPage: 10}
 	ids := func(f LibraryFilter) []int {
@@ -211,4 +211,5 @@ func TestWatchStatsAccumulateFromPlaybackReports(t *testing.T) {
 	}
 }
 
-func ptrStr(v string) *string { return &v }
+//go:fix inline
+func ptrStr(v string) *string { return new(v) }

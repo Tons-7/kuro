@@ -13,8 +13,7 @@ import (
 	"kuro/internal/store"
 )
 
-// Choosing a data folder copies the database there and records the folder in
-// config.toml; a folder that already holds one is left alone.
+// A chosen data folder gets the database and config.toml's entry; one already holding a database is kept.
 func TestSetDataDirCopiesTheDatabaseAndWritesConfig(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("KURO_ROOT", root)

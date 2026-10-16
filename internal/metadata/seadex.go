@@ -9,8 +9,7 @@ import (
 	"strings"
 )
 
-// SeaDex is a human-curated index of the best release of a given anime. Keyed
-// by AniList id, so no title matching is involved.
+// SeaDex curates each anime's best release, keyed by AniList id, so no title matching.
 const SeaDexURL = "https://releases.moe/api/collections/entries/records"
 
 type SeaDexRelease struct {
@@ -49,8 +48,7 @@ type seadexPage struct {
 	} `json:"items"`
 }
 
-// SeaDex mirrors the whole database. At 500 per page the 2,800-odd entries
-// take six requests, after which every lookup is local and free.
+// SeaDex mirrors the whole database: six pages of 500, then every lookup is local.
 func (c *Client) SeaDex(ctx context.Context) ([]SeaDexRelease, error) {
 	const perPage = 500
 
@@ -112,8 +110,7 @@ func (c *Client) SeaDex(ctx context.Context) ([]SeaDexRelease, error) {
 	return out, nil
 }
 
-// A BitTorrent v1 infohash is 40 hex characters. Anything else — most often
-// the placeholder private trackers publish — is not a hash.
+// A v1 infohash is 40 hex characters; private trackers' placeholders are not hashes.
 func usableHash(raw string) string {
 	h := strings.ToLower(strings.TrimSpace(raw))
 	if len(h) != 40 {

@@ -17,8 +17,7 @@ func TestLivePlaysAcrossShows(t *testing.T) {
 		t.Skip("set KURO_LIVE=1 to search the live indexers")
 	}
 
-	// numbers are the ones a release may carry for that episode: a later cour
-	// is also named by its absolute number.
+	// numbers a release may carry for the episode (a later cour also goes by its absolute one).
 	shows := []struct {
 		id      int
 		episode int
@@ -89,8 +88,7 @@ func TestLivePlaysAcrossShows(t *testing.T) {
 			if !identifiesShow(best.Release, best.Torrent.Title, s.titles) {
 				t.Errorf("picked %q, which does not name %s", best.Torrent.Title, s.name)
 			}
-			// The right show at the wrong episode is the same dead end as none.
-			// A film is the whole entry, so it numbers nothing.
+			// The wrong episode is as dead an end as none; a film is the whole entry.
 			rel := best.Release
 			right := s.episode == 1 && rel.Episode == 0 && !rel.Batch
 			for _, n := range s.numbers {

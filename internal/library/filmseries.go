@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"kuro/internal/film"
+	"kuro/internal/parse"
 	"kuro/internal/score"
 	"kuro/internal/store"
 	"kuro/internal/torrent"
@@ -172,7 +173,14 @@ var wholeSeries = regexp.MustCompile(
 // pickFile finds what a release holds for the request: an episode by its number, a film by its name.
 func pickFile(files []torrent.File, r score.Result) (torrent.File, int, bool) {
 	if r.Film == nil {
-		return torrent.PickEpisode(files, r.Numbers...)
+		if f, i, ok := torrent.PickNumbered(files, r.Episode, r.Numbers); ok {
+			return f, i, true
+		}
+		// A film on its own, shipped with unnamed extras: the film is the big one.
+		if r.TotalEpisodes == 1 && !r.Release.Batch {
+			return torrent.PickVideo(files)
+		}
+		return torrent.File{}, -1, false
 	}
 	named := make([]film.File, len(files))
 	for i, f := range files {
@@ -183,7 +191,7 @@ func pickFile(files []torrent.File, r score.Result) (torrent.File, int, bool) {
 	}
 	videos := 0
 	for _, f := range named {
-		if film.IsVideo(f.Name) {
+		if parse.IsVideo(f.Name) {
 			videos++
 		}
 	}

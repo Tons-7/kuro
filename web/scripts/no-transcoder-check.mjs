@@ -1,5 +1,4 @@
-// Only the torrent engine installed: the watch page says the transcoder is
-// missing and points to Setup, instead of a raw ffprobe error.
+// With no transcoder, the watch page points to Setup instead of a raw ffprobe error.
 //   BIN_ONLY=none node scripts/run-player-check.mjs no-transcoder-check.mjs
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'

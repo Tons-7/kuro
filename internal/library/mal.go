@@ -2,7 +2,9 @@ package library
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync"
 
 	"kuro/internal/mal"
 	"kuro/internal/store"
@@ -10,12 +12,19 @@ import (
 
 const malTracker = "mal"
 
+// MALAuthErrorSetting is set when MyAnimeList refuses the stored token, cleared by a good sync or a new login.
+const MALAuthErrorSetting = "mal.auth_error"
+
+var ErrMALReconnect = errors.New("myanimelist rejected the token; reconnect MyAnimeList in Settings")
+
 // MALSync mirrors local progress to MyAnimeList. MAL is driven from local state,
 // not synced against AniList, so the two never fight over which is newer.
 type MALSync struct {
 	store *store.Store
 	mal   *mal.Client
 	log   *slog.Logger
+	// One of Run, PushOne and Pull at a time: a pull judging a site edit against a push in flight rolls it back.
+	mu sync.Mutex
 }
 
 func NewMALSync(s *store.Store, c *mal.Client, log *slog.Logger) *MALSync {
@@ -28,13 +37,14 @@ type MALReport struct {
 	Skipped int `json:"skipped"`
 }
 
-// Run pushes everything MAL has not been told about. It stops on auth failure
-// rather than repeating the same error down the list.
+// Run pushes what MAL hasn't been told, stopping at an auth failure rather than repeating it.
 func (m *MALSync) Run(ctx context.Context) (MALReport, error) {
 	var rep MALReport
 	if m.mal == nil || !m.mal.Authenticated() {
 		return rep, nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	pending, err := m.store.PendingMALPushes(ctx, malTracker, 200)
 	if err != nil {
@@ -51,7 +61,10 @@ func (m *MALSync) Run(ctx context.Context) (MALReport, error) {
 			rep.Failed++
 			m.log.Warn("mal push", "anime", e.AnimeID, "mal", e.RemoteID, "err", err)
 			if mal.Unauthorized(err) {
-				break
+				return rep, m.refused(ctx)
+			}
+			if err := m.store.PushFailed(ctx, malTracker, e.AnimeID); err != nil {
+				return rep, err
 			}
 			continue
 		}
@@ -63,6 +76,7 @@ func (m *MALSync) Run(ctx context.Context) (MALReport, error) {
 
 	if rep.Pushed > 0 {
 		m.log.Info("myanimelist updated", "entries", rep.Pushed)
+		m.accepted(ctx)
 	}
 	return rep, nil
 }
@@ -72,15 +86,33 @@ func (m *MALSync) PushOne(ctx context.Context, animeID int) error {
 	if m.mal == nil || !m.mal.Authenticated() {
 		return nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	e, err := m.store.PendingMALPush(ctx, malTracker, animeID)
 	if err != nil || e.AnimeID == 0 {
 		return err
 	}
 	if err := m.mal.SetProgress(ctx, e.RemoteID, e.Progress, e.Status, e.Repeat, e.Score, clears(e)); err != nil {
+		if mal.Unauthorized(err) {
+			return m.refused(ctx)
+		}
 		return err
 	}
+	m.accepted(ctx)
 	return m.store.MarkPushed(ctx, malTracker, e.AnimeID, e.Progress, e.Status, e.Score)
+}
+
+// refused records that MAL turned the token down, so Settings asks for a reconnect instead of saying Connected.
+func (m *MALSync) refused(ctx context.Context) error {
+	m.store.SetSetting(ctx, MALAuthErrorSetting, "true")
+	return ErrMALReconnect
+}
+
+func (m *MALSync) accepted(ctx context.Context) {
+	if v, _ := m.store.Setting(ctx, MALAuthErrorSetting); v != "" {
+		m.store.SetSetting(ctx, MALAuthErrorSetting, "")
+	}
 }
 
 // clears: MAL was told a score and the local one is now unrated.
@@ -94,19 +126,23 @@ type MALImport struct {
 	Applied int `json:"applied"`
 }
 
-// Pull applies site edits (entries that differ from what MAL was last told)
-// locally, creates entries kuro lacks, and records the rest as MAL's state so
-// connecting never replays the whole list back at it.
+// Pull applies site edits, adds missing entries, and records the rest so connecting replays nothing.
 func (m *MALSync) Pull(ctx context.Context) (MALImport, error) {
 	var rep MALImport
 	if m.mal == nil || !m.mal.Authenticated() {
 		return rep, nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	entries, err := m.mal.List(ctx)
+	if mal.Unauthorized(err) {
+		return rep, m.refused(ctx)
+	}
 	if err != nil {
 		return rep, err
 	}
+	m.accepted(ctx)
 	rep.Entries = len(entries)
 
 	malIDs := make([]int, 0, len(entries))
@@ -135,40 +171,32 @@ func (m *MALSync) Pull(ctx context.Context) (MALImport, error) {
 		if err != nil {
 			return rep, err
 		}
-		// MAL keeps whole points: 85 here is 9 there. Unchanged in MAL's units
-		// keeps the finer score rather than rounding it everywhere.
+		// MAL keeps whole points (85 is 9); unchanged in its units keeps our finer score.
 		if seen && mal.MALScore(last.Score) == e.Score {
 			remote.Score = last.Score
 		}
 
-		apply := false
-		switch {
-		case !seen:
-			local, err := m.store.ListEntry(ctx, animeID)
-			if err != nil {
-				return rep, err
-			}
-			apply = local.AnimeID == 0
-		default:
-			apply = last.Progress != remote.Progress || last.Status != remote.Status || last.Score != remote.Score
+		local, err := m.store.ListEntry(ctx, animeID)
+		if err != nil {
+			return rep, err
 		}
-
-		if apply {
-			changed, err := m.store.ApplyRemote(ctx, store.RemoteEntry{
-				AnimeID: animeID, Status: remote.Status, Progress: remote.Progress,
-				Score: remote.Score, Repeat: remote.Repeat,
-			})
+		apply, ok := pulled(remote, local, last, seen, e)
+		if !ok {
+			// A local edit MAL has not been told about wins; MAL learns of it next run.
+			continue
+		}
+		if apply != nil {
+			apply.Since = local.Changed
+			changed, err := m.store.ApplyRemote(ctx, *apply)
 			if err != nil {
 				return rep, err
 			}
 			if !changed {
-				// An unpushed local edit wins; MAL learns of it next run.
-				continue
+				continue // edited locally while this ran
 			}
 			rep.Applied++
 		}
-		// Unchanged entries are most of a list; rewriting each one every cycle
-		// only competes with playback for the writer.
+		// Unchanged entries, most of a list, are skipped: rewrites compete with playback.
 		if seen && last.Progress == remote.Progress && last.Status == remote.Status && last.Score == remote.Score {
 			continue
 		}
@@ -182,4 +210,51 @@ func (m *MALSync) Pull(ctx context.Context) (MALImport, error) {
 		m.log.Info("myanimelist changes applied", "entries", rep.Applied)
 	}
 	return rep, nil
+}
+
+// pulled: MAL's changes to apply (nil: none), or false when an unpushed edit wins (not AniList's dirty flag).
+func pulled(remote store.TrackerEntry, local store.DirtyEntry, last store.TrackerEntry, seen bool, e mal.Entry) (*store.RemoteEntry, bool) {
+	site := store.RemoteEntry{AnimeID: remote.AnimeID, Status: remote.Status, Progress: remote.Progress, Score: remote.Score, Repeat: remote.Repeat}
+	switch {
+	case seen && agrees(last, remote.Progress, remote.Status, remote.Score):
+		return nil, true // nothing new on MAL
+	case local.AnimeID == 0:
+		return &site, true
+	case seen && !agrees(last, local.Progress, local.Status, local.Score):
+		return nil, false // both moved since the last push
+	case seen:
+		return &site, true
+	}
+
+	// First sight of an entry both sides hold: the side edited last keeps progress and status, a lone score stays.
+	merged := store.RemoteEntry{AnimeID: local.AnimeID, Status: local.Status, Progress: local.Progress,
+		Score: local.Score, Repeat: max(local.Repeat, remote.Repeat)}
+	if !e.Updated.IsZero() && e.Updated.Unix() > local.Changed {
+		merged.Status, merged.Progress = remote.Status, remote.Progress
+	}
+	if merged.Score == 0 {
+		merged.Score = remote.Score
+	}
+	if merged.Status == local.Status && merged.Progress == local.Progress && merged.Score == local.Score && merged.Repeat == local.Repeat {
+		return nil, true
+	}
+	return &merged, true
+}
+
+func agrees(told store.TrackerEntry, progress int, status string, score int) bool {
+	return told.Progress == progress && told.Status == status && told.Score == score
+}
+
+// Remove takes the show off the MAL list, under the push lock so a push in flight can't recreate it.
+func (m *MALSync) Remove(ctx context.Context, animeID int) error {
+	if m.mal == nil || !m.mal.Authenticated() {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	malID, err := m.store.MalID(ctx, animeID)
+	if err != nil || malID == 0 {
+		return err
+	}
+	return m.mal.DeleteEntry(ctx, malID)
 }

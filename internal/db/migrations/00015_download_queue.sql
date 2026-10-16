@@ -1,8 +1,5 @@
 -- +goose Up
--- Queuing a season used to mean holding the whole list in a goroutine: nothing
--- was visible until each episode resolved, the order was invisible, and a
--- restart lost it. The queue is a table so it survives, can be shown, and can
--- be worked through one at a time across every show at once.
+-- A table, so the download queue survives a restart, can be shown, and runs one at a time across shows.
 CREATE TABLE download_queue (
     anime_id   INTEGER NOT NULL REFERENCES anime(id) ON DELETE CASCADE,
     ep_key     TEXT    NOT NULL,

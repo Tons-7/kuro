@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-func strptr(s string) *string { return &s }
+//go:fix inline
+func strptr(s string) *string { return new(s) }
 
 func exportStore(t *testing.T) *Store {
 	t.Helper()
@@ -15,7 +16,7 @@ func exportStore(t *testing.T) *Store {
 	episodes := 28
 	malID := 52991
 	if _, err := st.ImportList(ctx, []Anime{
-		{ID: 100, MalID: &malID, Romaji: "Sousou no Frieren", English: strptr("Frieren"),
+		{ID: 100, MalID: &malID, Romaji: "Sousou no Frieren", English: new("Frieren"),
 			Synonyms: "[]", Genres: "[]", Episodes: &episodes},
 		{ID: 200, Romaji: "Monster", Synonyms: "[]", Genres: "[]"},
 		{ID: 300, Romaji: "Never Touched", Synonyms: "[]", Genres: "[]"},
@@ -205,5 +206,28 @@ func TestExportImportRoundTrip(t *testing.T) {
 			got[i].Favourite != saved[i].Favourite {
 			t.Errorf("entry %d = %+v, want %+v", i, got[i], saved[i])
 		}
+	}
+}
+
+// A favourite never on the list comes back as a favourite, not as an empty list entry pushed to AniList.
+func TestImportKeepsFavouriteOnlyShowsOffTheList(t *testing.T) {
+	st := exportStore(t)
+	ctx := context.Background()
+
+	rep, err := st.ImportEntries(ctx, []ExportEntry{{AnimeID: 200, Favourite: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Entries != 0 || rep.Favourites != 1 {
+		t.Fatalf("report = %+v", rep)
+	}
+	if e, _ := st.ListEntry(ctx, 200); e.AnimeID != 0 {
+		t.Fatalf("entry = %+v, want none", e)
+	}
+	if dirty, _ := st.DirtyEntries(ctx, 0); len(dirty) != 0 {
+		t.Fatalf("dirty = %+v, nothing should be pushed", dirty)
+	}
+	if b, _ := st.Bookmark(ctx, 200); !b.Favourite {
+		t.Fatal("the favourite was lost")
 	}
 }

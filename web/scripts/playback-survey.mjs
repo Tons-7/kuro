@@ -1,7 +1,4 @@
-// Real releases, end to end, without a browser: what the finder offers for an
-// episode, what auto-play picks, and whether that pick opens as a stream with
-// video, audio and subtitles. Needs live indexers (KURO_EXTRA_CONFIG).
-//
+// Real releases without a browser: what is offered, what auto-play picks, whether it streams (live indexers).
 //   SURVEY="19:1,37;185875:1,6" PLAY=1 node scripts/run-player-check.mjs playback-survey.mjs
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
 const PLAY = process.env.PLAY === '1'

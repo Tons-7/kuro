@@ -28,6 +28,7 @@ type duck struct {
 	domain, token string
 	config        *certmagic.Config
 	cache         *certmagic.Cache
+	ctx           context.Context
 	stop          context.CancelFunc
 
 	mu      sync.Mutex
@@ -79,6 +80,13 @@ func (s *Source) Status() Status {
 	d.mu.Lock()
 	out := Status{Domain: d.domain, State: d.state, Problem: d.problem, IP: d.ip}
 	d.mu.Unlock()
+	// Ready is a certificate that still holds; one that ran out is being fetched again, or failed to be.
+	if out.State == StateReady && !d.ready() {
+		out.State = StateWorking
+		if out.Problem == "" {
+			out.Problem = "the certificate has expired; a new one is being fetched"
+		}
+	}
 	for _, cert := range d.cache.AllMatchingCertificates(d.domain) {
 		if cert.Leaf != nil {
 			out.Expires = cert.Leaf.NotAfter.Unix()
@@ -116,10 +124,9 @@ func (s *Source) UseDuckDNS(typed, token string) error {
 	if token == "" {
 		return errors.New("the token from duckdns.org is needed")
 	}
-	s.StopDuckDNS()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &duck{domain: domain, token: token, stop: cancel, state: StateWorking}
+	d := &duck{domain: domain, token: token, ctx: ctx, stop: cancel, state: StateWorking}
 	d.cache = certmagic.NewCache(certmagic.CacheOptions{
 		GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return d.config, nil },
 		Logger:           zap.NewNop(),
@@ -138,8 +145,8 @@ func (s *Source) UseDuckDNS(typed, token string) error {
 				if err == nil {
 					err = errors.New("the certificate authority refused")
 				}
-				// A failed renewal leaves the current certificate serving.
-				if renewal, _ := data["renewal"].(bool); !renewal {
+				// A failed renewal leaves the current certificate serving, unless it has already run out.
+				if renewal, _ := data["renewal"].(bool); !renewal || !d.ready() {
 					d.set(StateError, plainProblem(err, token))
 				}
 				s.log.Warn("https certificate", "name", domain, "err", plainProblem(err, token))
@@ -162,9 +169,15 @@ func (s *Source) UseDuckDNS(typed, token string) error {
 		}},
 	})}
 
+	// Swapped under the lock and the one replaced stopped: two saves at once left one running for good.
 	s.mu.Lock()
+	old := s.duck
 	s.duck = d
 	s.mu.Unlock()
+	if old != nil {
+		old.stop()
+		old.cache.Stop()
+	}
 	go s.runDuck(ctx, d)
 	return nil
 }
@@ -182,36 +195,41 @@ func (s *Source) StopDuckDNS() {
 }
 
 const (
-	duckRetry   = 10 * time.Minute
-	duckIPCheck = 5 * time.Minute
+	duckRetry      = 10 * time.Minute
+	duckFirstRetry = 30 * time.Second
+	duckIPCheck    = 5 * time.Minute
 )
 
 func (s *Source) runDuck(ctx context.Context, d *duck) {
-	// Until it succeeds: a wrong token or no internet is fixed by the owner, not by giving up.
+	// The certificate on disk serves at once; async, so it never prompts, and a new one comes via OnEvent.
+	if err := d.config.ManageAsync(ctx, []string{d.domain}); err != nil {
+		d.set(StateError, plainProblem(err, d.token))
+		s.log.Warn("https certificate", "name", d.domain, "err", plainProblem(err, d.token))
+	} else if d.ready() {
+		d.set(StateReady, "")
+		s.log.Info("https certificate ready", "name", d.domain)
+	}
+
+	// Until it succeeds, soon at first: Wi-Fi comes up a moment after kuro does.
+	wait := duckFirstRetry
 	for {
 		err := s.pointDuck(ctx, d)
-		if err == nil {
-			// Async: never prompts on the terminal; a new certificate arrives through OnEvent.
-			err = d.config.ManageAsync(ctx, []string{d.domain})
-		}
 		if ctx.Err() != nil {
 			return
 		}
 		if err == nil {
-			if len(d.cache.AllMatchingCertificates(d.domain)) > 0 {
-				d.set(StateReady, "")
-				s.log.Info("https certificate ready", "name", d.domain)
-			}
 			break
 		}
-		d.set(StateError, plainProblem(err, d.token))
-		s.log.Warn("https certificate", "name", d.domain, "err", plainProblem(err, d.token))
+		if !d.ready() {
+			d.set(StateError, plainProblem(err, d.token))
+		}
+		s.log.Warn("duckdns address update", "name", d.domain, "err", plainProblem(err, d.token), "again_in", wait)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(duckRetry):
-			d.set(StateWorking, "")
+		case <-time.After(wait):
 		}
+		wait = min(wait*2, duckRetry)
 	}
 
 	tick := time.NewTicker(duckIPCheck)

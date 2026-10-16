@@ -57,8 +57,7 @@ func TestReconcileRepointsMovedIDs(t *testing.T) {
 	}
 }
 
-// A torrent the engine has forgotten must lose its id, so nothing can act on
-// a number that now means something else.
+// A torrent the engine forgot loses its id, which may now mean another one.
 func TestReconcileClearsUnknownTorrents(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -33,10 +33,10 @@ func TestLiveMatchingOnExposedTitles(t *testing.T) {
 		{21995, "Orange", nil, `[]`, 13, 4},
 		{104207, "Given", nil, `[]`, 11, 5},
 		{20826, "Free!", nil, `[]`, 12, 2},
-		{21234, "Boku dake ga Inai Machi", str("ERASED"), `[]`, 12, 6},
+		{21234, "Boku dake ga Inai Machi", new("ERASED"), `[]`, 12, 6},
 		{3701, "Kaiba", nil, `[]`, 12, 2},
-		{114745, "Made in Abyss: Retsujitsu no Ougonkyou", str("Made in Abyss: The Golden City of the Scorching Sun"), `[]`, 12, 3},
-		{146065, "Mushoku Tensei II: Isekai Ittara Honki Dasu", str("Mushoku Tensei: Jobless Reincarnation Season 2"), `[]`, 12, 5},
+		{114745, "Made in Abyss: Retsujitsu no Ougonkyou", new("Made in Abyss: The Golden City of the Scorching Sun"), `[]`, 12, 3},
+		{146065, "Mushoku Tensei II: Isekai Ittara Honki Dasu", new("Mushoku Tensei: Jobless Reincarnation Season 2"), `[]`, 12, 5},
 	}
 
 	st := prefetchStore(t)
@@ -79,4 +79,5 @@ func TestLiveMatchingOnExposedTitles(t *testing.T) {
 	}
 }
 
-func str(s string) *string { return &s }
+//go:fix inline
+func str(s string) *string { return new(s) }

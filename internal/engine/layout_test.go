@@ -32,7 +32,7 @@ func TestSingleFileTorrentLayout(t *testing.T) {
 		peer: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.LocalPort()}}
 	f.start(t)
 	c := ctx(t)
-	magnet := mi.Magnet(nil, nil).String()
+	magnet := magnetOf(t, &mi)
 	in, err := f.client.Inspect(c, magnet)
 	if err != nil {
 		t.Fatal(err)
@@ -126,8 +126,7 @@ func TestReaddAfterDeletedFileForgetsItsPieces(t *testing.T) {
 
 	f.client.Forget(c, added.ID)
 	os.Remove(filepath.Join(f.cache, "Show Pack", "Show - 02.mkv"))
-	// An inspection has the metadata and downloads nothing, so no piece is
-	// re-fetched under the check; add runs the same cleanup on it.
+	// An inspection downloads nothing, so no piece is refetched; add runs the same cleanup on it.
 	if _, err := f.client.Inspect(c, f.magnet); err != nil {
 		t.Fatal(err)
 	}

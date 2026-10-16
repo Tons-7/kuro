@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // A search hits every indexer with six title variants and is repeated across
@@ -23,6 +25,8 @@ type Cached struct {
 
 	mu      sync.Mutex
 	entries map[string]cachedSearch
+	// inflight: the same query asked while one is already out waits for that answer.
+	inflight singleflight.Group
 }
 
 func NewCached(source Source) *Cached {
@@ -45,7 +49,8 @@ func (c *Cached) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		return entry.results, nil
 	}
 
-	results, err := c.source.Search(ctx, q)
+	shared, err, _ := c.inflight.Do(key, func() (any, error) { return c.source.Search(ctx, q) })
+	results, _ := shared.([]Torrent)
 	if err != nil {
 		return results, err
 	}

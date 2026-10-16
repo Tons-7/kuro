@@ -9,6 +9,7 @@ import (
 
 	"kuro/internal/indexer"
 	"kuro/internal/parse"
+	"kuro/internal/score"
 	"kuro/internal/store"
 )
 
@@ -91,31 +92,43 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		return
 	}
 
-	for _, r := range found.Results {
-		// Confirmed only: a pack that states no range is a guess, and
-		// announcing one claims an episode nobody has released.
-		if !r.AutoPick || !r.Confirmed || !want(r.Release) {
+	// Confirmed only, or a guessed pack announces an unreleased episode; notify and fetch filter separately.
+	var announce, fetch *score.Result
+	for i := range found.Results {
+		r := &found.Results[i]
+		if !r.AutoPick || !r.Confirmed {
 			continue
 		}
 		if seen, _ := w.store.AlreadyNotified(ctx, r.Torrent.InfoHash, animeID, episode); seen {
 			continue
 		}
-		rep.Found++
+		if fetch == nil {
+			fetch = r
+		}
+		if announce == nil && want(r.Release) {
+			announce = r
+		}
+	}
+	if fetch == nil {
+		return
+	}
+	rep.Found++
 
-		if !notifyOn {
-			if err := w.store.RecordNotified(ctx, r.Torrent.InfoHash, animeID, episode); err != nil {
-				w.log.Warn("record release", "err", err)
-			}
-		} else if err := w.notify(ctx, animeID, episode, r.Torrent.Title, r.Torrent.InfoHash); err != nil {
+	switch {
+	case !notifyOn || announce == nil:
+		if err := w.store.RecordNotified(ctx, fetch.Torrent.InfoHash, animeID, episode); err != nil {
+			w.log.Warn("record release", "err", err)
+		}
+	default:
+		if err := w.notify(ctx, animeID, episode, announce.Torrent.Title, announce.Torrent.InfoHash); err != nil {
 			w.log.Warn("notify", "err", err)
 		} else {
 			rep.Notified++
 		}
+	}
 
-		if auto && w.download(ctx, animeID, episode) {
-			rep.Downloaded++
-		}
-		return
+	if auto && w.download(ctx, animeID, episode) {
+		rep.Downloaded++
 	}
 }
 
@@ -125,8 +138,7 @@ func (w *Watcher) autoDownload(ctx context.Context, animeID int) bool {
 	return err == nil && prefs.Bool("autodownload.enabled")
 }
 
-// Queued rather than fetched so many shows updating at once don't start that
-// many downloads, behind manual requests.
+// Queued, so many shows updating at once don't start as many downloads, and behind manual ones.
 func (w *Watcher) download(ctx context.Context, animeID, episode int) bool {
 	if w.queue == nil {
 		return false
@@ -165,8 +177,7 @@ func (w *Watcher) prefsFor(ctx context.Context, animeID int) scorePrefs {
 	return prefsFromSettings(p)
 }
 
-// A dual-audio release satisfies both preferences: the Japanese and English
-// tracks are both in the file and chosen at playback.
+// A dual-audio release satisfies both preferences; the track is chosen at playback.
 func audioFilter(pref string) func(parse.Release) bool {
 	switch strings.ToLower(pref) {
 	case "dub":
@@ -176,16 +187,14 @@ func audioFilter(pref string) func(parse.Release) bool {
 	case "either", "both":
 		return func(parse.Release) bool { return true }
 	default:
-		// Subtitled releases are the default and carry no marker, so only an
-		// explicitly dub-only release is excluded.
+		// Subbed releases carry no marker, so only an explicitly dub-only one is excluded.
 		return func(r parse.Release) bool {
 			return r.DualAudio || !mentionsDub(r)
 		}
 	}
 }
 
-// Reads the original filename: the parser strips bracketed tags from Title, so
-// a "[Dual Audio]" or "[English Dub]" marker is gone by then.
+// The original filename, as Title has lost bracketed tags like "[Dual Audio]".
 func mentionsDub(r parse.Release) bool {
 	lower := strings.ToLower(r.Raw)
 	return strings.Contains(lower, "dub") || strings.Contains(lower, "english audio")

@@ -25,8 +25,8 @@ func TestLiveMovieIsNotRejectedForItsSize(t *testing.T) {
 		english *string
 		minutes int
 	}{
-		{3783, "Kara no Kyoukai: Tsuukaku Zanryuu", str("the Garden of sinners Chapter 3: ever cry, never life."), 58},
-		{21519, "Kimi no Na wa.", str("Your Name."), 106},
+		{3783, "Kara no Kyoukai: Tsuukaku Zanryuu", new("the Garden of sinners Chapter 3: ever cry, never life."), 58},
+		{21519, "Kimi no Na wa.", new("Your Name."), 106},
 	}
 
 	st := prefetchStore(t)

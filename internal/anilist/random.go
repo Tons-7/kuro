@@ -6,10 +6,10 @@ import (
 	"math/rand/v2"
 	"strings"
 	"sync"
+	"time"
 )
 
-// A uniform draw across every anime almost always lands on a forgotten OVA;
-// popularityFloor keeps the result to things worth watching.
+// popularityFloor keeps a uniform draw off forgotten OVAs.
 const popularityFloor = 5000
 
 // randomQuery asks for one anime at a random offset; pageInfo.total bounds the next draw.
@@ -24,29 +24,40 @@ const randomQuery = `query Random($page: Int!, $format: MediaFormat, $genres: [S
 // two. Slight staleness only skews the distribution, never the result.
 type totals struct {
 	mu sync.Mutex
-	by map[string]int
+	by map[string]total
 }
 
-func (t *totals) get(key string) int {
+type total struct {
+	n  int
+	at time.Time
+}
+
+// How long a filter nobody matches is answered without a request; a repeated click costs nothing.
+const noMatchFor = 10 * time.Minute
+
+var errNoMatch = fmt.Errorf("anilist: no anime matched")
+
+// get is the filter's last count; known is false for one never seen, or an empty one seen a while ago.
+func (t *totals) get(key string) (n int, known bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if n, ok := t.by[key]; ok && n > 0 {
-		return n
+	c, ok := t.by[key]
+	if !ok || (c.n == 0 && time.Since(c.at) > noMatchFor) {
+		return 0, false
 	}
-	return 0
+	return c.n, true
 }
 
 func (t *totals) set(key string, n int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.by == nil {
-		t.by = map[string]int{}
+		t.by = map[string]total{}
 	}
-	t.by[key] = n
+	t.by[key] = total{n: n, at: time.Now()}
 }
 
-// Random returns one anime matching a format, every genre given, and a year.
-// Adult titles are excluded unless Hentai is a chosen genre.
+// Random returns one anime matching format, every genre and year; adult only with the Hentai genre.
 func (c *Client) Random(ctx context.Context, format string, genres []string, year int) (Media, error) {
 	vars := map[string]any{
 		"floor":   popularityFloor,
@@ -64,8 +75,11 @@ func (c *Client) Random(ctx context.Context, format string, genres []string, yea
 	key := fmt.Sprint(format, "|", strings.Join(genres, ","), "|", year)
 
 	// The first draw for an unseen filter is a guess; the response corrects it.
-	bound := c.totals.get(key)
-	if bound <= 0 {
+	bound, known := c.totals.get(key)
+	if known && bound == 0 {
+		return Media{}, errNoMatch
+	}
+	if !known {
 		bound = 500
 	}
 
@@ -84,18 +98,19 @@ func (c *Client) Random(ctx context.Context, format string, genres []string, yea
 			return Media{}, err
 		}
 
-		if total := out.Page.PageInfo.Total; total > 0 {
-			c.totals.set(key, total)
-			bound = total
+		total := out.Page.PageInfo.Total
+		c.totals.set(key, total)
+		if total == 0 {
+			break
 		}
+		bound = total
 		if len(out.Page.Media) > 0 {
 			return out.Page.Media[0], nil
 		}
-		// An overshoot past the real total returns an empty page; the bound is
-		// now known, so the next attempt lands.
-		if attempt == 2 || bound <= 0 {
+		// An overshoot returns an empty page; the bound is now known, so the next attempt lands.
+		if attempt == 2 {
 			break
 		}
 	}
-	return Media{}, fmt.Errorf("anilist: no anime matched")
+	return Media{}, errNoMatch
 }

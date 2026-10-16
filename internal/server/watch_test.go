@@ -260,3 +260,19 @@ func TestFollowNeedsAShow(t *testing.T) {
 		t.Errorf("a follow without a show answered %d, want 400", code)
 	}
 }
+
+// DELETE /api/status/{id} takes the show off the list; nothing listed is left behind for it.
+func TestRemoveStatusTakesTheShowOffTheList(t *testing.T) {
+	h := watchHarness(t)
+	h.call(t, "POST", "/api/status", `{"animeId":1,"status":"CURRENT"}`)
+
+	if code, body := h.call(t, "DELETE", "/api/status/1", ""); code != http.StatusOK {
+		t.Fatalf("answered %d %v", code, body)
+	}
+	if e := progressOf(t, h); e.AnimeID != 0 {
+		t.Errorf("the show is still listed as %s", e.Status)
+	}
+	if code, _ := h.call(t, "DELETE", "/api/status/abc", ""); code != http.StatusBadRequest {
+		t.Errorf("a bad id answered %d, want 400", code)
+	}
+}

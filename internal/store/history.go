@@ -106,8 +106,7 @@ func (s *Store) ForgetHistory(ctx context.Context, animeID int, epKey string) (i
 	return int(n), nil
 }
 
-// WatchStats sums what actually played, by window, plus what the list counts
-// as done. Days are calendar days on this machine's clock.
+// WatchStats sums what played per window, plus what the list counts done, by local calendar day.
 type WatchStats struct {
 	WeekSeconds  float64 `json:"weekSeconds"`
 	MonthSeconds float64 `json:"monthSeconds"`

@@ -71,8 +71,7 @@ func remaining(t *testing.T, st *store.Store) int {
 	return len(entries)
 }
 
-// An engine listing nothing is one still reloading its session: forgetting
-// then would cascade every episode's link to its file away.
+// An engine listing nothing is still reloading; forgetting then would unlink every episode's file.
 func TestEmptyListingNeverForgets(t *testing.T) {
 	c, st, _ := restartFixture(t, 0)
 	record(t, st, "abc", "Frieren - 05", 0)

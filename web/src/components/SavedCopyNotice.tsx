@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { catalogueSource } from '../lib/api'
+import { api, catalogueSource } from '../lib/api'
 import { relativeTime } from '../lib/format'
 
 /** Shown while pages come from kuro's saved copy. */
@@ -8,6 +8,7 @@ export function SavedCopyNotice() {
   const savedAt = useSyncExternalStore(catalogueSource.subscribe, catalogueSource.savedAt)
   const qc = useQueryClient()
   const [retrying, setRetrying] = useState(false)
+  const [stillDown, setStillDown] = useState(false)
   if (savedAt == null) return null
 
   return (
@@ -23,14 +24,18 @@ export function SavedCopyNotice() {
       <button
         type="button"
         disabled={retrying}
+        // One live question first: inside the server's down window a refetch alone gets the saved copy again.
         onClick={async () => {
           setRetrying(true)
-          await qc.refetchQueries({ type: 'active' }).catch(() => {})
+          setStillDown(false)
+          const answer = await api.post<{ live: boolean }>('/api/anilist/recheck').catch(() => ({ live: false }))
+          if (answer.live) await qc.refetchQueries({ type: 'active' }).catch(() => {})
+          else setStillDown(true)
           setRetrying(false)
         }}
         className="shrink-0 rounded-md px-2 py-1 font-medium text-amber-100 transition-colors hover:bg-amber-400/15 disabled:opacity-50"
       >
-        {retrying ? 'Checking…' : 'Try now'}
+        {retrying ? 'Checking…' : stillDown ? 'Still down · Try again' : 'Try now'}
       </button>
     </div>
   )

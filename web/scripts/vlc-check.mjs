@@ -1,6 +1,4 @@
-// VLC as the default player, driven through its HTTP interface: progress is
-// saved, Stop keeps the resume point, the end of an episode marks it watched
-// and auto-next opens the following one in a new VLC.
+// VLC via its HTTP interface: progress saves, Stop keeps the resume point, the end marks watched, auto-next.
 import { execSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
@@ -77,9 +75,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
-// Play from the start, let it run, then Stop. The test episode's opening
-// chapter ends at 40 s, so the saved position proves both tracking and the
-// auto-skip seek through VLC.
+// Play, then Stop: past the opening chapter's 40 s, the saved position proves tracking and auto-skip.
 await post('/api/progress', { animeId: ANIME, episode: 1, position: 0, duration: 180, played: 0 })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByText('Playing in VLC').isVisible().catch(() => false), 30000), 'the page says it is playing in VLC')
@@ -92,9 +88,7 @@ const saved = await resume(1)
 check(saved >= 40 && saved <= 60, 'the position VLC reached, past the skipped opening, was saved', String(saved))
 check(!(await episode(1))?.watched, 'a stopped episode is not watched')
 
-// Resume near the end: VLC reaches the end, the episode is watched, and
-// auto-next opens episode 2 in a new VLC.
-// Played covers half the episode: reaching the end only counts once that much has really played.
+// Resume near the end (half already played, so it counts): watched, and auto-next opens episode 2.
 await post('/api/progress', { animeId: ANIME, episode: 1, position: 150, duration: 180, played: 100 })
 check(!(await episode(1))?.watched, 'episode 1 is not watched before the ending plays')
 const play = (await post('/api/play', { animeId: ANIME, episode: 1, external: true })).body ?? {}

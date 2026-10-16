@@ -12,6 +12,7 @@ const (
 	trendPool     = 100
 	trendPageSize = 50
 	trendMaxPages = 4
+	dayLength     = int64(24 * time.Hour / time.Second)
 )
 
 const trendQuery = `query Trends($ids: [Int], $since: Int, $page: Int!, $perPage: Int!) {
@@ -25,8 +26,7 @@ const trendQuery = `query Trends($ids: [Int], $since: Int, $page: Int!, $perPage
   }
 }`
 
-// Batched so one day of rows fits a single page; across pages the ordering is
-// not stable and readings come back from the wrong day.
+// Batched so a day of rows fits one page: across pages the order isn't stable.
 func (c *Client) popularityAt(ctx context.Context, ids []int, day time.Time) (map[int]int, error) {
 	since := day.UTC().Truncate(24*time.Hour).Unix() - 1
 	found := make(map[int]int, len(ids))
@@ -64,15 +64,19 @@ func (c *Client) readBatch(ctx context.Context, ids []int, since int64, found ma
 			return err
 		}
 
+		// Rows come oldest first; only the window's first day counts, so a page past it ends the read.
+		pastDay := false
 		for _, t := range out.Page.MediaTrends {
-			// Rows arrive oldest first, so the first one seen for an anime is
-			// its reading at the start of the window.
+			if t.Date > since+dayLength {
+				pastDay = true
+				break
+			}
 			if at, seen := dates[t.MediaID]; !seen || t.Date < at {
 				dates[t.MediaID] = t.Date
 				found[t.MediaID] = t.Popularity
 			}
 		}
-		if len(dates) == len(ids) || !out.Page.PageInfo.HasNextPage ||
+		if pastDay || len(dates) == len(ids) || !out.Page.PageInfo.HasNextPage ||
 			len(out.Page.MediaTrends) == 0 {
 			break
 		}

@@ -10,8 +10,7 @@ import (
 	"github.com/anacrolix/torrent/storage"
 )
 
-// A file path climbing out of the cache is refused, including into a sibling
-// whose name starts like the cache's.
+// A path climbing out of the cache is refused, even into a sibling named like it.
 func TestStorageRefusesPathsOutsideTheCache(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "cache")
 	info := &metainfo.Info{Name: "pack", PieceLength: 4, Files: []metainfo.FileInfo{
@@ -22,9 +21,7 @@ func TestStorageRefusesPathsOutsideTheCache(t *testing.T) {
 	}
 }
 
-// A piece's completion: missing bytes are a known "no" (else anacrolix hashes
-// every piece of a new torrent), bytes without a record are unknown (carried
-// over, so they get hashed), and a record whose file is gone is not trusted.
+// Missing bytes are a "no", bytes without a record are unknown, and a record without its file is not trusted.
 func TestCompletionFollowsTheDisk(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ep.mkv")

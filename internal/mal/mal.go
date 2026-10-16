@@ -1,6 +1,4 @@
-// Package mal talks to the MyAnimeList API v2. It exists alongside anilist as
-// a second tracker: MAL uses its own anime ids, its own status vocabulary, and
-// access tokens that expire hourly rather than yearly.
+// Package mal talks to the MyAnimeList API v2, the second tracker (own ids, statuses, hourly tokens).
 package mal
 
 import (
@@ -43,16 +41,14 @@ type Client struct {
 	api     string
 	oauth   string
 
-	// onToken persists a refreshed token. Refresh happens mid-request, so the
-	// caller cannot be the one to notice.
+	// onToken persists a token refreshed mid-request, which the caller can't notice.
 	onToken func(Token)
 	backoff func(int) time.Duration
 
 	// Credentials are guarded because they are entered in the app rather than
 	// read from a file, so they can change while requests are in flight.
 	mu sync.Mutex
-	// One refresh at a time: two spending the same refresh token leave the
-	// loser, or a revoked access token, stored.
+	// One refresh at a time, or two spending one refresh token store a revoked one.
 	refreshing sync.Mutex
 	token      Token
 	clientID   string
@@ -154,8 +150,7 @@ func Unauthorized(err error) bool {
 	return false
 }
 
-// get calls an authenticated endpoint. absolute is used for paging, where MAL
-// hands back a full URL rather than an offset.
+// get calls an authenticated endpoint; absolute is for paging, where MAL hands back full URLs.
 func (c *Client) get(ctx context.Context, absolute string, out any) error {
 	return c.do(ctx, http.MethodGet, absolute, nil, out)
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -78,10 +79,30 @@ func (s *Source) UseFiles(cert, key string) error {
 			names = append(names, n)
 		}
 	}
+	// A certificate for this machine's own address (mkcert's usual kind) pairs over https too.
+	for _, ip := range leaf.IPAddresses {
+		if ip.IsPrivate() && hasAddr(ip) {
+			names = append(names, ip.String())
+		}
+	}
 	s.mu.Lock()
 	s.files, s.fileNames = files, names
 	s.mu.Unlock()
 	return nil
+}
+
+// hasAddr reports an address of this machine.
+func hasAddr(ip net.IP) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // certFiles serves a certificate from disk, reread when the file changes so a renewal needs no restart.

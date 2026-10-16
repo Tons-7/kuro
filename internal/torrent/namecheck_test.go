@@ -1,6 +1,10 @@
 package torrent
 
-import "testing"
+import (
+	"testing"
+
+	"kuro/internal/parse"
+)
 
 func TestEpisodeInNameIgnoresYearsAndCodecs(t *testing.T) {
 	cases := map[string]int{
@@ -11,7 +15,7 @@ func TestEpisodeInNameIgnoresYearsAndCodecs(t *testing.T) {
 	}
 
 	for name, want := range cases {
-		if got := episodeInName(baseName(name)); got != want {
+		if got := episodeInName(parse.BaseName(name)); got != want {
 			t.Errorf("%s\n  got %d, want %d", name, got, want)
 		}
 	}

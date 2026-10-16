@@ -95,8 +95,7 @@ func TestMarkWatchedCompletesOnFinalEpisode(t *testing.T) {
 	}
 }
 
-// A currently-airing show has no episode count, and guessing one would
-// complete the entry after the first episode.
+// An airing show has no count; guessing one would complete it after episode 1.
 func TestMarkWatchedDoesNotCompleteWithUnknownLength(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -108,8 +107,7 @@ func TestMarkWatchedDoesNotCompleteWithUnknownLength(t *testing.T) {
 	}
 }
 
-// Writing back the server's own timestamp is what stops the next pull from
-// seeing our write as a remote change.
+// Storing the server's timestamp stops the next pull reading our write as remote.
 func TestClearDirtyRecordsRemoteState(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

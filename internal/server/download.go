@@ -9,14 +9,12 @@ import (
 	"time"
 )
 
-// detached scopes work that outlives the request that started it: a download
-// must not be cancelled because the browser tab moved on.
+// detached scopes work outliving its request: a download must survive the tab moving on.
 func detached(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
 }
 
-// download pulls one episode to disk ahead of watching it. The same machinery
-// backs auto-download; this is the manual button.
+// download is the manual button for fetching one episode, the same machinery as auto-download.
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
@@ -94,8 +92,7 @@ func (s *Server) downloadRelease(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusAccepted, map[string]any{"queued": true, "animeId": body.AnimeID, "episode": body.Episode, "infoHash": hash})
 }
 
-// downloadEpisodes queues a hand-picked set — the episode-list checkboxes —
-// through the same queue as a whole season.
+// downloadEpisodes queues the episode list's ticked set like a whole season.
 func (s *Server) downloadEpisodes(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID  int   `json:"animeId"`
@@ -154,11 +151,6 @@ func (s *Server) downloadAll(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "animeId is required"})
 		return
 	}
-	if s.prefetch == nil {
-		send(w, http.StatusServiceUnavailable, map[string]any{"error": "torrent engine unavailable"})
-		return
-	}
-
 	from, to := body.From, body.To
 	if from <= 0 {
 		from = 1
@@ -174,8 +166,16 @@ func (s *Server) downloadAll(w http.ResponseWriter, r *http.Request) {
 		to = count
 	}
 	// A slip in the range should not queue a thousand searches at Nyaa.
+	if from > to {
+		send(w, http.StatusBadRequest, map[string]any{"error": "from is past the last episode"})
+		return
+	}
 	if to-from >= 500 {
 		send(w, http.StatusBadRequest, map[string]any{"error": "range too large"})
+		return
+	}
+	if s.prefetch == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "torrent engine unavailable"})
 		return
 	}
 
@@ -264,8 +264,7 @@ func (s *Server) prioritiseQueued(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"moved": moved})
 }
 
-// downloads reports what the torrent engine currently holds, so the UI can
-// show progress rather than a spinner that never resolves.
+// downloads reports what the engine holds, so the UI shows progress, not an endless spinner.
 func (s *Server) downloads(w http.ResponseWriter, r *http.Request) {
 	if s.cache == nil {
 		send(w, http.StatusOK, map[string]any{"items": []any{}})
@@ -278,8 +277,7 @@ func (s *Server) downloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// bytes_on_disk reserves full length from the start, so percentages must come
-	// from the engine or every download reads as finished.
+	// bytes_on_disk is full length from the start, so percentages come from the engine.
 	if live, err := s.cache.Progress(r.Context()); err != nil {
 		s.log.Warn("download progress", "err", err)
 	} else {
@@ -327,8 +325,7 @@ func (s *Server) removeDownload(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"removed": hash, "freedBytes": freed})
 }
 
-// pauseDownload stops fetching without discarding what is on disk, which is
-// the difference between this and removing it.
+// pauseDownload stops fetching but keeps what is on disk, unlike removing it.
 func (s *Server) pauseDownload(w http.ResponseWriter, r *http.Request) {
 	s.setDownloadRunning(w, r, false)
 }
@@ -387,8 +384,7 @@ func (s *Server) setDownloadKept(w http.ResponseWriter, r *http.Request, kept bo
 		s.fail(w, "keep download", err)
 		return
 	}
-	// The hash goes back with it so the page can update that row from the
-	// answer rather than from a list it may already have refetched.
+	// The hash goes back, so the page updates that row from the answer, not a refetched list.
 	send(w, http.StatusOK, map[string]any{"infoHash": hash, "kept": kept})
 }
 
@@ -425,8 +421,7 @@ func (s *Server) setFileKept(w http.ResponseWriter, r *http.Request, kept bool) 
 	send(w, http.StatusOK, map[string]any{"infoHash": hash, "fileIndex": index, "kept": kept})
 }
 
-// clearDownloads removes everything not currently playing. "completed" keeps
-// anything still downloading, which is the usual tidy-up.
+// clearDownloads removes all not playing; "completed", the usual tidy-up, keeps what's downloading.
 func (s *Server) clearDownloads(w http.ResponseWriter, r *http.Request) {
 	if s.cache == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "torrent engine unavailable"})

@@ -1,7 +1,6 @@
 package match
 
-// Sørensen-Dice over character bigrams. Titles differ by transliteration, not
-// typos, so bigram overlap beats edit distance here.
+// Sørensen-Dice over bigrams: titles differ by transliteration, not typos, so it beats edit distance.
 func dice(a, b string) float64 {
 	if a == b {
 		return 1

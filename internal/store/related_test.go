@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// The films, OVAs and spin-offs a franchise links to, which used to be
-// discarded because only prequel/sequel edges were kept.
+// The films, OVAs and spin-offs a franchise links to are kept, not only prequel/sequel edges.
 func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -16,7 +15,7 @@ func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 	}
 
 	// 1 → 2 → 3 are seasons; the rest hang off season 1.
-	if err := s.SaveRelations(ctx, []Relation{
+	if err := s.SaveRelations(ctx, nil, []Relation{
 		{AnimeID: 1, RelatedID: 2, Kind: "SEQUEL"},
 		{AnimeID: 2, RelatedID: 1, Kind: "PREQUEL"},
 		{AnimeID: 2, RelatedID: 3, Kind: "SEQUEL"},
@@ -95,7 +94,7 @@ func TestRelatedWorksFromTheFilmSide(t *testing.T) {
 	seedCatalogue(t, s, 2, "FINISHED", 1)
 	seedCatalogue(t, s, 3, "FINISHED", 1)
 
-	if err := s.SaveRelations(ctx, []Relation{
+	if err := s.SaveRelations(ctx, nil, []Relation{
 		{AnimeID: 1, RelatedID: 2, Kind: "SIDE_STORY"},
 		{AnimeID: 1, RelatedID: 3, Kind: "SPIN_OFF"},
 	}); err != nil {

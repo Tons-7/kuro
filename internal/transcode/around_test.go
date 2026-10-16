@@ -34,8 +34,7 @@ func minuteWithCues(t *testing.T, ffmpeg string) string {
 	return out
 }
 
-// Reading around the playhead adds that stretch's lines, at their real times,
-// to what an earlier read found, without losing any of it.
+// Reading around the playhead adds its lines at their real times, losing none found earlier.
 func TestExtractAroundMergesThePlayheadStretch(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	clip := minuteWithCues(t, ffmpeg)

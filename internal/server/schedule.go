@@ -53,8 +53,7 @@ type scheduleItem struct {
 	Behind     int     `json:"behind"`
 	Watched    bool    `json:"watched"`
 
-	// A late-night broadcast falls on a different date in Japan than it does
-	// for the viewer, and fansub sites quote the Japanese one.
+	// A late-night broadcast's Japanese date, which fansub sites quote, can differ from the viewer's.
 	JSTWeekday string `json:"jstWeekday"`
 
 	// The full show card, for the hover panel.
@@ -79,9 +78,7 @@ func midnight(t time.Time, offsetMinutes int) time.Time {
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
 }
 
-// groupByDay splits entries into the viewer's local days; the client supplies
-// the offset since the server cannot know it. Exactly count days are emitted,
-// empties included, so a week yields seven tabs rather than two Mondays.
+// groupByDay splits entries into count local days (empties too), by the client's UTC offset.
 func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int) []scheduleDay {
 	zone := zoneFor(offsetMinutes)
 	today := time.Now().In(zone).Format("2006-01-02")
@@ -121,8 +118,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		days = 7
 	}
 
-	// tz is the offset the browser reports, negated: getTimezoneOffset returns
-	// minutes to add to local time to reach UTC.
+	// tz is the browser's getTimezoneOffset negated (it gives minutes from local to UTC).
 	offset, grouped := 0, false
 	if raw := q.Get("tz"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= -1440 && v <= 1440 {
@@ -130,8 +126,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Snapping to local midnight keeps the day buckets aligned with the window,
-	// so asking for a week returns seven tabs rather than eight.
+	// Snapped to local midnight, so a week is seven day tabs, not eight.
 	start := time.Now().Add(-24 * time.Hour).Unix()
 	if v, err := strconv.ParseInt(q.Get("start"), 10, 64); err == nil && v > 0 {
 		start = v
@@ -189,8 +184,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		item.Title = store.PickTitle(titles, item.Romaji, item.English)
 		item.JSTWeekday = time.Unix(int64(e.AiringAt), 0).In(jst).Format("Monday")
 
-		// Everything before the next airing has already gone out, so anything
-		// past the user's progress is waiting to be watched.
+		// All before the next airing is out, so anything past the user's progress awaits watching.
 		if listed && e.Episode > 1 {
 			if behind := (e.Episode - 1) - progress; behind > 0 {
 				item.Behind = behind

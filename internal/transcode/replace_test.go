@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-// A hand-picked release reopens the same episode from another source. The old
-// encoder must go, and the new session must own the directory and be the one a
-// later Close releases.
+// Reopening from a hand-picked source ends the old encoder; the new session owns the directory.
 func TestReopenOnAnotherSourceReplacesTheSession(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	first := testMKV(t, ffmpeg, 20)

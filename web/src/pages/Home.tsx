@@ -11,7 +11,7 @@ import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
 import { Rail, RailItem } from '../components/Rail'
 import { ReleasedCard } from '../components/ReleasedCard'
 import { Popularity, ScheduleWidget } from '../components/Sidebar'
-import { ProgressBar, Skeleton } from '../components/ui'
+import { ConfirmInline, ProgressBar, Skeleton } from '../components/ui'
 
 export function Home() {
   const trending = useDiscover('trending', 20)
@@ -63,6 +63,8 @@ export function Home() {
 
           {seasonal.isPending ? (
             <RailSkeleton title="This season" />
+          ) : seasonal.isError && !seasonal.data ? (
+            <RailFailed title="This season" retry={() => void seasonal.refetch()} />
           ) : (
             <Rail title="This season" more={{ to: browseSeason(currentSeason()) }}>
               {(seasonal.data?.items ?? []).map((anime) => (
@@ -75,6 +77,8 @@ export function Home() {
 
           {trending.isPending ? (
             <RailSkeleton title="Trending now" />
+          ) : trending.isError && !trending.data ? (
+            <RailFailed title="Trending now" retry={() => void trending.refetch()} />
           ) : (
             <Rail title="Trending now" more={{ to: '/browse?sort=trending' }}>
               {(trending.data?.items ?? []).map((anime) => (
@@ -124,31 +128,24 @@ function ContinueCard({ item }: { item: LibraryItem }) {
 
   return (
     <div className="group/continue relative">
-      {/* Removing only takes it off this row; progress and the list tag are
-          untouched, which is the difference from marking it watched. */}
-      <div className="absolute top-1.5 right-1.5 z-10 opacity-0 transition-opacity group-hover/continue:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+      {/* Removing only takes it off this row; progress and the list tag stay. */}
+      <div className="absolute top-1.5 right-1.5 z-10">
         {confirming ? (
-          <div className="flex items-center gap-1 rounded-md bg-base-950/90 p-1 ring-1 ring-base-700 backdrop-blur-sm">
-            <button
-              onClick={() => dismiss.mutate()}
-              disabled={dismiss.isPending}
-              className="rounded px-2 py-0.5 text-[11px] font-medium text-recap hover:bg-base-800"
-            >
-              Remove
-            </button>
-            <button
-              onClick={() => setConfirming(false)}
-              className="rounded px-2 py-0.5 text-[11px] text-base-400 hover:bg-base-800"
-            >
-              Keep
-            </button>
+          <div className="flex items-center gap-1 rounded-lg bg-base-950/90 p-1 ring-1 ring-base-700 backdrop-blur-sm">
+            <ConfirmInline
+              label="Remove"
+              onConfirm={() => dismiss.mutate()}
+              onCancel={() => setConfirming(false)}
+              pending={dismiss.isPending}
+              size="sm"
+            />
           </div>
         ) : (
           <button
             onClick={() => setConfirming(true)}
             aria-label="Remove from continue watching"
             title="Remove from continue watching"
-            className="grid size-7 place-items-center rounded-md bg-base-950/80 text-base-300 ring-1 ring-white/10 backdrop-blur-sm transition-colors hover:bg-base-800 hover:text-white"
+            className="tap relative grid size-7 place-items-center rounded-md bg-base-950/80 text-base-300 ring-1 ring-white/10 backdrop-blur-sm transition-colors hover:bg-base-800 hover:text-white"
           >
             <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden>
               <path
@@ -193,7 +190,7 @@ function ContinueCard({ item }: { item: LibraryItem }) {
             <span className="absolute top-2 left-2 rounded-md bg-base-950/80 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white backdrop-blur-sm">
               EP {episode}
             </span>
-            <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover/continue:opacity-100">
+            <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover/continue:opacity-100 [@media(hover:none)]:opacity-100">
               <span className="grid size-11 place-items-center rounded-full bg-white/95 text-base-950 shadow-lg">
                 <PlayIcon />
               </span>
@@ -213,14 +210,28 @@ function ContinueCard({ item }: { item: LibraryItem }) {
         </Link>
       </HoverInfo>
 
-      {/* The art plays the episode, the title opens the show. Without this the
-          only route to a series from the home page is to search for it. */}
+      {/* The art plays the episode; the title opens the show. */}
       <Link to={`/anime/${item.id}`} className="mt-2 block">
         <p className="line-clamp-2 text-sm leading-snug text-base-200 transition-colors hover:text-white">
           {item.title}
         </p>
       </Link>
     </div>
+  )
+}
+
+// A rail whose request failed keeps its heading, with one line and a retry instead of an empty row.
+function RailFailed({ title, retry }: { title: string; retry: () => void }) {
+  return (
+    <section>
+      <h2 className="mb-3 section-title">{title}</h2>
+      <p className="flex flex-wrap items-center gap-2 text-sm text-base-400">
+        <span>Couldn't load this.</span>
+        <button onClick={retry} className="text-accent-300 underline-offset-2 hover:underline">
+          Try again
+        </button>
+      </p>
+    </section>
   )
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -27,8 +28,7 @@ func prefetchStore(t *testing.T) *store.Store {
 	return store.New(conn)
 }
 
-// Resolving the next episode is a search, not a download, so it answers to its
-// own switch rather than the off-by-default download switch.
+// Resolving the next episode is a search, so it has its own switch, not the download one.
 func TestPrepareIsOnByDefaultAndNotTheDownloadSwitch(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -110,6 +110,9 @@ func TestPrepareSkipsAnEpisodeAlreadyInTheLibrary(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "Show - 07.mkv")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.SaveLocalFiles(ctx, time.Now().Unix(), []store.LocalFile{{
 		Path: path, Size: 1, AnimeID: 42, Episode: 7, Confidence: 1,
 	}}); err != nil {
@@ -126,8 +129,7 @@ func TestPrepareSkipsAnEpisodeAlreadyInTheLibrary(t *testing.T) {
 	}
 }
 
-// A start must wait for an in-flight resolve of the same episode; two racing
-// searches leave the loser's torrent behind in the engine.
+// A start waits for the same episode's resolve in flight, or the losing search leaves a torrent.
 func TestAwaitPrepareWaitsForAResolveInFlight(t *testing.T) {
 	p := NewPrefetcher(prefetchStore(t), nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -189,8 +191,7 @@ func TestAwaitPrepareGivesUpWithTheRequest(t *testing.T) {
 	}
 }
 
-// A "nobody has subbed this yet" result won't change soon, so a pause stops
-// every page visit re-searching every indexer.
+// "Nobody subbed this yet" won't change soon, so a pause stops each visit re-searching.
 func TestPrepareBacksOffAfterAFailure(t *testing.T) {
 	st := prefetchStore(t)
 	p := NewPrefetcher(st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))

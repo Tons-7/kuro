@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// One unreachable root must not mark another root's library missing, and must
-// not stop a healthy root's deletions being noticed either.
+// An unreachable root neither marks another's files missing nor hides a healthy root's deletions.
 func TestSweepLocalOnlyTouchesTheRootsThatWalked(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

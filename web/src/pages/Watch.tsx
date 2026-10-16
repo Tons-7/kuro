@@ -71,17 +71,12 @@ export function Watch() {
   // the next episode's play a render late, hand-picked release and all.
   const epKey = `${id}-${ep}`
 
-  // Waiting for preferences before resolving a release stops the browser
-  // player starting a stream that mpv is about to take over.
-  // Opting into a raw is per attempt, never remembered: it is a "this episode
-  // is not subbed yet" decision, not a preference.
+  // Prefs first, or the browser starts a stream mpv takes over; a raw is opted into per attempt only.
   const [rawFor, setRawFor] = useState('')
   const allowRaw = rawFor === epKey
   const setAllowRaw = (on: boolean) => setRawFor(on ? epKey : '')
 
-  // Sub or dub for this show: saved as its own preference, so the next episode
-  // keeps it without rewriting the setting for every other show. Held here
-  // too, so the switch is instant rather than waiting on the save.
+  // Sub or dub is saved per show, and held here too so the switch doesn't wait on the save.
   const [audioPick, setAudioPick] = useState<{ key: number; audio: AudioChoice } | null>(null)
   const audio = audioPick?.key === id ? audioPick.audio : null
   const setAudio = (a: AudioChoice | null) => {
@@ -144,9 +139,12 @@ export function Watch() {
   const stream = useQuery({
     enabled: !!source,
     queryKey: ['stream', id, ep, source, wantAudio],
-    queryFn: () =>
+    // Aborted when superseded: an abandoned open would otherwise pin and hold its episode when it lands.
+    queryFn: ({ signal }) =>
       api.post<StreamInfo>(
         `/api/stream/open${query({ id, episode: ep, source, audio: wantAudio, ...soundAtOpen.current })}`,
+        undefined,
+        signal,
       ),
     retry: 1,
     staleTime: Infinity,
@@ -158,9 +156,7 @@ export function Watch() {
   // From pressing play to the stream opening: the search, then the release's first data, then its start.
   const startingNote = useStartingNote(id, ep, play.isPending || (!!source && stream.isPending))
 
-  // AniSkip matches on the episode's real length, known only once the stream is
-  // open. Remembered, since an audio switch briefly clears it and the query
-  // would fall back to the empty answer from before the stream existed.
+  // AniSkip needs the stream's real length, remembered since an audio switch briefly clears it.
   const [lengthFor, setLengthFor] = useState<{ key: string; seconds: number } | null>(null)
   const episodeLength = lengthFor?.key === epKey ? lengthFor.seconds : 0
   useEffect(() => {
@@ -187,8 +183,7 @@ export function Watch() {
   const resetDownload = download.reset
   useEffect(() => resetDownload(), [id, ep, resetDownload])
 
-  // Offering to download an episode that is already on disk queues a job whose
-  // only outcome is to notice that and stop.
+  // An episode already on disk isn't offered for download.
   const downloads = useDownloads()
   // A release bigger than the cache budget is removed once nothing plays it; said now, with the way out.
   const cache = useQuery({
@@ -212,15 +207,16 @@ export function Watch() {
   const detail = useQuery({
     enabled: id !== 0,
     queryKey: ['anime', id],
-    queryFn: () => api.get<{ title: string; listStatus?: string }>(`/api/anime/${id}`),
+    queryFn: () =>
+      api.get<{ title: string; listStatus?: string; coverImage?: { large?: string; extraLarge?: string }; cover?: string }>(
+        `/api/anime/${id}`,
+      ),
     staleTime: 5 * 60_000,
   })
 
   const list = episodes.data?.items ?? []
   const current = list.find((e) => e.number === ep)
-  // The next episode worth playing: with the filler rule on, the next that is
-  // neither filler nor a recap. Mirrors store.NextEpisode, which also refuses
-  // one still to broadcast: auto-next into it lands on a failed search.
+  // The next episode worth playing, as store.NextEpisode picks it (filler rule, nothing unaired).
   const skipFiller = flag('playback.skip_filler')
   const next = list.find(
     (e) =>
@@ -239,11 +235,21 @@ export function Watch() {
   useDocumentTitle(showTitle ? `${showTitle} · Ep ${current?.display ?? ep}` : undefined)
 
   const reportProgress = useCallback(
-    (position: number, duration: number, played: number) => {
+    (position: number, duration: number, played: number, final: boolean) => {
+      const body = { animeId: id, episode: ep, position, duration, played }
       // sendBeacon survives the tab closing, which a fetch does not.
-      beacon('/api/progress', { animeId: id, episode: ep, position, duration, played })
+      if (!final) return beacon('/api/progress', body)
+      // The last report of an episode (its end, Next, leaving) refreshes the ticks once the server has it.
+      void api
+        .post<{ watched: boolean }>('/api/progress', body)
+        .then((r) => {
+          if (!r.watched) return
+          void qc.invalidateQueries({ queryKey: ['episodes', id] })
+          void qc.invalidateQueries({ queryKey: ['anime', id] })
+        })
+        .catch(() => {})
     },
-    [id, ep],
+    [id, ep, qc],
   )
 
   const nextNumber = next?.number
@@ -258,22 +264,13 @@ export function Watch() {
     if (stream.data) setStreamed(true)
   }, [stream.data])
 
-  // The player has already reported the end as a position; the up-next card
-  // decides what happens after, counting down only when auto-next is on.
-  // Which episode ended, not just that one did: a plain flag survives the
-  // navigation and the finished countdown fires again, skipping an episode.
+  // Which episode ended, not just that one did: a plain flag survives navigation and skips an episode.
   const [endedKey, setEndedKey] = useState<string | null>(null)
   const ended = endedKey === `${id}-${ep}`
-  const onEnded = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ['episodes', id] })
-    void qc.invalidateQueries({ queryKey: ['anime', id] })
-    setEndedKey(`${id}-${ep}`)
-  }, [id, ep, qc])
+  const onEnded = useCallback(() => setEndedKey(`${id}-${ep}`), [id, ep])
   const clearEnded = useCallback(() => setEndedKey(null), [])
 
-  // The reaper took the session while the tab was hidden: /api/play revives
-  // the torrent and reopening rebuilds the session under the same URL. Throws
-  // if the reopen fails, so the player shows it.
+  // A reaped session: /api/play revives the torrent and the reopen rebuilds it; throws so the player shows it.
   const recoverSession = useCallback(async () => {
     await qc.invalidateQueries({ queryKey: ['play', id, ep] }, { throwOnError: true })
     await qc.invalidateQueries({ queryKey: ['stream', id, ep] }, { throwOnError: true })
@@ -331,8 +328,7 @@ export function Watch() {
       <div className="mx-auto w-full max-w-[1600px] px-0 sm:px-6 sm:py-4">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <div className="min-w-0">
-            {/* No overflow-hidden: clipping a hardware-composited video turned
-                the picture black. The player rounds its own corners. */}
+            {/* No overflow-hidden: clipping a composited video blacks it out. */}
             <div className="relative bg-black sm:rounded-xl">
               {play.isError && !streamed ? (
                 <NoRelease
@@ -347,7 +343,7 @@ export function Watch() {
               ) : play.isPending && !streamed ? (
                 <Searching note={startingNote} />
               ) : playingInMpv ? (
-                <MpvPanel title={play.data?.title ?? showTitle} episode={ep} player={play.data?.player ?? 'mpv'} />
+                <MpvPanel title={play.data?.title ?? showTitle} animeId={id} episode={ep} player={play.data?.player ?? 'mpv'} />
               ) : (
                 <Player
                   stream={stream.data}
@@ -361,15 +357,14 @@ export function Watch() {
                   sound={soundProp}
                   title={showTitle}
                   subtitle={episodeLabel}
+                  artwork={detail.data?.coverImage?.large ?? detail.data?.coverImage?.extraLarge ?? detail.data?.cover}
                   onProgress={reportProgress}
                   onEnded={onEnded}
                   onNext={hasNext ? goNext : undefined}
                   // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
                   onSessionLost={recoverSession}
-                  // Inside the player, or fullscreen hides it while it counts.
-                  // The failure too, or swapping the player out drops fullscreen —
-                  // not over a stream still there, whose recovery is the player's.
+                  // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
                   overlay={
                     play.isError && !stream.data ? (
                       <NoRelease
@@ -457,11 +452,11 @@ export function Watch() {
                   <Button variant="primary" onClick={() => keep.mutate()} disabled={keep.isPending}>
                     Keep this episode
                   </Button>
+                  {keep.isError && <p className="w-full text-xs text-recap">{(keep.error as Error).message}</p>}
                 </div>
               )}
 
-              {/* Until settings load every switch would read off, and a click
-                  then would write from the wrong state. */}
+              {/* Until settings load every switch reads off, and a click would write wrong. */}
               {!prefs.data ? (
                 <Skeleton className="h-12 w-full rounded-lg" />
               ) : (
@@ -476,8 +471,7 @@ export function Watch() {
                   <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">
                     This show
                   </span>
-                  {/* Switching resolves a different release, so it reloads rather
-                      than swapping a track — most releases carry one language. */}
+                  {/* Switching resolves another release, as most carry one language. */}
                   <Segmented
                     size="sm"
                     value={wantAudio}
@@ -500,8 +494,7 @@ export function Watch() {
                   <span className="ml-1 border-l border-base-800 pl-3 text-[10px] font-semibold tracking-wider text-base-500 uppercase">
                     Everywhere
                   </span>
-                  {/* Flipping a toggle here becomes the new default, which is
-                      what the setting means from then on. */}
+                  {/* A toggle flipped here becomes the new default. */}
                   <Toggle
                     label="Auto play"
                     on={flag('playback.autoplay')}
@@ -559,8 +552,7 @@ export function Watch() {
                 file={play.data?.title}
               />
 
-              {/* The cast is the show's, not this episode's — MyAnimeList has no
-                  per-episode cast — so the heading says so. */}
+              {/* The show's cast, not this episode's (MAL has none), as the heading says. */}
               <CharacterRail animeId={id} limit={8} title="Cast" />
             </div>
           </div>
@@ -618,10 +610,7 @@ export function Watch() {
   )
 }
 
-/**
- * What the episode is, under the player. Without it the page below the video
- * is empty and the only description of what is playing is a release filename.
- */
+/** What the episode is, under the player, beyond a release filename. */
 function EpisodeAbout({
   title,
   label,
@@ -670,10 +659,7 @@ interface PlayStage {
   bytes?: number
 }
 
-/**
- * Starting an episode is a search, a file list from the swarm, the first data and the start of the
- * file: each can be the slow one, so the wait says which it is and how long it has been.
- */
+/** Starting is search, file list, first data, file start; the wait says which step and for how long. */
 function useStartingNote(animeId: number, episode: number, waiting: boolean): { title: string; detail: string } {
   const [seconds, setSeconds] = useState(0)
   useEffect(() => {
@@ -709,7 +695,7 @@ function useStartingNote(animeId: number, episode: number, waiting: boolean): { 
     default:
       return {
         title: 'Searching for a release…',
-        detail: `${seconds < 6 ? 'Checking the release sites under each of the show’s titles' : 'Still looking — searches are rate limited'}${clock}`,
+        detail: `${seconds < 6 ? 'Checking the release sites under each of the show’s titles' : 'Still looking; searches are rate limited'}${clock}`,
       }
   }
 }
@@ -726,8 +712,7 @@ function Searching({ note }: { note: { title: string; detail: string } }) {
   )
 }
 
-// A failure here is usually "nobody has subbed this yet", which is worth
-// saying plainly along with the ways out of it.
+// Usually "nobody has subbed this yet", said plainly with the ways out.
 function NoRelease({
   message,
   animeId,
@@ -781,14 +766,14 @@ function NoRelease({
         {needsTranscoder ? (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <LinkButton to="/setup" variant="primary">Install the transcoder</LinkButton>
-            <LinkButton to="/settings" variant="ghost">Player settings</LinkButton>
+            <LinkButton to="/settings?tab=Playback" variant="ghost">Player settings</LinkButton>
           </div>
         ) : (
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           <Button onClick={onRetry}>Try again</Button>
           <Button onClick={onPick}>Choose a release</Button>
           <LinkButton to={`/anime/${animeId}`}>Other episodes</LinkButton>
-          <LinkButton to="/settings" variant="ghost">Quality settings</LinkButton>
+          <LinkButton to="/settings?tab=Quality" variant="ghost">Quality settings</LinkButton>
         </div>
         )}
       </div>
@@ -796,12 +781,10 @@ function NoRelease({
   )
 }
 
-/**
- * mpv plays in its own window and reports over IPC, so this page renders only a
- * way to stop it and a reminder of which player is in charge.
- */
-function MpvPanel({ title, episode, player }: { title: string; episode: number; player: string }) {
-  const stop = useMutation({ mutationFn: () => api.post('/api/stop') })
+/** mpv plays in its own window, so this page only offers Stop and says which player is in charge. */
+function MpvPanel({ title, animeId, episode, player }: { title: string; animeId: number; episode: number; player: string }) {
+  // The episode too, so the server also stops fetching what nobody is watching now.
+  const stop = useMutation({ mutationFn: () => api.post('/api/stop', { animeId, episode }) })
 
   return (
     <div className="grid aspect-video place-items-center bg-base-900 p-6 text-center">
@@ -819,7 +802,7 @@ function MpvPanel({ title, episode, player }: { title: string; episode: number; 
             {stop.isSuccess ? 'Stopped' : 'Stop'}
           </button>
           <Link
-            to="/settings"
+            to="/settings?tab=Playback"
             className="rounded-md px-3 py-1.5 text-sm text-base-400 hover:text-base-100"
           >
             Use the browser instead
@@ -832,8 +815,7 @@ function MpvPanel({ title, episode, player }: { title: string; episode: number; 
 
 const UP_NEXT_SECONDS = 5
 
-// Shown over the credits once an episode ends. With auto-next on it counts
-// down and goes; otherwise it just offers the button.
+// Over the credits at the end: counts down with auto-next on, else offers the button.
 function UpNext({
   episode,
   title,

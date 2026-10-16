@@ -1,7 +1,4 @@
-// Package engine is kuro's torrent engine: anacrolix/torrent in process, behind
-// a small loopback HTTP API (rqbit-compatible, so old sessions carry over).
-// Streaming reads raise their pieces' priority and a piece's blocks come from
-// many peers at once, so playback starts on the first bytes.
+// Package engine runs anacrolix/torrent in process behind a loopback, rqbit-compatible HTTP API.
 package engine
 
 import (
@@ -9,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -26,14 +24,11 @@ import (
 )
 
 type Options struct {
-	// CacheDir holds the downloads, laid out as rqbit did: a single file at
-	// CacheDir/<name>, a pack at CacheDir/<name>/<path>.
+	// CacheDir holds downloads as rqbit did: CacheDir/<name>, or CacheDir/<name>/<path> for a pack.
 	CacheDir string
 	// SessionDir keeps the torrent list, their metainfo and piece completion.
 	SessionDir string
-	// LegacySessions are rqbit sessions, tried in order; the first found is
-	// imported once so its downloads carry over. One inside CacheDir is then
-	// deleted; one elsewhere may still be rqbit's own and is left alone.
+	// LegacySessions are rqbit sessions; the first found is imported once (deleted only if inside CacheDir).
 	LegacySessions []string
 
 	ListenPort  int
@@ -64,7 +59,10 @@ type Engine struct {
 	nextID    int
 	inspected map[metainfo.Hash]*inspection
 	// Peers each torrent has known, to try again after an outage took them all.
-	known  map[metainfo.Hash]map[string]atorrent.PeerInfo
+	known map[metainfo.Hash]map[string]remembered
+	names *layout
+	// secret is what kuro's own client sends and a web page cannot.
+	secret string
 	closed bool
 
 	// Test hooks: adjust the client config; see each torrent as it is added.
@@ -91,15 +89,15 @@ type entry struct {
 	// For unstick: useful bytes at the last change, and when that was.
 	useful     int64
 	quietSince time.Time
-	// For regroup: since when it has wanted data with no peer connected.
-	aloneSince time.Time
+	// For regroup: alone since when, the wait before the next try, and tries so far.
+	aloneSince  time.Time
+	regroupWait time.Duration
+	regroups    int
 	// For census: who it was connected to, for the log.
 	heads headcount
 }
 
-// inspection is a torrent added only to read its file list. It is kept a few
-// minutes, connected and downloading nothing, so the add that usually follows
-// starts with its peers already there.
+// inspection is a torrent added to read its files, kept connected a while so the add that follows has peers.
 type inspection struct {
 	t       *atorrent.Torrent
 	expires time.Time
@@ -120,11 +118,13 @@ func New(opts Options, log *slog.Logger) (*Engine, error) {
 		byHash:    map[metainfo.Hash]*entry{},
 		nextID:    1,
 		inspected: map[metainfo.Hash]*inspection{},
-		known:     map[metainfo.Hash]map[string]atorrent.PeerInfo{},
+		known:     map[metainfo.Hash]map[string]remembered{},
+		names:     newLayout(opts.CacheDir),
 	}
-	e.server = &http.Server{Handler: e.routes(), ReadHeaderTimeout: 10 * time.Second}
+	e.secret = torrent.NewSecret()
+	e.server = &http.Server{Handler: e.guard(l.Addr().String(), e.routes()), ReadHeaderTimeout: 10 * time.Second}
 	go e.server.Serve(l)
-	e.client = torrent.NewClient("http://" + l.Addr().String()).WithEngine(e)
+	e.client = torrent.NewClient("http://" + l.Addr().String()).WithEngine(e).WithSecret(e.secret)
 	return e, nil
 }
 
@@ -173,8 +173,7 @@ func (e *Engine) start() error {
 	}
 	cl, err := atorrent.NewClient(e.clientConfig(pieces, port))
 	if err != nil {
-		// Another client holds the port: a random one still works, just
-		// without inbound peers from the forwarded port.
+		// Another client holds the port; a random one works, minus the forwarded port's peers.
 		e.log.Warn("peer port unavailable; using a random one", "port", port, "err", err)
 		for range 5 {
 			if cl, err = atorrent.NewClient(e.clientConfig(pieces, freePort())); err == nil {
@@ -199,9 +198,7 @@ func (e *Engine) start() error {
 	return nil
 }
 
-// freePort finds a port open for both TCP and UDP, which anacrolix binds
-// together. Port 0 won't do on Windows: the OS hands out TCP ports in order,
-// and a whole run of their UDP twins can sit in a reserved range.
+// freePort finds a port free for TCP and UDP both; on Windows port 0's UDP twin can sit in a reserved range.
 func freePort() int {
 	for range 20 {
 		pc, err := net.ListenPacket("udp", ":0")
@@ -223,7 +220,7 @@ func freePort() int {
 func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *atorrent.ClientConfig {
 	cfg := atorrent.NewDefaultClientConfig()
 	cfg.DataDir = e.opts.CacheDir
-	cfg.DefaultStorage = files{base: e.opts.CacheDir, pieces: pieces}
+	cfg.DefaultStorage = files{base: e.opts.CacheDir, pieces: pieces, names: e.names}
 	cfg.ListenPort = port
 	if e.opts.PeerLimit > 0 {
 		cfg.EstablishedConnsPerTorrent = e.opts.PeerLimit
@@ -291,6 +288,7 @@ func (e *Engine) janitor() {
 				if _, managed := e.byHash[hash]; !managed {
 					in.t.Drop()
 					delete(e.known, hash)
+					e.names.forget(hash)
 				}
 				continue
 			}
@@ -303,9 +301,9 @@ func (e *Engine) janitor() {
 		e.mu.Unlock()
 		// A torrent only being looked at meets its peers before it is added; they count from then.
 		for _, t := range looking {
-			swarm := t.KnownSwarm()
+			peers := connected(t)
 			e.mu.Lock()
-			e.remember(t.InfoHash(), swarm)
+			e.remember(t.InfoHash(), peers, now)
 			e.mu.Unlock()
 		}
 		for _, en := range entries {
@@ -316,9 +314,7 @@ func (e *Engine) janitor() {
 	}
 }
 
-// unstick re-plans a torrent that wants data and has peers but received nothing
-// for stallAfter. anacrolix re-plans only on events, so one missed around a
-// pause stalls a single-seeder torrent for good. apply re-allows unless paused.
+// unstick re-plans a torrent with peers that got nothing for stallAfter: anacrolix re-plans only on events.
 func (e *Engine) unstick(en *entry, now time.Time) {
 	t := en.t
 	if t.Info() == nil {
@@ -349,7 +345,7 @@ func (e *Engine) unstick(en *entry, now time.Time) {
 // Not the download switch: flipping that fails every reader mid-wait, and three flips ended the stream.
 func (e *Engine) replan(en *entry) {
 	e.mu.Lock()
-	selected := maps(en.selected)
+	selected := maps.Clone(en.selected)
 	e.mu.Unlock()
 	for i, f := range en.t.Files() {
 		if selected[i] {

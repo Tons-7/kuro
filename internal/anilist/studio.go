@@ -43,16 +43,20 @@ func (c *Client) StudioMedia(ctx context.Context, id int, sort string, page, per
 		return "", DiscoverPage{}, err
 	}
 	media := make([]Media, 0, len(out.Studio.Media.Nodes))
+	dropped := 0
 	for _, n := range out.Studio.Media.Nodes {
 		// Studios also animate manga adaptations listed as manga entries.
 		if n.Type == "" || n.Type == "ANIME" {
 			media = append(media, n.Media)
+		} else {
+			dropped++
 		}
 	}
 	return out.Studio.Name, DiscoverPage{
 		Media:       media,
 		HasNextPage: out.Studio.Media.PageInfo.HasNextPage,
 		Total:       out.Studio.Media.PageInfo.Total,
+		Dropped:     dropped,
 	}, nil
 }
 

@@ -40,11 +40,7 @@ const GAP = 12
 const OPEN_DELAY = 380
 const CLOSE_DELAY = 140
 
-/**
- * Info panel shown while the pointer rests on a card. A portal, because the
- * rails scroll horizontally and would clip anything positioned inside them.
- * Touch never opens it: a tap belongs to the card underneath.
- */
+/** A card's pointer-rest info panel, portalled past the rails' clipping; touch never opens it. */
 export function HoverInfo({ anime, children }: { anime: HoverAnime; children: ReactNode }) {
   const anchor = useRef<HTMLDivElement>(null)
   const timer = useRef(0)
@@ -60,8 +56,7 @@ export function HoverInfo({ anime, children }: { anime: HoverAnime; children: Re
       if (!el) return
       const rect = el.getBoundingClientRect()
 
-      // Beside the card, flipping sides when there is no room and clamped so a
-      // card near the bottom stays readable.
+      // Beside the card, flipping sides for room and clamped near the bottom.
       const right = rect.right + GAP
       const left = right + PANEL_WIDTH < window.innerWidth ? right : rect.left - GAP - PANEL_WIDTH
       const top = Math.min(
@@ -125,8 +120,7 @@ function day(date: string): string {
   })
 }
 
-// The whole run: "Apr 7, 2013 – Sep 29, 2013" once finished, "… – now" while
-// airing, one date for a film or a single day.
+// The run: "Apr 7, 2013 – Sep 29, 2013", "… – now" while airing, one date for a film.
 function aired(anime: HoverAnime): string | null {
   const { startDate, endDate } = anime
   if (!startDate) return anime.seasonYear ? String(anime.seasonYear) : null

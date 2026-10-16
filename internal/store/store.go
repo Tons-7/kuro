@@ -1,5 +1,4 @@
-// Package store owns every SQL statement in the application. Other packages
-// depend on its domain types, never on database/sql.
+// Package store owns every SQL statement; others use its types, never database/sql.
 package store
 
 import (
@@ -72,9 +71,7 @@ func (s *Store) EnsureSetting(ctx context.Context, key, value string) (string, e
 	return s.Setting(ctx, key)
 }
 
-// Secret reports whether a setting is a credential. These are writable but never
-// readable back, so the settings endpoint can't hand out the AniList token.
-// Suffix matched without a separator so it covers "client_secret" too.
+// Secret reports a credential setting: writable, never read back. The bare suffix covers "client_secret".
 func Secret(key string) bool {
 	switch {
 	case strings.HasSuffix(key, ".token"),

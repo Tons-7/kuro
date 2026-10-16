@@ -14,26 +14,20 @@ import (
 	"time"
 )
 
-// A track reads only as far as the download reached; the rest arrives on the
-// next request, so waiting longer just delays playback.
+// A track reads as far as the download reached; the rest comes next request, so no longer wait.
 const subtitleDeadline = 45 * time.Second
 
 // How long a track from a still-downloading file is trusted before being read again.
 const subtitleRefresh = 8 * time.Second
 
-// Subtitles are rendered in the browser rather than burned in: burning costs a
-// GPU round trip per frame and makes the track permanent.
+// Subtitles render in the browser, not burned in, which costs a GPU trip per frame and can't switch.
 type Subtitles struct {
 	ffmpeg string
 
 	mu sync.Mutex
-	// Tracks read from a source that will not grow. A still-downloading file must
-	// not land here: ffmpeg exits cleanly at the first hole, which would freeze
-	// subtitles where the download reached.
+	// Tracks read from a source that won't grow; a downloading one would freeze at its first hole.
 	done map[string]struct{}
-	// One extraction per output path. The player re-reads a track while it
-	// fills in, and two ffmpeg runs writing the same file hand back a
-	// half-written one.
+	// One extraction per output path, or two runs writing one file hand back half of it.
 	busy map[string]*sync.Mutex
 }
 
@@ -100,9 +94,7 @@ func (s *Subtitles) Cues(dir string, track int, codec string) int {
 	return dialogueLines(filepath.Join(dir, fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec))))
 }
 
-// Extract reads one track, as ASS, into dir. complete means the source will not
-// grow, so a clean read is the last one; otherwise it is re-read past
-// subtitleRefresh and a read recovering fewer cues is discarded.
+// Extract reads a track as ASS; unless complete, it is reread past subtitleRefresh, keeping the fuller read.
 func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, codec string, complete bool) (string, error) {
 	name := fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec))
 	path := filepath.Join(dir, name)
@@ -111,9 +103,7 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	one.Lock()
 	defer one.Unlock()
 
-	// Checked inside the lock: whoever was extracting may have just finished.
-	// Having done it once is not the file still being there — closing a session
-	// deletes the directory under the remembered path.
+	// Checked in the lock, and the file too: closing a session deletes the directory under it.
 	s.mu.Lock()
 	_, already := s.done[path]
 	s.mu.Unlock()
@@ -126,9 +116,7 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 		s.mu.Unlock()
 	}
 
-	// The throttle only applies to a track that already holds cues. A recent but
-	// empty file means the last read recovered nothing, so it must be allowed to
-	// retry rather than be short-circuited to the same empty file.
+	// Throttled only once the track holds cues; an empty read must be retried.
 	if !complete {
 		if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) < subtitleRefresh && dialogueLines(path) > 0 {
 			return path, nil
@@ -153,9 +141,7 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	} else {
 		args = append(args, "-c:s", "ass")
 	}
-	// Written aside and moved into place, so a concurrent request gets the
-	// previous track, not a half-written one. The format is named because ffmpeg
-	// would otherwise infer it from ".part".
+	// Written aside and moved into place; the format is named, or ffmpeg infers it from ".part".
 	staging := path + ".part"
 	args = append(args, "-f", subtitleExt(codec), "-y", staging)
 
@@ -170,8 +156,7 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 		return "", fmt.Errorf("extract subtitle %d: %w: %s", track, err, strings.TrimSpace(string(out)))
 	}
 
-	// Holes move as pieces land, so a later read can recover less, or a
-	// different stretch. Unioned, nothing already read is lost.
+	// Holes move as pieces land, so reads are unioned and nothing read is lost.
 	if have > 0 {
 		if mergeErr := mergeInto(staging, path); mergeErr != nil {
 			os.Remove(staging)
@@ -196,17 +181,14 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	return path, nil
 }
 
-// How much of the episode a playhead read covers: a little before, for the
-// line already on screen, and a few minutes ahead.
+// A playhead read covers a little before, for the line on screen, and minutes ahead.
 const (
 	aroundBefore = 30.0
 	aroundSpan   = 330.0
 	aroundLimit  = 20 * time.Second
 )
 
-// ExtractAround reads the track near the playhead and merges it in. Reading
-// from the start would crawl the undownloaded middle and time out; what is
-// playing is downloaded.
+// ExtractAround merges in the track near the playhead, which is downloaded where the middle may not be.
 func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track int, codec string, at float64) (string, error) {
 	path := filepath.Join(dir, fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec)))
 

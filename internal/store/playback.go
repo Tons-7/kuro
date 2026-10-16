@@ -40,9 +40,7 @@ const playedShare = 0.5
 // A single report cannot honestly claim more than this; the players report every five to ten seconds.
 const maxPlayedPerReport = 120.0
 
-// finished is the one rule for "this episode is done": position reached the
-// threshold, whatever the watched flag says. Shared by resume, the continue
-// rail and the episode list so they agree.
+// finished is the one "done" rule (position past the threshold), shared so every surface agrees.
 func finished(position, duration float64, watched bool, threshold float64) bool {
 	if duration > 0 {
 		return position >= duration*threshold
@@ -68,11 +66,9 @@ func resumable(position, duration float64, watched bool, threshold float64) bool
 	return position >= 15 && !finished(position, duration, watched, threshold)
 }
 
-// RecordTorrent links a torrent to the episode it holds, so a file we
-// downloaded never has to be identified by its filename later.
+// RecordTorrent links a torrent to its episode, so our files never need identifying by name.
 func (s *Store) RecordTorrent(ctx context.Context, t TorrentRecord) error {
-	// torrent_file.anime_id is a foreign key; a show never imported would fail it
-	// and leave the download unlinked.
+	// torrent_file.anime_id is a foreign key, so an unimported show needs its row first.
 	if err := s.EnsureAnime(ctx, t.AnimeID); err != nil {
 		return err
 	}
@@ -104,9 +100,7 @@ func (s *Store) RecordTorrent(ctx context.Context, t TorrentRecord) error {
 		return err
 	}
 
-	// One selected release per episode: a prepare and a play can pick different
-	// releases, and two selected rows leave lookups returning whichever the
-	// ordering surfaces.
+	// One selected release per episode, or a prepare and a play picking differently leave two.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE torrent_file SET selected = 0
 		WHERE anime_id = ? AND ep_key = ? AND NOT (info_hash = ? AND file_index = ?)`,
@@ -147,9 +141,7 @@ func (s *Store) RecordTorrent(ctx context.Context, t TorrentRecord) error {
 	return tx.Commit()
 }
 
-// TorrentForEpisode returns the release already downloading or downloaded for an
-// episode, avoiding a fresh indexer search — the slowest part of starting
-// playback — when the answer is already on disk.
+// TorrentForEpisode returns the episode's release already fetched, sparing the slow indexer search.
 func (s *Store) TorrentForEpisode(ctx context.Context, animeID int, epKey string) (TorrentRecord, bool, error) {
 	var t TorrentRecord
 	var manual int
@@ -196,9 +188,7 @@ func (s *Store) StartedTorrents(ctx context.Context) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// ReconcileTorrents realigns stored engine ids with what the engine actually has.
-// Ids are per-session, so a stale one would evict the wrong file; anything the
-// engine no longer knows loses its id and is marked gone.
+// ReconcileTorrents realigns stored engine ids with the engine's; unknown ones are marked gone.
 func (s *Store) ReconcileTorrents(ctx context.Context, live map[string]int) (matched, orphaned int, err error) {
 	// An empty listing is an engine still reloading its session, not proof.
 	if len(live) == 0 {
@@ -287,14 +277,12 @@ type Download struct {
 	Peers    int     `json:"peers,omitempty"`
 }
 
-// DownloadStatus reports what the torrent engine is holding. Percentages come
-// from the cache table, which the sweeper keeps current.
+// DownloadStatus reports what the engine holds, percentages from the sweeper's cache table.
 func (s *Store) DownloadStatus(ctx context.Context) ([]Download, error) {
 	// Before the cursor opens: a query while rows are held drains the read pool.
 	mode := s.TitleMode(ctx, 0)
 
-	// One row per torrent: a season pack serves several episodes, folded in
-	// episode order, and a pin on any of them means playing.
+	// One row per torrent, a pack's episodes folded in order; any pin means playing.
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT t.info_hash, t.name, coalesce(t.state, ''),
 		       max(coalesce(t.total_bytes, 0), coalesce(sum(f.size_bytes), 0)),
@@ -365,9 +353,7 @@ func (s *Store) ResumeAt(ctx context.Context, animeID int, epKey string) (float6
 	return position, nil
 }
 
-// InProgress is the most recently played episode of a show worth going back to.
-// The series page leads with it rather than the tracker's next episode, which a
-// watched flag can have moved on already.
+// InProgress is a show's latest episode worth going back to; the series page leads with it.
 type InProgress struct {
 	EpKey    string
 	Position float64
@@ -381,7 +367,7 @@ func (s *Store) LastInProgress(ctx context.Context, animeID int) (InProgress, bo
 		SELECT ep_key, position_s, coalesce(duration_s, 0), watched
 		FROM playback
 		WHERE anime_id = ? AND dismissed = 0
-		ORDER BY last_played_at DESC
+		`+latestFirst+`
 		LIMIT 1`, animeID).Scan(&p.EpKey, &p.Position, &p.Duration, &watched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InProgress{}, false, nil
@@ -395,9 +381,7 @@ func (s *Store) LastInProgress(ctx context.Context, animeID int) (InProgress, bo
 	return p, true, nil
 }
 
-// SavePlayback records a report and says whether the episode now counts as
-// watched. Decided here, once, for both players: the position has to reach
-// the threshold and enough of the episode has to have actually played.
+// SavePlayback records a report and decides, for both players, whether the episode now counts as watched.
 func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error) {
 	threshold := s.thresholdFor(ctx, p.AnimeID)
 
@@ -443,8 +427,7 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 		watched = true
 	}
 
-	// A jump to the ending that did not earn the watched flag keeps its old resume
-	// point, so a peek doesn't overwrite it with the credits.
+	// A jump to the ending that isn't a watch keeps the old resume point, not the credits.
 	if !reached || watched || !existed {
 		position = p.Position
 	}
@@ -497,8 +480,7 @@ func defaultThreshold() float64 {
 	return v
 }
 
-// SkipRanges returns opening and ending markers for an episode. They are keyed
-// by MAL id because that is what AniSkip indexes on.
+// SkipRanges returns an episode's op/ed markers, keyed by MAL id as AniSkip is.
 func (s *Store) SkipRanges(ctx context.Context, animeID, episode int) ([]player.SkipRange, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT k.kind, k.start_s, k.end_s

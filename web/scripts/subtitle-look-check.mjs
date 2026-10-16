@@ -1,5 +1,4 @@
-// Subtitle size and delay: the menu's size steps grow the dialogue, z/x shift
-// cues in time (a cue shows in what was a gap), and the size is remembered.
+// Subtitle size steps grow the dialogue and are remembered; z/x shift cues in time.
 //   node scripts/run-player-check.mjs subtitle-look-check.mjs
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'

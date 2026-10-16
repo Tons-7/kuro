@@ -1,7 +1,4 @@
-// End-to-end check of session keepalive and recovery: the playlist is pinged
-// while playing, a reaped session is noticed on tab return or play and
-// reopened in place, and a frozen clock with data ahead gets poked — the
-// alt-tab bugs that used to need a hard refresh.
+// Keepalive and recovery: pings while playing, a reaped session reopened in place, a frozen clock poked.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -61,8 +58,7 @@ const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gestur
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('console', (m) => {
-  // The deliberate 404s of a killed session log as resource errors; those are
-  // the point of the check, not a failure.
+  // A killed session's deliberate 404s log as resource errors, which are the point.
   if (m.type() === 'error' && !/Failed to load resource|404/.test(m.text())) {
     errors.push(m.text().slice(0, 200))
   }
@@ -118,8 +114,7 @@ check(!!streamOpen?.id, 'stream session opened', streamOpen?.id ?? '')
 const sid = streamOpen.id
 
 // ---------------------------------------------------------------- keepalive
-// The interval pings every 45s while playing; hls.js itself never re-reads a
-// VOD playlist, so growth here is the keepalive.
+// hls.js never re-reads a VOD playlist, so requests every 45s while playing are the keepalive.
 await sleep(2000)
 const before = playlistFetches
 await sleep(50_000)
@@ -128,8 +123,7 @@ let alive = await api(`/api/stream/${sid}/playlist.m3u8`)
 check(alive.ok, 'session still alive after the keepalive window', String(alive.status))
 
 // ---------------------------------------------------------------- tab return
-// Kill the session the way the reaper does, then come back to the tab: the
-// visibility ping must notice and reopen without touching the player.
+// Reap the session, then return to the tab: the visibility ping reopens it untouched.
 const preKill = await state()
 const opensBefore = opens
 await api(`/api/stream/${sid}`, { method: 'DELETE' })
@@ -145,8 +139,7 @@ for (let i = 0; i < 20 && !reopened; i++) {
 check(reopened, 'tab return reopens the lost session', `opens ${opensBefore} → ${opens}`)
 alive = await api(`/api/stream/${sid}/playlist.m3u8`)
 check(alive.ok, 'session exists again', String(alive.status))
-// Near where it was, not merely moving: a rebuild that restarts from zero
-// also "advances".
+// Near where it was, not merely moving: a rebuild from zero also "advances".
 for (let i = 0; i < 15; i++) {
   await sleep(1000)
   s = await state()
@@ -213,8 +206,7 @@ for (let i = 0; i < 30; i++) {
 }
 check(s.t > 61 && !s.paused, 'playing again before the watchdog check', JSON.stringify(s))
 
-// Freeze what the clock reports while the video really plays on: the watchdog
-// must poke it (the pause/unpause the user used to do by hand).
+// Freeze the reported clock while the video plays on: the watchdog must poke it.
 const poked = await page.evaluate(async () => {
   const v = document.querySelector('video')
   const frozen = v.currentTime
@@ -230,15 +222,13 @@ const poked = await page.evaluate(async () => {
   delete v.currentTime
   return { frozen, set }
 })
-// Either the watchdog's +0.05 or, now that hls.js is really in charge, its
-// own gap controller's nudge — both poke the clock forward.
+// The watchdog's +0.05 or hls.js's gap controller: either pokes the clock forward.
 check(
   poked.set !== null && poked.set > poked.frozen && poked.set < poked.frozen + 1,
   'watchdog nudges a frozen clock',
   JSON.stringify(poked),
 )
-// The escalation may have detached the media mid-sample; wait for the clock
-// to actually run again.
+// The escalation may have detached the media mid-sample; wait for the clock to run again.
 let seen = (await state()).t
 for (let i = 0; i < 15; i++) {
   await sleep(1000)

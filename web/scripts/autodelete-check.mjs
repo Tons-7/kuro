@@ -1,10 +1,5 @@
-// Auto-delete "keep last 2" on a show the list is further into, going back to
-// an early episode and then moving to the next: the episode just left must
-// survive, whether it was left mid-way or played to the end.
-//
-//   KURO_NYAA=<url> KURO_TOKYOTOSHO=<url> node scripts/autodelete-check.mjs
-//
-// Streams two real episodes. SKIP_BUILD=1 reuses the last build.
+// Auto-delete "keep last 2": going back to an early episode, then on, keeps the one just left.
+//   KURO_NYAA=<url> KURO_TOKYOTOSHO=<url> [SKIP_BUILD=1] node scripts/autodelete-check.mjs
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, existsSync, openSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

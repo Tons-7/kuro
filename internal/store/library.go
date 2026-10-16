@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -68,8 +69,7 @@ type ImportResult struct {
 type LibraryItem struct {
 	ID int `json:"id"`
 
-	// Both spellings travel with every item so the display preference can be
-	// flipped without refetching; Title is the one it resolves to.
+	// Both spellings travel, so the display preference flips without a refetch; Title is its pick.
 	Title   string  `json:"title"`
 	Romaji  string  `json:"romaji"`
 	English *string `json:"english"`
@@ -97,15 +97,36 @@ type Resume struct {
 	LastPlayed int      `json:"lastPlayed"`
 }
 
-// Percent drives the progress bar; guard against a missing duration, which
-// happens when a stream ends before the player reports one.
+// Percent drives the progress bar, guarded as a stream can end before a duration is reported.
 func (r *Resume) compute() {
 	if r.Duration != nil && *r.Duration > 0 {
 		r.Percent = r.Position / *r.Duration * 100
 	}
 }
 
-const upsertAnime = `
+// Compared before rewriting: a sync mostly brings shows back unchanged, and writes compete with playback.
+var animeContent = []string{
+	"mal_id", "title_romaji", "title_english", "title_native", "synonyms", "status", "episode_count",
+	"duration", "format", "season", "season_year", "country", "is_adult", "description", "cover_url",
+	"cover_color", "cover_medium", "banner_url", "average_score", "mean_score", "popularity", "favourites",
+	"genres", "studios", "tags", "links", "source", "start_date", "end_date", "trailer_id", "trailer_site",
+	"next_episode", "next_airing_at",
+}
+
+// An unchanged row is restamped after this, well inside what the airing refresh calls stale.
+const resyncAfter = time.Hour
+
+// animeChanged is true when a content column differs from the row's, or the row is due a fresh stamp.
+func animeChanged() string {
+	mine, theirs := make([]string, len(animeContent)), make([]string, len(animeContent))
+	for i, c := range animeContent {
+		mine[i], theirs[i] = "anime."+c, "excluded."+c
+	}
+	return fmt.Sprintf("(%s) IS NOT (%s) OR anime.synced_at < excluded.synced_at - %d",
+		strings.Join(mine, ", "), strings.Join(theirs, ", "), int64(resyncAfter.Seconds()))
+}
+
+var upsertAnime = `
 INSERT INTO anime (
     id, mal_id, title_romaji, title_english, title_native, synonyms,
     format, status, episode_count, duration, season, season_year,
@@ -119,9 +140,7 @@ ON CONFLICT(id) DO UPDATE SET
     title_english=excluded.title_english, title_native=excluded.title_native,
     synonyms=excluded.synonyms, status=excluded.status,
     episode_count=excluded.episode_count, duration=excluded.duration,
-    -- A stub row starts with these unset, and leaving them out of the update
-    -- meant an anime hydrated later never learned it was adult, so it was
-    -- searched on trackers that carry no adult titles at all.
+    -- A stub row starts with these unset, so a later hydrate must fill them (is_adult picks trackers).
     format=excluded.format, season=excluded.season, season_year=excluded.season_year,
     country=excluded.country, is_adult=excluded.is_adult,
     description=excluded.description, cover_url=excluded.cover_url,
@@ -133,7 +152,8 @@ ON CONFLICT(id) DO UPDATE SET
     source=excluded.source, start_date=excluded.start_date, end_date=excluded.end_date,
     trailer_id=excluded.trailer_id, trailer_site=excluded.trailer_site,
     next_episode=excluded.next_episode, next_airing_at=excluded.next_airing_at,
-    synced_at=excluded.synced_at`
+    synced_at=excluded.synced_at
+WHERE ` + animeChanged()
 
 const entryUpdateSet = `
     status=excluded.status, progress=excluded.progress, score=excluded.score,
@@ -142,14 +162,11 @@ const entryUpdateSet = `
     started_at=excluded.started_at, completed_at=excluded.completed_at,
     remote_updated_at=excluded.remote_updated_at, dirty=0`
 
-// Upserts on anime_id as well as id: a row created locally has a negative id
-// (see sync.go), and AniList's real id would otherwise hit the anime_id UNIQUE
-// constraint and abort the sync. guard skips rows with an unpushed edit, and
-// remote rows older than our last push.
+// Upserts on anime_id too (local rows have negative ids); guard skips unpushed edits and older remote rows.
 func buildUpsertEntry(guard bool) string {
 	where := ""
 	if guard {
-		where = " WHERE list_entry.dirty = 0 AND excluded.remote_updated_at >= list_entry.remote_updated_at"
+		where = " WHERE list_entry.dirty = 0 AND excluded.remote_updated_at > list_entry.remote_updated_at"
 	}
 	return `
 INSERT INTO list_entry (
@@ -242,13 +259,14 @@ func (s *Store) ImportList(ctx context.Context, anime []Anime, entries []Entry, 
 }
 
 // Compared in Go rather than a NOT IN clause, which would hit SQLite's bind-parameter limit on a large list.
+// MAL-only shows (negative ids) are never on AniList's list, so they stay.
 func dropMissingEntries(ctx context.Context, tx *sql.Tx, keep []Entry) (int, error) {
 	wanted := make(map[int]struct{}, len(keep))
 	for _, e := range keep {
 		wanted[e.AnimeID] = struct{}{}
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT anime_id FROM list_entry`)
+	rows, err := tx.QueryContext(ctx, `SELECT anime_id FROM list_entry WHERE anime_id > 0`)
 	if err != nil {
 		return 0, err
 	}
@@ -278,8 +296,7 @@ func dropMissingEntries(ctx context.Context, tx *sql.Tx, keep []Entry) (int, err
 	return len(stale), nil
 }
 
-// The window function picks the most recently played episode per anime, which
-// is what "continue watching" means when several were started.
+// latestPlayback joins each anime's most recently played episode.
 const latestPlayback = `
 LEFT JOIN (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at,
@@ -307,7 +324,8 @@ var librarySortSQL = map[string]string{
 
 const libraryWhere = `
 WHERE (?1 = '' OR e.status = ?1)
-  AND (?2 = '' OR a.title_romaji LIKE ?2 OR a.title_english LIKE ?2 OR a.synonyms LIKE ?2)`
+  AND (?2 = '' OR a.title_romaji LIKE ?2 ESCAPE '\' OR a.title_english LIKE ?2 ESCAPE '\'
+       OR a.synonyms LIKE ?2 ESCAPE '\')`
 
 func libraryQuery(sort string) string {
 	order, ok := librarySortSQL[sort]
@@ -323,9 +341,7 @@ ORDER BY ` + order + `
 LIMIT ?3 OFFSET ?4`
 }
 
-// Continue watching: started, not finished, most recent first. Same rule as
-// ResumeAt and resumable() (15 s floor, the show's own threshold), so the rail
-// and the resume prompt agree.
+// Continue watching: each show's latest episode, if started and unfinished by resumable()'s rule.
 const inProgress = `dismissed = 0 AND position_s >= 15
       AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * coalesce(
           (SELECT CAST(value AS REAL) FROM anime_pref
@@ -333,14 +349,17 @@ const inProgress = `dismissed = 0 AND position_s >= 15
              AND CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 1), ?1))
       AND NOT (coalesce(duration_s, 0) <= 0 AND watched = 1)`
 
+// latestFirst: newest first; within one second, the unfinished row is the one being played.
+const latestFirst = `ORDER BY last_played_at DESC, watched, ep_key DESC`
+
 // Two ways to continue: an episode stopped part way, or the next one of a show
 // being watched. Without the second, finishing an episode emptied the row.
 const continuePicks = `
 WITH resume AS (
-    SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at,
-           ROW_NUMBER() OVER (PARTITION BY anime_id ORDER BY last_played_at DESC) AS rn
-    FROM playback
-    WHERE ` + inProgress + `
+    SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at, rn
+    FROM (SELECT playback.*, ROW_NUMBER() OVER (PARTITION BY anime_id ` + latestFirst + `) AS rn
+          FROM playback WHERE dismissed = 0) playback
+    WHERE rn = 1 AND ` + inProgress + `
 ),
 upnext AS (
     SELECT e.anime_id,
@@ -350,11 +369,11 @@ upnext AS (
                     e.local_updated_at) AS last_played_at
     FROM list_entry e
     JOIN anime a ON a.id = e.anime_id
+    -- A fresh rewatch has no progress yet and offers episode 1.
     WHERE e.status IN ('CURRENT','REPEATING')
-      AND e.progress > 0
+      AND (e.progress > 0 OR e.status = 'REPEATING')
       AND (a.episode_count IS NULL OR e.progress < a.episode_count)
-      -- Not one still to broadcast: the card would sit there all week and
-      -- fail when clicked.
+      -- Not one still to broadcast: the card would sit there all week and fail when clicked.
       AND (a.next_episode IS NULL OR a.next_airing_at IS NULL
            OR e.progress + 1 < a.next_episode OR a.next_airing_at <= unixepoch())
       AND e.anime_id NOT IN (SELECT anime_id FROM resume WHERE rn = 1)
@@ -382,8 +401,7 @@ LIMIT ?2 OFFSET ?3`
 
 const continueCountQuery = continuePicks + `SELECT count(*) FROM picks`
 
-// LibraryFilter narrows and orders the list. An empty Sort is the default
-// ordering; an unknown one falls back to it rather than failing.
+// LibraryFilter narrows and orders the list; an empty or unknown Sort is the default.
 type LibraryFilter struct {
 	Status string
 	Query  string
@@ -394,7 +412,7 @@ type LibraryFilter struct {
 func (s *Store) Library(ctx context.Context, f LibraryFilter, p Paging) (Page[LibraryItem], error) {
 	like := ""
 	if q := strings.TrimSpace(f.Query); q != "" {
-		like = "%" + q + "%"
+		like = "%" + escapeLike(q) + "%"
 	}
 	items, err := s.libraryRows(ctx, libraryQuery(f.Sort), f.Status, like, p.PerPage+1, p.Offset())
 	if err != nil {

@@ -16,9 +16,7 @@ func rewatchEntry(t *testing.T, s *Store, animeID int) (status string, progress,
 	return
 }
 
-// Choosing "Rewatching" on a finished show starts over: progress back to zero so
-// "continue" offers episode 1, the episode ticks cleared for this pass, the
-// first watch's finish date kept. Re-choosing it mid-rewatch changes nothing.
+// Rewatching resets progress and ticks, keeps the first finish date; re-choosing it changes nothing.
 func TestRewatchStartsOver(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -80,8 +78,7 @@ func TestRewatchStartsOver(t *testing.T) {
 	}
 }
 
-// Finishing a rewatch completes the entry again and counts the rewatch, which
-// is what both trackers show as "rewatched N times".
+// Finishing a rewatch completes the entry and counts it, the trackers' "rewatched N times".
 func TestFinishingARewatchCountsIt(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

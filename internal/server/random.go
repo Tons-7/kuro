@@ -13,17 +13,14 @@ import (
 	"kuro/internal/store"
 )
 
-// random backs the "surprise me" button. Ids come from the corpus for a uniform
-// draw that includes titles AniList lacks; genres are AniList's, so a draw
-// filtered by them goes there.
+// random draws from the corpus, which has titles AniList lacks; a genre filter goes to AniList.
 func (s *Server) random(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	year, _ := strconv.Atoi(q.Get("year"))
 	format := q.Get("format")
 	genres := csv(q.Get("genres"))
 
-	// A few candidates cover ids that no longer resolve upstream. An empty
-	// corpus (a fresh install still seeding) falls through to AniList.
+	// A few candidates, for ids gone upstream; an empty corpus (still seeding) falls through to AniList.
 	if len(genres) == 0 {
 		ids, err := s.store.RandomIDs(r.Context(), format, year, 5)
 		if err != nil {
@@ -65,8 +62,7 @@ func (s *Server) characters(w http.ResponseWriter, r *http.Request) {
 
 	cast, err := s.enricher.Characters(r.Context(), id)
 	if err != nil {
-		// A show the catalogue never mapped to MyAnimeList has no cast to find,
-		// which is not worth failing the page over.
+		// A show never mapped to MAL has no cast to find, which can't fail the page.
 		s.log.Warn("characters", "anime", id, "err", err)
 		send(w, http.StatusOK, map[string]any{"items": []any{}})
 		return
@@ -89,8 +85,7 @@ func (s *Server) extra(w http.ResponseWriter, r *http.Request) {
 
 	out, err := s.enricher.Extra(r.Context(), id)
 	if err != nil {
-		// A show the catalogue never mapped to MyAnimeList has none of this,
-		// which is not worth failing the page over.
+		// A show never mapped to MAL has none of this, which can't fail the page.
 		s.log.Warn("anime extra", "anime", id, "err", err)
 		send(w, http.StatusOK, metadata.Extra{})
 		return
@@ -145,9 +140,7 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 // Jikan queues requests and can stall for a minute; past this the corpus record stands in.
 const jikanWait = 8 * time.Second
 
-// animeCard resolves one corpus id against whichever catalogue it came from.
-// down is set when the lookup failed rather than found nothing, which is worth
-// retrying, unlike a missing show.
+// animeCard resolves a corpus id in its catalogue; down means the lookup failed, worth a retry.
 func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, down bool) {
 	titles := s.store.TitleMode(r.Context(), 0)
 
@@ -240,8 +233,7 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	return body, true, false
 }
 
-// savedAnime is the row kuro keeps of a show, for when AniList cannot be reached
-// and has no saved answer for this exact lookup either.
+// savedAnime is kuro's row of a show, for when AniList is unreachable and no answer was saved.
 func (s *Server) savedAnime(ctx context.Context, id int) (anilist.Media, bool) {
 	a, at, ok, err := s.store.AnimeRecord(ctx, id)
 	if err != nil || !ok {

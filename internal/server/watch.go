@@ -22,8 +22,7 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 // Must match the episode catalogue's key, which is the bare number.
 func epKey(episode int) string { return fmt.Sprint(episode) }
 
-// progress is what the browser player reports as it plays; without it nothing
-// watched in a browser would ever resume or reach a tracker.
+// progress takes the browser player's reports, which resuming and the trackers depend on.
 func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID  int     `json:"animeId"`
@@ -63,8 +62,7 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"saved": true, "watched": watched})
 }
 
-// prepare resolves an episode's release before anything asks to play it, so the
-// wait people notice is the search rather than the streaming.
+// prepare resolves an episode's release before play is asked, so the search is done by then.
 func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
@@ -100,9 +98,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusAccepted, map[string]any{"preparing": true})
 }
 
-// skips serves the opening and ending timestamps to the browser player, from
-// the file's own chapters where it has them and AniSkip otherwise. The mpv path
-// resolves its own in library.Playback.
+// skips serves the browser player's op/ed times: the file's chapters, else AniSkip.
 func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	animeID, _ := strconv.Atoi(q.Get("anime"))
@@ -116,8 +112,7 @@ func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	prefs, _ := s.store.Prefs(ctx, animeID)
 
-	// Chapters were cut for this exact file, so they win; a file marking only
-	// one of the two still needs the other fetched.
+	// Chapters fit this exact file, so they win; one marking only op or ed gets the other fetched.
 	chapters := s.chapterSkips(animeID, episode)
 	source := "aniskip"
 	switch {
@@ -165,9 +160,7 @@ func hasKind(ranges []player.SkipRange, kind string) bool {
 	return false
 }
 
-// chapterSkips reads the opening and ending straight off the playing file.
-// Only an open session has them, which is the case whenever the browser is
-// asking; nothing is stored, since another release marks its own boundaries.
+// chapterSkips reads op/ed off the open session's file; not stored, as each release has its own.
 func (s *Server) chapterSkips(animeID, episode int) []player.SkipRange {
 	if s.streams == nil {
 		return nil
@@ -206,8 +199,7 @@ func (s *Server) setWatched(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	watched := body.Watched == nil || *body.Watched
 
-	// Saved here, pushed behind the response: a tracker that is down must not
-	// fail a change that has already been made.
+	// Saved here and pushed after the response, so a tracker that's down fails nothing.
 	var err error
 	if watched {
 		_, err = s.store.MarkWatched(ctx, body.AnimeID, body.Episode)
@@ -287,8 +279,7 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Zero is a real score meaning unrated, so "leave it alone" needs its own
-	// value rather than being inferred from an absent field.
+	// Zero means unrated, so "leave it alone" has its own value.
 	score := -1
 	if body.Score != nil {
 		score = *body.Score
@@ -313,6 +304,26 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 
 	s.pushSoon(body.AnimeID)
 	send(w, http.StatusOK, map[string]any{"animeId": body.AnimeID, "status": body.Status})
+}
+
+// removeStatus takes a show off the list, trackers first: one failing leaves the show listed everywhere.
+func (s *Server) removeStatus(w http.ResponseWriter, r *http.Request) {
+	animeID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || animeID == 0 {
+		send(w, http.StatusBadRequest, map[string]any{"error": "anime id is required"})
+		return
+	}
+	if s.syncer != nil {
+		err = s.syncer.Remove(r.Context(), animeID)
+	} else {
+		err = s.store.RemoveListEntry(r.Context(), animeID)
+	}
+	if err != nil {
+		s.log.Warn("remove from list", "anime", animeID, "err", err)
+		send(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"animeId": animeID, "removed": true})
 }
 
 // dismissResume removes an episode from continue-watching without pretending it was finished.

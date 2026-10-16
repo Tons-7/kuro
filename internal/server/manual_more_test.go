@@ -139,8 +139,7 @@ func TestEpisodeSourcesWithoutFinder(t *testing.T) {
 	}
 }
 
-// The downloads list carries the engine's live view: a torrent being
-// re-checked after a launch says so rather than reading as paused.
+// The downloads list says a torrent is being re-checked after launch, not paused.
 func TestDownloadsReportCheckingAndEpisodes(t *testing.T) {
 	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

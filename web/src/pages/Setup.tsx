@@ -5,12 +5,9 @@ import { cx } from '../lib/format'
 import { useSetup } from '../lib/queries'
 import { ComponentState } from '../components/ComponentState'
 import { WhereThingsGo } from '../components/WhereThingsGo'
-import { Badge, Button, ErrorState, LinkButton, Skeleton } from '../components/ui'
+import { Badge, Button, ErrorState, LinkButton, PageHeader, Skeleton } from '../components/ui'
 
-/**
- * What kuro needs before it can play anything, and what each piece is for.
- * The binary is 22 MB; these together are over half a gigabyte.
- */
+/** What kuro needs before it can play anything, and what each piece is for. */
 export function SetupPage() {
   const qc = useQueryClient()
   const { data, isPending, isError, error, refetch } = useSetup({
@@ -31,27 +28,22 @@ export function SetupPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['setup'] }),
   })
 
-  if (isError) return <ErrorState error={error} retry={() => refetch()} />
+  if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
   if (isPending) return <Skeleton className="h-96 w-full" />
 
-  // Defended, not trusted: this is where a first run lands, and an empty list
-  // arriving as null took the whole app down to a blank screen.
+  // Defended, not trusted: a first run lands here, and a null list blanked the app.
   const components = data.components ?? []
   const missing = components.filter((c) => !c.present)
-  // Only ones kuro can actually download drive the bulk button; a manual one
-  // shows its package-manager command on its own row.
+  // Only downloadable ones drive the bulk button; a manual one shows its command on its row.
   const fetchable = missing.filter((c) => !c.manual)
   const progressFor = (name: string) => (data.progress ?? []).find((p) => p.component === name)
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-white">Setting up</h1>
-        <p className="mt-1 text-sm text-base-400">
-          kuro shells out to a few external programs. None are bundled: together
-          they are far larger than the app itself.
-        </p>
-      </div>
+      <PageHeader
+        title="Setting up"
+        subtitle="kuro shells out to a few external programs. None are bundled: together they are far larger than the app itself."
+      />
 
       <section className="surface overflow-hidden">
         <ul className="divide-y divide-white/[0.05]">
@@ -181,8 +173,7 @@ export function SetupPage() {
             >
               Install {fetchable.length === 1 ? fetchable[0].label.toLowerCase() : 'everything missing'}
             </Button>
-            {/* Always a way out: most of these are optional, an install can
-                fail, and own-files viewers need none of them. */}
+            {/* Always a way out: most are optional, and installs can fail. */}
             <Link to="/" className="text-sm text-base-400 transition-colors hover:text-base-100">
               Skip for now
             </Link>

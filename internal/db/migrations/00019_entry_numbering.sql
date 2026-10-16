@@ -1,9 +1,5 @@
 -- +goose Up
--- Episodes were keyed by TheTVDB's number inside its season, which files a
--- later cour past one (Bleach TYBW part 4 is 41-50 there) while the entry
--- itself, the list trackers, the airing schedule and most release groups count
--- it 1-10. The same episode ended up under two keys. Every such show is re-keyed
--- by its own numbering; the TVDB number stays as an alias for matching.
+-- Episodes are re-keyed by the entry's own 1..N, not TheTVDB's in-season number, which stays as an alias.
 ALTER TABLE episode ADD COLUMN tvdb_number INTEGER;
 
 CREATE TABLE _renumber AS
@@ -16,8 +12,7 @@ CREATE TABLE _renumber AS
 UPDATE episode SET tvdb_number = number
 WHERE anime_id IN (SELECT anime_id FROM _renumber) AND is_special = 0;
 
--- Keys are rewritten through a prefix so an overlapping range (12-22 becoming
--- 1-11) never collides with a key not yet rewritten.
+-- Rewritten through a prefix, so an overlapping range (12-22 to 1-11) never collides.
 UPDATE episode
 SET number = number - (SELECT off FROM _renumber s WHERE s.anime_id = episode.anime_id),
     ep_key = 'n' || (number - (SELECT off FROM _renumber s WHERE s.anime_id = episode.anime_id))

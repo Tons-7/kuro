@@ -20,9 +20,9 @@ for (const [label, filters] of [
   ['a search', 'q=gundam'],
   ['filters only', 'genres=Romance&formats=TV&year=2024'],
 ]) {
-  // A busy AniList budget answers 503; retry for a minute like the page does.
+  // A busy AniList budget answers 503; up to three minutes, as the check before can drain it.
   let count, answer
-  for (let i = 0; i < 13 && count === undefined; i++) {
+  for (let i = 0; i < 36 && count === undefined; i++) {
     const r = await fetch(`${BASE}/api/browse/count?${filters}&perPage=${PER_PAGE}`)
     answer = `${r.status} ${await r.text()}`
     if (r.status === 503) await new Promise((done) => setTimeout(done, 5000))

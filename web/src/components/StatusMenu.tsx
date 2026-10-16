@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { LIST_STATUSES, type ListStatus } from '../lib/api'
-import { useSetStatus } from '../lib/queries'
+import { useRemoveStatus, useSetStatus } from '../lib/queries'
 import { cx } from '../lib/format'
 import { useDismiss, useModalFocus } from './ui'
 
@@ -19,23 +19,24 @@ export function StatusMenu({
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
-  // In a portal, the menu is at the end of the page's tab order; opening it
-  // moves focus in, and closing hands it back to the button.
+  // The portalled menu ends the tab order, so opening moves focus in and closing returns it.
   const menuRef = useRef<HTMLDivElement>(null)
   useModalFocus(menuRef, open)
   const setStatus = useSetStatus({ inline: true })
   // Rewatching starts the show over (progress and ticks reset), so it asks once.
   const [confirmRewatch, setConfirmRewatch] = useState(false)
+  // Removing also deletes the entry on AniList and MAL, so it asks once too.
+  const remove = useRemoveStatus()
+  const [confirmRemove, setConfirmRemove] = useState(false)
 
   const active = LIST_STATUSES.find((s) => s.value === current)
 
-  // A portal, because this sits inside cards and a banner that clip their
-  // contents: anchored normally the list was cut off after two rows.
+  // A portal, as the cards and banner it sits in clip their contents.
   const box = trigger.current?.getBoundingClientRect()
   const menu = box && {
-    top: Math.min(box.bottom + 6, window.innerHeight - 240),
+    top: Math.min(box.bottom + 6, window.innerHeight - 290),
     left: Math.max(8, Math.min(box.right - 176, window.innerWidth - 184)),
   }
 
@@ -52,11 +53,13 @@ export function StatusMenu({
           e.stopPropagation()
           setOpen((v) => !v)
           setConfirmRewatch(false)
+          setConfirmRemove(false)
           setStatus.reset()
+          remove.reset()
         }}
         className={cx(
-          'flex items-center gap-1.5 rounded-md font-medium transition-colors',
-          compact ? 'size-8 justify-center' : 'px-3 py-1.5 text-sm',
+          'flex items-center gap-1.5 font-medium transition-colors',
+          compact ? 'tap relative size-8 justify-center rounded-md' : 'rounded-lg px-4 py-2 text-sm',
           active
             ? 'bg-accent-500/20 text-accent-400 hover:bg-accent-500/30'
             : 'bg-base-800/90 text-base-200 hover:bg-base-700',
@@ -111,9 +114,33 @@ export function StatusMenu({
               {status.value === current && <CheckIcon />}
             </button>
           ))}
-          {setStatus.isError && (
+          {current && (
+            <button
+              role="menuitem"
+              disabled={remove.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                if (!confirmRemove) {
+                  setConfirmRemove(true)
+                  return
+                }
+                remove.mutate(animeId, {
+                  onSuccess: () => {
+                    setConfirmRemove(false)
+                    setOpen(false)
+                    onDone?.()
+                  },
+                })
+              }}
+              className="flex w-full items-center border-t border-base-750 px-3 py-1.5 text-left text-sm text-red-300 transition-colors hover:bg-recap/15"
+            >
+              {remove.isPending ? 'Removing…' : confirmRemove ? 'Remove (trackers too)?' : 'Remove from list'}
+            </button>
+          )}
+          {(setStatus.isError || remove.isError) && (
             <p className="border-t border-base-750 px-3 py-1.5 text-xs text-recap">
-              {(setStatus.error as Error).message}
+              {((setStatus.error ?? remove.error) as Error).message}
             </p>
           )}
 

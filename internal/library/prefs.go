@@ -43,8 +43,7 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 			prefs.SubLanguages = langs
 		}
 	}
-	// Never for an unattended download: the point of waiting is that a subbed
-	// release turns up a few hours after the raw.
+	// Never unattended: waiting is how a subbed release, hours after the raw, gets picked.
 	prefs.AllowRaw = false
 	return prefs
 }

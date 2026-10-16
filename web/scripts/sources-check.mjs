@@ -1,11 +1,5 @@
-// What a user sees around release sources: a fresh download, an existing
-// install updating with its old config, and a config with sites filled in.
-// Runs each against a throwaway instance, restarting between them.
-//
-//   KURO_NYAA=<url> KURO_TOKYOTOSHO=<url> node scripts/sources-check.mjs
-//
-// The sites are never in the repository; without them the last scenario is
-// skipped. SKIP_BUILD=1 reuses the last build, KEEP=1 keeps the scratch dir.
+// Release sources on a fresh install, an updating one, and one with sites set (skipped without them).
+//   KURO_NYAA=<url> KURO_TOKYOTOSHO=<url> [SKIP_BUILD=1] [KEEP=1] node scripts/sources-check.mjs
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -102,8 +96,7 @@ const go = (page, path) =>
     window.dispatchEvent(new PopStateEvent('popstate'))
   }, path)
 
-// The unconfigured experience: nudged to setup, told what to add, and every
-// search refused with the same instruction.
+// Unconfigured: nudged to setup, told what to add, every search refused with that instruction.
 async function expectUnconfigured(page, label) {
   const setup = await api('/api/setup')
   check(setup.body?.indexers === 0, `${label}: setup reports no sites`, JSON.stringify(setup.body?.indexers))
@@ -120,8 +113,7 @@ async function expectUnconfigured(page, label) {
   )
   await page.screenshot({ path: join(shots, `${label}-setup.png`) })
 
-  // The series page, then play, by clicking through the app: a full page load
-  // would only be nudged back to setup.
+  // Series page, then play, by clicking: a full page load is nudged back to setup.
   await go(page, `/anime/${ANIME}`)
   await until(() => page.getByRole('heading', { name: /bleach/i }).first().isVisible().catch(() => false), 60000)
   await go(page, `/watch/${ANIME}/${EPISODE}`)
@@ -142,8 +134,7 @@ async function expectUnconfigured(page, label) {
 }
 
 try {
-  // Another kuro on the port would answer in place of the scratch one, and
-  // every write below would land in it.
+  // Another kuro on the port would answer instead, and take every write below.
   if (await fetch(`${URL}/api/setup`).then((r) => r.ok).catch(() => false)) {
     throw new Error(`something already answers on ${URL}; close it or set PORT`)
   }
@@ -167,8 +158,7 @@ try {
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 
-  // A: unzipped for the first time. No config at all, so the default port:
-  // skipped when the run is on another one.
+  // A: first unzip, no config, so the default port (skipped when running on another).
   if (PORT === '4321') {
     stage('fresh download: no config.toml')
     await start('fresh')
@@ -182,8 +172,7 @@ try {
     console.log(`\nSKIP fresh download: needs the default port, running on ${PORT}`)
   }
 
-  // B: an existing install updating. Its config predates sites; its database
-  // is the one from before.
+  // B: an existing install updating, its config predating sites and its database kept.
   stage('existing install: old config, existing database')
   // Its own peer port, off the real app's.
   const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n\n[torrent]\nlisten_port = 4342\n`

@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// The binary names and archive layout differ by OS, so the mapping is the part
-// most likely to be wrong on a platform this machine is not.
+// Names and archive layout differ by OS, the part most likely wrong on a platform not this one.
 func TestComponentFilesPerOS(t *testing.T) {
 	cases := []struct {
 		name, goos string
@@ -27,8 +26,7 @@ func TestComponentFilesPerOS(t *testing.T) {
 	}
 }
 
-// Anime4K is always auto-fetched; ffmpeg and mpv depend on the OS. The
-// command is only ever shown for what this OS cannot fetch.
+// Anime4K always auto-fetches; a command shows only for what this OS can't fetch.
 func TestManualCommandOnlyForUnfetchable(t *testing.T) {
 	if ManualCommand("anime4k") != "" {
 		t.Error("anime4k is auto-fetched everywhere; it should have no manual command")
@@ -52,5 +50,15 @@ func TestFfmpegLinuxURL(t *testing.T) {
 	}
 	if _, err := ffmpegLinuxURLFor("riscv64"); err == nil {
 		t.Error("an unsupported arch should not resolve a URL")
+	}
+}
+
+// 32-bit Linux gets a static build too, and an arch with none gets the package manager's command.
+func TestFfmpegLinuxURLCoversThirtyTwoBit(t *testing.T) {
+	for arch, want := range map[string]string{"386": "i686", "arm": "armhf"} {
+		url, err := ffmpegLinuxURLFor(arch)
+		if err != nil || !strings.Contains(url, want) {
+			t.Errorf("%s: %q, %v", arch, url, err)
+		}
 	}
 }

@@ -131,6 +131,10 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	if pending >= maxPending {
 		return "full"
 	}
+	// A denied device that drops its cookie is still the denied device: its address answers for it.
+	if id == "" && s.deniedAddr(r) {
+		return store.DeviceDenied
+	}
 	if id == "" {
 		secret := NewAccessToken()
 		http.SetCookie(w, &http.Cookie{
@@ -150,6 +154,24 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	a.status[id] = store.DevicePending
 	s.log.Info("device asks for access", "device", name, "addr", addr)
 	return store.DevicePending
+}
+
+// deniedAddr reports a request from the address of a device the host turned down.
+func (s *Server) deniedAddr(r *http.Request) bool {
+	addr, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		addr = r.RemoteAddr
+	}
+	devices, err := s.store.Devices(r.Context())
+	if err != nil {
+		return false
+	}
+	for _, d := range devices {
+		if d.Status == store.DeviceDenied && d.Addr == addr {
+			return true
+		}
+	}
+	return false
 }
 
 // deviceName is a label the host can recognise, from the User-Agent.

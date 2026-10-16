@@ -6,10 +6,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
+	"kuro/internal/library"
 	"kuro/internal/store"
+	"kuro/internal/torrent"
 )
 
 func (s *Server) localStats(w http.ResponseWriter, r *http.Request) {
@@ -26,6 +29,7 @@ func (s *Server) localStats(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{
 		"stats":    stats,
 		"roots":    roots,
+		"lastScan": s.lastScan(),
 		"scanning": s.scanning.Load(),
 	})
 }
@@ -76,8 +80,14 @@ func (s *Server) localScan(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusAccepted, map[string]any{"status": "started", "roots": roots})
 }
 
-// setLibraryPaths validates the directories before storing them, so a typo is
-// reported now rather than as an empty scan later.
+// setLibraryPaths checks the folders before storing them, so a typo shows now, not as an empty scan.
+func (s *Server) lastScan() *library.ScanReport {
+	if s.scanner == nil {
+		return nil
+	}
+	return s.scanner.LastReport()
+}
+
 func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Paths []string `json:"paths"`
@@ -87,6 +97,11 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only a new folder has to be there: an unplugged drive must not block every other edit.
+	var current []string
+	if s.scanner != nil {
+		current, _ = s.scanner.Roots(r.Context())
+	}
 	clean := make([]string, 0, len(body.Paths))
 	problems := map[string]string{}
 	for _, p := range body.Paths {
@@ -98,12 +113,18 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 			problems[p] = err.Error()
 			continue
 		}
+		if slices.Contains(current, abs) {
+			clean = append(clean, abs)
+			continue
+		}
 		info, err := os.Stat(abs)
 		switch {
 		case err != nil:
 			problems[p] = "not readable"
 		case !info.IsDir():
 			problems[p] = "not a directory"
+		case s.cfg.CacheDir != "" && (torrent.Within(s.cfg.CacheDir, abs) || torrent.Within(abs, s.cfg.CacheDir)):
+			problems[p] = "holds kuro's own downloads; a library folder must be elsewhere"
 		default:
 			clean = append(clean, abs)
 		}
@@ -122,11 +143,14 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "library paths", err)
 		return
 	}
+	// A folder taken out takes its files with it: they must not keep playing or standing in for downloads.
+	if _, err := s.store.SweepOutside(r.Context(), clean); err != nil {
+		s.log.Warn("retire files outside the library", "err", err)
+	}
 	send(w, http.StatusOK, map[string]any{"paths": clean})
 }
 
-// forgetMissing clears files that are gone for good. Scanning only flags them,
-// so this is the deliberate step that removes them.
+// forgetMissing clears files gone for good; a scan only flags them.
 func (s *Server) forgetMissing(w http.ResponseWriter, r *http.Request) {
 	n, err := s.store.ForgetMissing(r.Context())
 	if err != nil {
@@ -164,8 +188,7 @@ func (s *Server) assignLocalFile(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"id": body.ID, "animeId": body.AnimeID, "episode": body.Episode})
 }
 
-// localStream serves a scanned file. http.ServeContent handles range requests,
-// which is what makes seeking work in the browser player.
+// localStream serves a scanned file; ServeContent's range requests make seeking work.
 func (s *Server) localStream(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	if id <= 0 {

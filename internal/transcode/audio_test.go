@@ -16,8 +16,7 @@ func dualAudioInfo() *MediaInfo {
 	}
 }
 
-// The dub viewer gets the English track even when the file marks Japanese
-// default; the sub viewer gets Japanese.
+// Dub gets English even with Japanese marked default; sub gets Japanese.
 func TestChooseAudioByPreference(t *testing.T) {
 	info := dualAudioInfo()
 	if got := ChooseAudio(info, "dub"); got != 1 {
@@ -54,9 +53,7 @@ func TestChooseAudioByPreference(t *testing.T) {
 	}
 }
 
-// The sub/dub preference picks the track on the first open and when it changes
-// (the Sub/Dub toggle). A reopen with the same preference must not re-pick, or
-// it drops every segment the player is loading.
+// The preference picks a track on first open and on change, never on a same-choice reopen.
 func TestAudioPreferenceAppliesOnFirstOpenAndOnChange(t *testing.T) {
 	s := &Session{Info: dualAudioInfo()}
 	if !s.ApplyAudioPreference("sub") {

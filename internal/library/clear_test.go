@@ -5,9 +5,7 @@ import (
 	"testing"
 )
 
-// Evicting deletes the whole torrent, so a season pack with one episode playing
-// must be left alone entirely: clearing the idle files of that pack would take
-// the running one with them.
+// Evicting deletes a whole torrent, so a pack with one episode playing is left alone entirely.
 func TestClearKeepsEveryFileOfAPinnedTorrent(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()

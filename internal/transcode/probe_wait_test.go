@@ -34,8 +34,7 @@ func shortProbes(t *testing.T) {
 	t.Cleanup(func() { probeLimit = was })
 }
 
-// A slow download buffers: the wait for the file's start goes on for as long as bytes keep arriving,
-// and ends only once they stop.
+// A slow download buffers: the wait for the file's start lasts while bytes keep arriving.
 func TestProbeWaitsOnWhileTheDownloadMoves(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	shortProbes(t)

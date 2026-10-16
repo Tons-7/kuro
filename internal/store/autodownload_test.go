@@ -65,8 +65,7 @@ func TestAutoDownloadIsNotDuplicatedForAFollowedShow(t *testing.T) {
 	}
 }
 
-// The per-anime value overlays the global one, which is what lets a single
-// show opt in while everything else stays off.
+// The per-anime value overlays the global one, so one show can opt in alone.
 func TestPerAnimeAutoDownloadOverridesTheGlobal(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

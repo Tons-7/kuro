@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"strconv"
 	"time"
 )
@@ -11,9 +12,7 @@ import (
 // Defaults are the source of truth for what a setting means. The database only
 // stores what differs, so a key added in a later version still has a value.
 var Defaults = map[string]string{
-	// Everything automatic is off by default: an unwanted skip or auto-advance is
-	// more annoying than pressing a button.
-	// The browser player works everywhere; mpv is desktop only, so it opts in.
+	// The browser player works everywhere; everything automatic is off, as an unwanted skip annoys more.
 	"playback.player":      "browser",
 	"playback.autoplay":    "false",
 	"playback.autoskip_op": "false",
@@ -32,8 +31,7 @@ var Defaults = map[string]string{
 	"playback.anime4k":      "false",
 	"playback.anime4k_mode": "A",
 	"playback.anime4k_size": "M",
-	// Resolve the next episode's release (a search, not a download) while this one
-	// plays, so pressing next doesn't wait on the indexers.
+	// Search for the next episode's release while this one plays, so Next doesn't wait.
 	"playback.prepare_next": "true",
 
 	"audio.prefer": "sub",
@@ -56,13 +54,11 @@ var Defaults = map[string]string{
 	"cache.prefetch_next": "false",
 	// How many episodes ahead prefetch downloads while it is on: 1 or 2.
 	"cache.prefetch_count": "1",
-	// On: an episode keeps downloading after the player closes, so returning to it
-	// (and its second-half subtitles) needs no swarm.
+	// On: an episode keeps downloading after the player closes, so going back needs no swarm.
 	"cache.prefetch_full": "true",
 	// "pause": downloads stand down while the episode on screen is still arriving; "continue": never.
 	"downloads.while_watching": "pause",
-	// off | now (gone once watched) | keep2 (gone once the two after it are watched
-	// too, so going back one is still free).
+	// off | now (gone once watched) | keep2 (gone once the two after it are watched).
 	"cache.autodelete": "off",
 	// Kept downloads are never evicted, so this is their only automatic cleanup.
 	"cache.autodelete_downloads": "false",
@@ -77,8 +73,7 @@ var Defaults = map[string]string{
 	"autodownload.enabled": "false",
 }
 
-// Anime4K ships six shader chains for different source quality, and five CNN
-// sizes where each step doubles GPU cost.
+// Anime4K's six chains by source quality, and five CNN sizes, each doubling GPU cost.
 var (
 	Anime4KModes = []string{"A", "B", "C", "A+A", "B+B", "C+A"}
 	Anime4KSizes = []string{"S", "M", "L", "VL", "UL"}
@@ -120,9 +115,7 @@ func (p Prefs) Float(key string) float64 {
 
 func (p Prefs) All() map[string]string {
 	out := make(map[string]string, len(Defaults))
-	for k, v := range Defaults {
-		out[k] = v
-	}
+	maps.Copy(out, Defaults)
 	for k, v := range p.values {
 		if v != "" {
 			out[k] = v
@@ -159,9 +152,7 @@ func (s *Store) Prefs(ctx context.Context, animeID int) (Prefs, error) {
 	return Prefs{values: values}, nil
 }
 
-// EnsureAnime creates the row other tables key on, from the corpus where it is
-// known. Several tables reference anime(id), so without it playing anything the
-// catalogue has not imported fails a foreign key.
+// EnsureAnime creates the anime row other tables' foreign keys need, from the corpus where known.
 func (s *Store) EnsureAnime(ctx context.Context, animeID int) error {
 	return ensureAnime(ctx, s.w, animeID)
 }
@@ -196,8 +187,7 @@ func ensureAnime(ctx context.Context, db execer, animeID int) error {
 	return err
 }
 
-// Unhydrated reports which of the ids are placeholders or missing, so a
-// caller with a metadata source can fill them in.
+// Unhydrated reports which ids are placeholders or missing, for a metadata source to fill.
 func (s *Store) Unhydrated(ctx context.Context, ids []int) ([]int, error) {
 	var out []int
 	for _, id := range ids {
@@ -353,9 +343,7 @@ func (s *Store) MarkFavouriteSynced(ctx context.Context, animeID int, favourite 
 	return err
 }
 
-// ApplyRemoteFavourites merges the tracker's list into the local one. Rows with
-// unpushed changes are left alone, and rows already in step are not rewritten,
-// so a sync never reorders the favourites page.
+// ApplyRemoteFavourites merges the tracker's list, skipping unpushed and unchanged rows so nothing reorders.
 func (s *Store) ApplyRemoteFavourites(ctx context.Context, ids []int) (int, error) {
 	remote := make(map[int]bool, len(ids))
 	for _, id := range ids {

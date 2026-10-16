@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Anime4KPipeline } from 'anime4k-webgpu'
 
-/**
- * Anime4K in the browser via WebGPU; mode names match mpv so one setting drives
- * both. Best-effort: WebGPU may be absent, and every failure path plays plain.
- */
+/** Anime4K via WebGPU, with mpv's mode names; best-effort, every failure plays plain. */
 export function webgpuAvailable(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
@@ -133,8 +130,7 @@ export function useAnime4K({
   enabled: boolean
   mode: string
   tier: UpscaleTier
-  /** Changes per source: the renderer sizes its textures from the first frame
-   *  it sees, so a different release has to rebuild it. */
+  /** Changes per source, as the renderer sizes its textures from the first frame. */
   source?: string
   /** The GPU cannot keep up at this tier; unset when the tier was picked by hand. */
   onSlow?: () => void
@@ -168,8 +164,7 @@ export function useAnime4K({
     setState('starting')
 
     const start = async () => {
-      // The renderer needs real frame dimensions to size its textures, which
-      // only exist once metadata has loaded.
+      // The renderer sizes textures from frame dimensions, known once metadata loads.
       if (!video.videoWidth) {
         await new Promise<void>((resolve) => {
           video.addEventListener('loadedmetadata', () => resolve(), { once: true })
@@ -197,13 +192,11 @@ export function useAnime4K({
       await lib.render({
         video,
         canvas,
-        // The renderer returns no handle to stop its frame loop, so capture the
-        // device here and destroy it on teardown.
+        // No handle stops the renderer's frame loop, so the device is captured and destroyed.
         pipelineBuilder: (gpu: GPUDevice, inputTexture: GPUTexture) => {
           device = gpu
 
-          // A device can also be lost on its own (driver reset, backgrounded
-          // too long); report it so the plain video comes back.
+          // A device lost on its own (driver reset, long backgrounding) brings the plain video back.
           void gpu.lost.then(() => {
             if (!cancelled) setState('failed')
           })

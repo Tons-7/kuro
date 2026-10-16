@@ -36,22 +36,22 @@ func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'
 const statusScript = `$ErrorActionPreference = 'SilentlyContinue'
 $nets = @(Get-NetConnectionProfile | ForEach-Object {
   [pscustomobject]@{ name = $_.Name; interface = $_.InterfaceAlias; category = $_.NetworkCategory.ToString() } })
-function Shape($r) { [pscustomobject]@{ name = $r.DisplayName; action = $r.Action.ToString(); profiles = $r.Profile.ToString(); enabled = ($r.Enabled.ToString() -eq 'True') } }
+function Shape($r) { $pf = $r | Get-NetFirewallPortFilter; [pscustomobject]@{ name = $r.DisplayName; action = $r.Action.ToString(); profiles = $r.Profile.ToString(); enabled = ($r.Enabled.ToString() -eq 'True'); localPort = (@($pf.LocalPort) -join ','); protocol = [string]$pf.Protocol } }
 $port = @(Get-NetFirewallRule -DisplayName %s | ForEach-Object { Shape $_ })
 $prog = @(Get-NetFirewallApplicationFilter -Program %s | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' } | ForEach-Object { Shape $_ })
 [pscustomobject]@{ networks = $nets; port = $port; program = $prog } | ConvertTo-Json -Depth 4 -Compress`
 
 // Check reads the network categories and every rule that decides whether a device on them reaches the port.
 func Check(ctx context.Context, port int, exe string) (Status, error) {
-	return check(ctx, RuleName(port), exe)
+	return check(ctx, port, RuleName(port), exe)
 }
 
 // CheckPeers is Check for the torrent peer port; PortRule is kuro's peer rule.
 func CheckPeers(ctx context.Context, port int, exe string) (Status, error) {
-	return check(ctx, PeerRuleName(port), exe)
+	return check(ctx, port, PeerRuleName(port), exe)
 }
 
-func check(ctx context.Context, rule, exe string) (Status, error) {
+func check(ctx context.Context, port int, rule, exe string) (Status, error) {
 	out, err := powershell(ctx, "-EncodedCommand",
 		encoded(fmt.Sprintf(statusScript, quote(rule), quote(exe)))).Output()
 	if err != nil {
@@ -65,7 +65,7 @@ func check(ctx context.Context, rule, exe string) (Status, error) {
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return Status{Supported: true}, fmt.Errorf("read firewall: %w", err)
 	}
-	st := Status{Supported: true, Networks: raw.Networks, Program: raw.Program}
+	st := Status{Supported: true, Port: port, Networks: raw.Networks, Program: raw.Program}
 	if len(raw.Port) > 0 {
 		st.PortRule = &raw.Port[0]
 	}
@@ -77,9 +77,7 @@ Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName %[1]s -Description 'Lets devices on this network open kuro.' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %[2]d -RemoteAddress LocalSubnet -Profile %[3]s | Out-Null
 Get-NetFirewallApplicationFilter -Program %[4]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
 
-// Allow adds kuro's port rule for the local subnet and removes the block rules
-// a declined prompt left on kuro.exe, which would override it. Windows asks the
-// user to approve, since this needs administrator rights.
+// Allow adds kuro's subnet rule and drops the block rules a declined prompt left, as administrator.
 func Allow(ctx context.Context, port int, exe string, public bool) error {
 	profiles := "Private,Domain"
 	if public {

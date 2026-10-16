@@ -10,8 +10,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Browse is the filter set AniList's media query accepts. Zero values are
-// omitted, so an empty Browse is "everything, most popular first".
+// Browse is AniList's media filter set; zero values are omitted, so empty is "all, most popular first".
 type Browse struct {
 	Search        string
 	Genres        []string
@@ -33,8 +32,7 @@ type Browse struct {
 	PerPage int
 }
 
-// browseSorts are the orderings the API accepts here. A typed query with no
-// sort chosen falls back to match quality.
+// browseSorts are the API's orderings here; a typed query with none chosen sorts by match.
 var browseSorts = map[string]string{
 	"popular":    "POPULARITY_DESC",
 	"trending":   "TRENDING_DESC",
@@ -267,8 +265,7 @@ func browseVars(b Browse) map[string]any {
 
 const genreQuery = `query { GenreCollection MediaTagCollection { name category isAdult } }`
 
-// TagOption is a tag as it appears in the filter vocabulary, which carries a
-// category for grouping rather than the per-anime rank Tag has.
+// TagOption is a filter-vocabulary tag, with a category for grouping instead of Tag's rank.
 type TagOption struct {
 	Name     string `json:"name"`
 	Category string `json:"category"`

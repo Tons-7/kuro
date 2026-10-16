@@ -1,9 +1,4 @@
-// Package web carries the built single-page app so the server ships as one
-// binary with nothing to install alongside it.
-//
-// dist is produced by `npm run build` in this directory. It is committed as a
-// build artifact because `go build` cannot run npm, and a source-only checkout
-// would otherwise produce a binary that serves nothing.
+// Package web embeds the built app (npm run build into dist, committed since go build can't run npm).
 package web
 
 import (
@@ -14,9 +9,7 @@ import (
 //go:embed all:dist
 var dist embed.FS
 
-// FS returns the built app rooted at dist, or false when the directory holds
-// only its placeholder — which is what a checkout looks like before the
-// frontend has been built.
+// FS returns the built app rooted at dist, or false while dist holds only its placeholder.
 func FS() (fs.FS, bool) {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {

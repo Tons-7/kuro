@@ -19,9 +19,12 @@ import (
 
 type malServer struct {
 	list string
+	// listing, when set, holds each list request until the test takes a value and sends one back.
+	listing chan struct{}
 
-	mu      sync.Mutex
-	patches []url.Values
+	mu          sync.Mutex
+	patches     []url.Values
+	patchStatus int
 }
 
 func (m *malServer) handler(t *testing.T) http.HandlerFunc {
@@ -31,12 +34,31 @@ func (m *malServer) handler(t *testing.T) http.HandlerFunc {
 			r.ParseForm()
 			m.mu.Lock()
 			m.patches = append(m.patches, r.PostForm)
+			status := m.patchStatus
 			m.mu.Unlock()
+			if status != 0 {
+				w.WriteHeader(status)
+				io.WriteString(w, `{"error":"invalid_token"}`)
+				return
+			}
 			io.WriteString(w, `{}`)
 			return
 		}
-		io.WriteString(w, m.list)
+		if m.listing != nil {
+			m.listing <- struct{}{}
+			<-m.listing
+		}
+		m.mu.Lock()
+		list := m.list
+		m.mu.Unlock()
+		io.WriteString(w, list)
 	}
+}
+
+func (m *malServer) setList(list string) {
+	m.mu.Lock()
+	m.list = list
+	m.mu.Unlock()
 }
 
 func (m *malServer) pushed() []url.Values {
@@ -121,8 +143,7 @@ func TestMALSyncPushesLocalProgress(t *testing.T) {
 	}
 }
 
-// The point of importing: MAL already knows most of the list, so connecting an
-// account must not fire a request per entry.
+// MAL already knows most of the list, so connecting must not fire a request per entry.
 func TestImportSuppressesRedundantPushes(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},

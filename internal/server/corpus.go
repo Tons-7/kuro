@@ -15,8 +15,7 @@ import (
 	"kuro/internal/score"
 )
 
-// The matcher index is rebuilt after ingestion and read on every lookup, so it
-// is swapped behind a lock rather than mutated.
+// The matcher index is rebuilt after ingestion and swapped behind a lock, never mutated.
 type indexHolder struct {
 	mu sync.RWMutex
 	ix *match.Index
@@ -51,8 +50,7 @@ func (s *Server) corpusStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Ingestion downloads tens of megabytes and can spend minutes inside AniList's
-// rate limit, so it runs detached from the request.
+// Ingestion takes minutes under AniList's limit, so it runs detached from the request.
 func (s *Server) corpusRefresh(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "true"
 
@@ -93,8 +91,7 @@ func (s *Server) corpusRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Episode data is fetched the first time a detail page is opened, so only
-// shows the user actually looks at cost a request.
+// Episode data is fetched when a detail page opens, so only shows looked at cost a request.
 func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	if id == 0 {
@@ -136,8 +133,7 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps)})
 }
 
-// deriveEpisodesAsync records which episodes releases exist for, once per show
-// per day. Only titles nothing has catalogued reach this.
+// deriveEpisodesAsync records which episodes have releases, daily, for uncatalogued titles.
 func (s *Server) deriveEpisodesAsync(animeID int) {
 	if s.finder == nil || s.store.EpisodesDerived(context.Background(), animeID) {
 		return
@@ -185,16 +181,42 @@ func (s *Server) cleanOrphans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files, err := s.cache.Orphans(r.Context(), r.Method == http.MethodGet)
+	// A POST deletes the names the page showed, not whatever counts as orphaned by the time it lands.
+	var body struct {
+		Names []string `json:"names"`
+	}
+	var files []library.Orphan
+	var err error
+	switch {
+	case r.Method == http.MethodGet:
+		files, err = s.cache.Orphans(r.Context(), true)
+	case r.ContentLength != 0:
+		if !decode(w, r, &body) {
+			return
+		}
+		files, err = s.cache.RemoveOrphans(r.Context(), body.Names)
+	default:
+		send(w, http.StatusBadRequest, map[string]any{"error": "names to delete are required"})
+		return
+	}
 	if err != nil {
 		s.fail(w, "clean orphans", err)
 		return
 	}
 	var bytes int64
+	removed := map[string]bool{}
 	for _, f := range files {
 		bytes += f.Bytes
+		removed[f.Name] = true
 	}
-	send(w, http.StatusOK, map[string]any{"files": files, "removed": len(files), "freedBytes": bytes})
+	// Shown but kept: claimed by a download since, or gone already.
+	kept := []string{}
+	for _, n := range body.Names {
+		if !removed[n] {
+			kept = append(kept, n)
+		}
+	}
+	send(w, http.StatusOK, map[string]any{"files": files, "removed": len(files), "freedBytes": bytes, "kept": kept})
 }
 
 func (s *Server) refreshFillers(w http.ResponseWriter, r *http.Request) {
@@ -310,8 +332,7 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 		s.hydrate(r.Context(), []int{id})
 	}
 
-	// Season 0 lets the finder read it from the title, as play does; forcing
-	// 1 hid every release stating a later season.
+	// Season 0 lets the finder read it from the title, as play does.
 	season, _ := strconv.Atoi(r.URL.Query().Get("season"))
 	prefs := s.preferences(r.Context(), id)
 	switch a := r.URL.Query().Get("audio"); a {
@@ -353,8 +374,7 @@ func (s *Server) RebuildIndex(ctx context.Context) error {
 	return nil
 }
 
-// match resolves a release name the way the download path will, so a wrong
-// pick can be reproduced without starting a torrent.
+// match resolves a release name as downloads do, to reproduce a wrong pick without a torrent.
 func (s *Server) match(w http.ResponseWriter, r *http.Request) {
 	title := r.URL.Query().Get("title")
 	if title == "" {

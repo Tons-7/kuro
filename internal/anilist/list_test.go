@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
+func ptr[T any](v T) *T { return new(v) }
 
 func TestFuzzyDateString(t *testing.T) {
 	tests := []struct {
@@ -16,9 +17,9 @@ func TestFuzzyDateString(t *testing.T) {
 		date FuzzyDate
 		want string
 	}{
-		{"complete", FuzzyDate{ptr(2026), ptr(8), ptr(8)}, "2026-08-08"},
-		{"year only", FuzzyDate{Year: ptr(2026)}, "2026-00-00"},
-		{"year and month", FuzzyDate{Year: ptr(2026), Month: ptr(3)}, "2026-03-00"},
+		{"complete", FuzzyDate{new(2026), new(8), new(8)}, "2026-08-08"},
+		{"year only", FuzzyDate{Year: new(2026)}, "2026-00-00"},
+		{"year and month", FuzzyDate{Year: new(2026), Month: new(3)}, "2026-03-00"},
 		{"empty", FuzzyDate{}, ""},
 	}
 
@@ -31,8 +32,7 @@ func TestFuzzyDateString(t *testing.T) {
 	}
 }
 
-// An entry appears once per status list and once per custom list it belongs
-// to. A real 500-entry account returns roughly 1,320 references.
+// An entry appears once per status and custom list: a real 500-entry account returns ~1,320.
 func TestListDeduplicatesAcrossCustomLists(t *testing.T) {
 	const body = `{"data":{"MediaListCollection":{"lists":[
       {"name":"Watching","entries":[
@@ -91,9 +91,8 @@ func TestSetProgressOmitsUnsetFields(t *testing.T) {
 		t.Fatalf("progress = %v, want 7", vars["progress"])
 	}
 
-	// The rewatch count is always known, so it always travels — including the
-	// bump that finishing a rewatch makes.
-	if _, err := c.SetProgress(context.Background(), 100, 12, "COMPLETED", &FuzzyDate{ptr(2026), ptr(8), ptr(8)}, 2, 85, false); err != nil {
+	// The rewatch count always travels, including the bump finishing a rewatch makes.
+	if _, err := c.SetProgress(context.Background(), 100, 12, "COMPLETED", &FuzzyDate{new(2026), new(8), new(8)}, 2, 85, false); err != nil {
 		t.Fatal(err)
 	}
 	if vars["status"] != "COMPLETED" {

@@ -32,11 +32,7 @@ func waitExit(s *Session) {
 	}
 }
 
-// The reopen that broke in the browser: prestart aims the encoder at the resume
-// segment, then the player asks for segment 0 and the init segment together.
-// Every ordering of those three must serve all of them; the init request in
-// particular must never pull the encoder back toward the resume segment and
-// kill the pass serving segment 0.
+// Prestart at the resume segment, then segment 0 and init together: every order serves all three.
 func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 	const resume = 5
 	orders := [][]string{
@@ -81,9 +77,7 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 	}
 }
 
-// hls.js asks for its timestamp anchor (segment 0) and the resume fragment
-// together; the requests pull the encoder opposite ways. Both must be served:
-// the restart lets the pass serve the waiter it is about to reach first.
+// Segment 0 and the resume fragment pull the encoder opposite ways; both must be served.
 func TestOpposingSegmentRequestsAreBothServed(t *testing.T) {
 	s, ctx := openClip(t, 60, "oppose")
 
@@ -155,8 +149,7 @@ func TestPrestartOnlyWhenIdle(t *testing.T) {
 	}
 }
 
-// A backward request after the pass has run to the end and exited, and one
-// while it is still running, both relaunch and deliver.
+// A backward request after the pass exited, or while it runs, relaunches and delivers.
 func TestBackwardRequestsDeliver(t *testing.T) {
 	s, ctx := openClip(t, 60, "back")
 

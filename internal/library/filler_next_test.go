@@ -19,8 +19,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// countingIndexer records every query; the finder fans variants out across
-// goroutines, so the record is locked.
+// countingIndexer records every query, locked as the finder fans out across goroutines.
 type countingIndexer struct {
 	mu      sync.Mutex
 	queries []string
@@ -51,8 +50,7 @@ func (c *countingIndexer) count() int {
 	return len(c.queries)
 }
 
-// With the filler rule on, "prepare the next episode" resolves the next one
-// worth watching, not simply episode+1.
+// Under the filler rule, preparing the next episode resolves the next worth watching, not episode+1.
 func TestPrepareFollowsTheFillerRule(t *testing.T) {
 	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"torrents":[]}`)

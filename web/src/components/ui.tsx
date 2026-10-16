@@ -11,14 +11,12 @@ import {
 import { Link } from 'react-router-dom'
 import { cx } from '../lib/format'
 
-export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'ghost' | 'danger'
-export type ButtonSize = 'sm' | 'md'
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
+export type ButtonSize = 'sm' | 'md' | 'lg'
 
 // The brand colour leads the main action; white read as a generic button.
 const VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    'bg-gradient-to-b from-accent-400 to-accent-500 text-white shadow-[0_6px_20px_-6px_rgb(111_92_255/0.6)] hover:brightness-110 active:scale-[0.98]',
-  accent:
     'bg-gradient-to-b from-accent-400 to-accent-500 text-white shadow-[0_6px_20px_-6px_rgb(111_92_255/0.6)] hover:brightness-110 active:scale-[0.98]',
   secondary:
     'bg-base-800 text-base-100 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)] ring-1 ring-white/[0.07] hover:bg-base-750',
@@ -26,15 +24,17 @@ const VARIANTS: Record<ButtonVariant, string> = {
   danger: 'bg-red-500/90 text-white hover:bg-red-500',
 }
 
+// The radius is the size's: a page's lead action (lg) is rounder than the rest.
 const SIZES: Record<ButtonSize, string> = {
-  sm: 'px-2.5 py-1 text-xs',
-  md: 'px-4 py-2 text-sm',
+  sm: 'rounded-lg px-2.5 py-1 text-xs',
+  md: 'rounded-lg px-4 py-2 text-sm',
+  lg: 'rounded-xl px-5 py-2.5 text-sm',
 }
 
 /** Class list for something that should look like a button but is a link. */
 export function buttonClass(variant: ButtonVariant = 'secondary', size: ButtonSize = 'md') {
   return cx(
-    'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap transition-[background-color,color,transform,filter] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50',
+    'inline-flex shrink-0 items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-[background-color,color,transform,filter] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50',
     VARIANTS[variant],
     SIZES[size],
   )
@@ -64,6 +64,7 @@ export function LinkButton({
   className?: string
   children: ReactNode
   title?: string
+  style?: React.CSSProperties
   'aria-label'?: string
 }) {
   return (
@@ -134,6 +135,16 @@ export function PageHeader({
   )
 }
 
+/** The one text field look, for inputs that can't be a TextInput (a select's sibling, a textarea). */
+export const inputClass =
+  'rounded-lg bg-base-900 px-3 py-1.5 text-sm text-base-100 ring-1 ring-white/[0.07] transition-[box-shadow] placeholder:text-base-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-50'
+
+/** A text field; without a visible <label>, aria-label (or the settings row's label) names it. */
+export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  const rowLabel = useContext(ControlLabel)
+  return <input aria-label={rowLabel} className={cx(inputClass, className)} {...props} />
+}
+
 /** Text input with a leading magnifier, for filtering a list in place. */
 export function SearchInput({
   className,
@@ -152,14 +163,91 @@ export function SearchInput({
       </svg>
       <input
         type="search"
-        className={cx(
-          'w-full rounded-lg bg-base-900 py-2 pr-3 pl-9 text-sm text-base-100 ring-1 ring-white/[0.06] transition-[box-shadow] placeholder:text-base-500 focus:ring-accent-500 focus:outline-none [&::-webkit-search-cancel-button]:hidden',
-          inputClassName,
-        )}
+        className={cx(inputClass, 'w-full py-2 pl-9 [&::-webkit-search-cancel-button]:hidden', inputClassName)}
         {...props}
       />
     </div>
   )
+}
+
+/** The inline "are you sure" step: what it costs, the act itself, and Cancel, which takes the focus. */
+export function ConfirmInline({
+  label,
+  onConfirm,
+  onCancel,
+  tone = 'danger',
+  size = 'md',
+  pending = false,
+  note,
+}: {
+  label: ReactNode
+  onConfirm: () => void
+  onCancel: () => void
+  tone?: 'danger' | 'accent'
+  size?: ButtonSize
+  pending?: boolean
+  note?: ReactNode
+}) {
+  return (
+    // contents: the buttons sit in the caller's own row; Escape backs out without closing a menu around it.
+    <span
+      className="contents"
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape') return
+        e.stopPropagation()
+        onCancel()
+      }}
+    >
+      {note && <span className="text-xs text-base-400 max-sm:basis-full">{note}</span>}
+      <Button variant={tone === 'danger' ? 'danger' : 'primary'} size={size} onClick={onConfirm} disabled={pending}>
+        {label}
+      </Button>
+      <Button variant="ghost" size={size} onClick={onCancel} autoFocus>
+        Cancel
+      </Button>
+    </span>
+  )
+}
+
+/** Previous, the page, Next; a page change starts at the top, as the pager sits under the list. */
+export function Pager({
+  page,
+  hasMore,
+  last,
+  onPage,
+}: {
+  page: number
+  hasMore: boolean
+  last?: number
+  onPage: (page: number) => void
+}) {
+  if (page <= 1 && !hasMore) return null
+  const go = (n: number) => {
+    onPage(n)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  return (
+    <nav aria-label="Pages" className="flex items-center justify-center gap-3 pt-2">
+      <Button disabled={page <= 1} onClick={() => go(page - 1)}>
+        Previous
+      </Button>
+      <span className="text-sm text-base-400 tabular-nums">
+        Page <span className="font-semibold text-white">{page}</span>
+        {last !== undefined && ` of ${last.toLocaleString()}`}
+      </span>
+      <Button disabled={!hasMore} onClick={() => go(page + 1)}>
+        Next
+      </Button>
+    </nav>
+  )
+}
+
+/** A page whose last item went: back to the last page that still has some, not a false "nothing here". */
+export function useClampPage(empty: boolean, page: number, total: number | undefined, perPage: number, onPage: (page: number) => void) {
+  useEffect(() => {
+    // Only ever down, so a stale total can't bounce it between pages.
+    if (empty && page > 1 && total !== undefined) onPage(Math.max(1, Math.min(page - 1, Math.ceil(total / perPage))))
+  }, [empty, page, total, perPage, onPage])
 }
 
 export function Spinner({ className }: { className?: string }) {
@@ -241,6 +329,42 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
   )
 }
 
+interface SaveState {
+  isPending: boolean
+  isSuccess: boolean
+  isError: boolean
+  error: unknown
+  submittedAt: number
+}
+
+/** A blur-saved field's state beside it: Saving…, Saved for a moment, or what failed. */
+export function SaveHint({ state }: { state: SaveState }) {
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    if (!state.isSuccess) return
+    setShown(true)
+    const t = window.setTimeout(() => setShown(false), 2000)
+    return () => window.clearTimeout(t)
+  }, [state.isSuccess, state.submittedAt])
+  if (state.isPending) return <span className="text-xs text-base-500">Saving…</span>
+  if (state.isError) {
+    return <span className="text-xs text-recap">{state.error instanceof Error ? state.error.message : 'Not saved'}</span>
+  }
+  return shown ? <span className="text-xs text-emerald-300">Saved</span> : null
+}
+
+/** A background refresh failed: what's on screen stays, with this one line above it. */
+export function RefreshFailed({ retry }: { retry: () => void }) {
+  return (
+    <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-base-400">
+      <span>Couldn't refresh, showing what was loaded.</span>
+      <button onClick={retry} className="text-accent-300 underline-offset-2 hover:underline">
+        Try again
+      </button>
+    </p>
+  )
+}
+
 /** Grey block that holds layout while data loads, so nothing jumps. */
 export function Skeleton({ className }: { className?: string }) {
   return (
@@ -262,10 +386,7 @@ function keepInStrip(el: HTMLElement | null) {
   else if (left + el.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + el.offsetWidth - strip.clientWidth
 }
 
-/**
- * One choice among a few, as a filled track. Underlined links read as
- * navigation and leave the selected one hard to spot.
- */
+/** One choice among a few as a filled track; underlined links read as navigation. */
 export function Segmented<T extends string>({
   options,
   value,
@@ -313,10 +434,7 @@ export function Segmented<T extends string>({
   )
 }
 
-/**
- * A modal's keyboard contract: focus moves in when it opens, Tab stays inside,
- * and focus goes back to whatever opened it on close.
- */
+/** A modal's keyboard contract: focus moves in, Tab stays inside, and returns to the opener on close. */
 export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | null>, open = true) {
   useEffect(() => {
     if (!open) return
@@ -324,7 +442,8 @@ export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | nu
     const focusables = () =>
       Array.from(
         ref.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), a[href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+          // iframe: a trailer's player takes keys and Tab too.
+          'button:not([disabled]), a[href], input:not([disabled]), select, textarea, iframe, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
       )
     focusables()[0]?.focus()
@@ -355,10 +474,12 @@ export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | nu
 }
 
 /** Closes on an outside click or Escape — both matter for a menu to feel right. */
-export function useDismiss<T extends HTMLElement>(onClose: () => void) {
+// active: listening only while the menu is open, not for every closed one on the page.
+export function useDismiss<T extends HTMLElement>(onClose: () => void, active = true) {
   const ref = useRef<T>(null)
 
   useEffect(() => {
+    if (!active) return
     function onPointer(e: MouseEvent | TouchEvent) {
       const target = e.target as Node | null
       if (!ref.current || ref.current.contains(target)) return
@@ -377,7 +498,7 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void) {
       document.removeEventListener('touchstart', onPointer)
       document.removeEventListener('keydown', onKey)
     }
-  }, [onClose])
+  }, [onClose, active])
 
   return ref
 }
@@ -446,10 +567,7 @@ export function Badge({
 /** Names an unlabelled control after the settings row holding it. */
 export const ControlLabel = createContext<string | undefined>(undefined)
 
-/**
- * A styled select that keeps the real element (native keyboard and phone
- * picker); the browser's own control paints an OS-grey box that clashes.
- */
+/** A styled select keeping the real element, for the native keyboard and phone picker. */
 export function Select({
   value,
   onChange,

@@ -14,6 +14,5 @@ func dialIPC(ctx context.Context, socket string) (net.Conn, error) {
 	return d.DialContext(ctx, "unix", socket)
 }
 
-// A unix socket in the temp dir: mpv creates it on launch and removes it on
-// exit, and one instance plays at a time.
+// A unix socket in temp, created and removed by mpv; one instance plays at a time.
 func defaultSocket() string { return filepath.Join(os.TempDir(), "kuro-mpv.sock") }

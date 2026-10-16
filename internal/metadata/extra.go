@@ -3,7 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"regexp"
 	"strings"
 )
@@ -11,6 +11,8 @@ import (
 const (
 	TenraiFullURL  = "https://api.tenrai.org/v1/anime/%d/full"
 	TenraiStaffURL = "https://api.tenrai.org/v1/anime/%d/staff"
+	JikanFullURL   = "https://api.jikan.moe/v4/anime/%d/full"
+	JikanStaffURL  = "https://api.jikan.moe/v4/anime/%d/staff"
 )
 
 // Theme is one opening or ending, shipped upstream as a single line
@@ -34,10 +36,13 @@ type Extra struct {
 	Endings  []Theme  `json:"endings,omitempty"`
 	Staff    []Credit `json:"staff,omitempty"`
 	Trailer  string   `json:"trailer,omitempty"`
+	// StaffMissing: the staff request failed, so the answer is partial and worth asking again soon.
+	StaffMissing bool `json:"-"`
 }
 
 type fullResponse struct {
 	Data struct {
+		MalID int `json:"mal_id"`
 		Theme struct {
 			Openings []string `json:"openings"`
 			Endings  []string `json:"endings"`
@@ -62,8 +67,7 @@ type staffResponse struct {
 	} `json:"data"`
 }
 
-// A show credits hundreds of people; these are the roles anyone reads a staff
-// list to find, in the order they are worth reading.
+// The roles people read a staff list for, in reading order.
 var keyRoles = []string{
 	"Original Creator",
 	"Director",
@@ -109,20 +113,23 @@ func parseTheme(line string) Theme {
 	return out
 }
 
-// Extra reads a show's themes, key staff and trailer. Two requests, so it is
-// kept off the detail payload and asked for separately.
+// Extra reads themes, key staff and trailer: two requests, so asked for apart from the details.
 func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 	if malID == 0 {
 		return Extra{}, nil
 	}
 
-	body, err := c.get(ctx, c.url("tenrai-full", fmt.Sprintf(TenraiFullURL, malID)))
+	var full fullResponse
+	_, err := c.fromHosts(ctx, []host{{"tenrai-full", TenraiFullURL}, {"jikan-full", JikanFullURL}}, malID,
+		func(body []byte) bool {
+			full = fullResponse{}
+			return json.Unmarshal(body, &full) == nil && full.Data.MalID != 0
+		})
+	if errors.Is(err, errNoRecord) {
+		return Extra{}, nil
+	}
 	if err != nil {
 		return Extra{}, err
-	}
-	var full fullResponse
-	if err := json.Unmarshal(body, &full); err != nil {
-		return Extra{}, fmt.Errorf("anime detail: %w", err)
 	}
 
 	out := Extra{Trailer: full.Data.Trailer.URL}
@@ -133,14 +140,15 @@ func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 		out.Endings = append(out.Endings, parseTheme(line))
 	}
 
-	// Staff is the second request and the less important half: a show with no
-	// credits listed is still worth its themes.
-	body, err = c.get(ctx, c.url("tenrai-staff", fmt.Sprintf(TenraiStaffURL, malID)))
-	if err != nil {
-		return out, nil
-	}
+	// Staff is the second request and the less important half: a show with no credits is still worth its themes.
 	var staff staffResponse
-	if err := json.Unmarshal(body, &staff); err != nil {
+	_, err = c.fromHosts(ctx, []host{{"tenrai-staff", TenraiStaffURL}, {"jikan-staff", JikanStaffURL}}, malID,
+		func(body []byte) bool {
+			staff = staffResponse{}
+			return json.Unmarshal(body, &staff) == nil && len(staff.Data) > 0
+		})
+	if err != nil && !errors.Is(err, errNoRecord) {
+		out.StaffMissing = true
 		return out, nil
 	}
 

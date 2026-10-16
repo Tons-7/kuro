@@ -95,6 +95,8 @@ export function ReleasePicker({
                   key={r.Torrent.infoHash}
                   candidate={r}
                   active={r.Torrent.infoHash === current}
+                  // From Downloads the current copy isn't necessarily playing.
+                  activeLabel={purpose === 'download' ? 'Current' : 'Playing'}
                   onPick={() => onPick(r.Torrent.infoHash, r.Torrent.title)}
                 />
               ))}
@@ -110,10 +112,12 @@ export function ReleasePicker({
 function Row({
   candidate: r,
   active,
+  activeLabel,
   onPick,
 }: {
   candidate: ReleaseCandidate
   active: boolean
+  activeLabel: string
   onPick: () => void
 }) {
   const rel = r.Release
@@ -153,7 +157,7 @@ function Row({
             </span>
           )}
           <span className="ml-auto tabular-nums text-base-500">{Math.round(r.score)}</span>
-          {active && <Badge tone="accent">Playing</Badge>}
+          {active && <Badge tone="accent">{activeLabel}</Badge>}
           {r.SeaDexBest && <Badge tone="accent">SeaDex</Badge>}
           {!r.playable && <Badge tone="filler">Software transcode</Badge>}
           {r.blocked && <Badge tone="recap">{r.blocked}</Badge>}

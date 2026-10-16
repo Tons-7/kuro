@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
@@ -6,13 +6,17 @@ import { clockTime, cx, groupByDay, relativeTime } from '../lib/format'
 import {
   Badge,
   Button,
+  ConfirmInline,
   Empty,
   ErrorState,
   LinkButton,
   PageHeader,
+  Pager,
   ProgressBar,
   Skeleton,
+  useClampPage,
 } from '../components/ui'
+import { toast, TOAST_MS } from '../components/Toaster'
 
 interface HistoryEntry {
   animeId: number
@@ -58,18 +62,46 @@ export function History() {
     },
   })
 
-  const items = data?.items ?? []
-  const goTo = (n: number) => {
-    setParams({ page: String(n) })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  // Removing the last entry of a later page would strand the viewer on an empty "nothing watched".
+  // A removed row goes at once but is only forgotten when its Undo runs out (or the page is left).
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set())
+  const pending = useRef(new Map<string, { timer: number; send: () => void }>())
   useEffect(() => {
-    if (data && data.items.length === 0 && page > 1) {
-      setParams({ page: String(Math.max(1, Math.ceil(data.total / 40))) }, { replace: true })
+    const queued = pending.current
+    return () => {
+      for (const { timer, send } of queued.values()) {
+        window.clearTimeout(timer)
+        send()
+      }
+      queued.clear()
     }
-  }, [data, page, setParams])
+  }, [])
+  const forgetSoon = (entry: HistoryEntry) => {
+    const key = `${entry.animeId}-${entry.epKey}`
+    const send = () => {
+      pending.current.delete(key)
+      void api.post('/api/history/forget', { animeId: entry.animeId, epKey: entry.epKey }).then(() => {
+        for (const k of ['history', 'continue', 'watch-stats', 'episodes']) void qc.invalidateQueries({ queryKey: [k] })
+      })
+    }
+    setHidden((h) => new Set(h).add(key))
+    pending.current.set(key, { timer: window.setTimeout(send, TOAST_MS), send })
+    toast(`Removed episode ${entry.episode} of ${entry.title}`, 'info', {
+      label: 'Undo',
+      run: () => {
+        window.clearTimeout(pending.current.get(key)?.timer)
+        pending.current.delete(key)
+        setHidden((h) => {
+          const next = new Set(h)
+          next.delete(key)
+          return next
+        })
+      },
+    })
+  }
+  const items = (data?.items ?? []).filter((e) => !hidden.has(`${e.animeId}-${e.epKey}`))
+  const goTo = (n: number) => setParams({ page: String(n) })
+  // Removing the last entry of a later page would strand the viewer on an empty "nothing watched".
+  useClampPage(data?.items.length === 0, page, data?.total, 40, (n) => setParams({ page: String(n) }, { replace: true }))
 
   return (
     <div className="space-y-5">
@@ -79,14 +111,14 @@ export function History() {
         actions={
           items.length > 0 &&
           (confirmClear ? (
-            <>
-              <Button variant="danger" onClick={() => forget.mutate({ all: true })}>
-                Clear everything
-              </Button>
-              <Button variant="ghost" onClick={() => setConfirmClear(false)}>
-                Cancel
-              </Button>
-            </>
+            // What goes, said before it goes: there is no undo for all of it.
+            <ConfirmInline
+              note="Also clears resume points and episode ticks; AniList and MAL keep your progress."
+              label="Clear everything"
+              onConfirm={() => forget.mutate({ all: true })}
+              onCancel={() => setConfirmClear(false)}
+              pending={forget.isPending}
+            />
           ) : (
             <Button onClick={() => setConfirmClear(true)}>Clear all</Button>
           ))
@@ -120,9 +152,7 @@ export function History() {
                     <Row
                       key={`${entry.animeId}-${entry.epKey}`}
                       entry={entry}
-                      onForget={() =>
-                        forget.mutate({ animeId: entry.animeId, epKey: entry.epKey })
-                      }
+                      onForget={() => forgetSoon(entry)}
                     />
                   ))}
                 </ul>
@@ -130,17 +160,7 @@ export function History() {
             ))}
           </div>
 
-          {(page > 1 || data?.hasMore) && (
-            <div className="flex items-center justify-center gap-2">
-              <PageButton disabled={page <= 1} onClick={() => goTo(page - 1)}>
-                Previous
-              </PageButton>
-              <span className="text-xs text-base-500">Page {page}</span>
-              <PageButton disabled={!data?.hasMore} onClick={() => goTo(page + 1)}>
-                Next
-              </PageButton>
-            </div>
-          )}
+          <Pager page={page} hasMore={!!data?.hasMore} onPage={goTo} />
         </>
       )}
     </div>
@@ -252,26 +272,10 @@ function Row({ entry, onForget }: { entry: HistoryEntry; onForget: () => void })
       <button
         onClick={onForget}
         aria-label="Remove from history"
-        className="shrink-0 rounded-md px-2 py-1.5 text-base-600 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-base-800 hover:text-base-200 [@media(hover:none)]:opacity-100"
+        className="tap relative shrink-0 rounded-md px-2 py-1.5 text-base-600 transition-colors hover:bg-base-800 hover:text-base-200"
       >
         ✕
       </button>
     </li>
-  )
-}
-
-function PageButton({
-  disabled,
-  onClick,
-  children,
-}: {
-  disabled?: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <Button disabled={disabled} onClick={onClick}>
-      {children}
-    </Button>
   )
 }

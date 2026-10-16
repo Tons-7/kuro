@@ -8,11 +8,7 @@ import (
 	"time"
 )
 
-// The growing-download case: a track read from a part-downloaded file stops
-// where the download reached, and must grow on a later read once more bytes
-// land — never shrink, and never be frozen by the done-cache while incomplete.
-// This is the guard the retired subs-grow-check browser harness provided
-// before local sources were (correctly) treated as always complete.
+// A part-downloaded file's track grows on later reads, never shrinks, and isn't frozen by the done-cache.
 func TestExtractGrowsWithTheSource(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	whole := testMKV(t, ffmpeg, 30)

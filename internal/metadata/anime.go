@@ -3,9 +3,41 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
+
+type host struct{ name, pattern string }
+
+// hostWait bounds one host's answer, so a stalled first host still leaves the caller's budget for the next.
+const hostWait = 4 * time.Second
+
+// errNoRecord: every host answered, and none had the record.
+var errNoRecord = errors.New("metadata: no host has the record")
+
+// fromHosts returns the first body found accepts; a host without the record passes to the next.
+func (c *Client) fromHosts(ctx context.Context, hosts []host, malID int, found func([]byte) bool) ([]byte, error) {
+	var err error
+	empty := 0
+	for _, h := range hosts {
+		hctx, cancel := context.WithTimeout(ctx, hostWait)
+		body, gerr := c.get(hctx, c.url(h.name, fmt.Sprintf(h.pattern, malID)))
+		cancel()
+		switch {
+		case gerr != nil:
+			err = gerr
+		case found(body):
+			return body, nil
+		default:
+			empty++
+		}
+	}
+	if empty == len(hosts) {
+		return nil, errNoRecord
+	}
+	return nil, err
+}
 
 const (
 	JikanAnimeURL  = "https://api.jikan.moe/v4/anime/%d"
@@ -77,22 +109,16 @@ type jikanAnime struct {
 	} `json:"data"`
 }
 
-// Anime fetches one record for a show AniList never catalogued. Tenrai leads
-// because Jikan often 504s on exactly these obscure titles; both mirror the
-// same catalogue, so either will do.
+// Anime fetches a show AniList never catalogued; Tenrai leads, as Jikan often 504s on these.
 func (c *Client) Anime(ctx context.Context, malID int) (AnimeDetail, error) {
 	if malID <= 0 {
 		return AnimeDetail{}, fmt.Errorf("metadata: invalid mal id %d", malID)
 	}
 
-	hosts := []struct{ name, pattern string }{
-		{"tenrai-anime", TenraiAnimeURL},
-		{"jikan-anime", JikanAnimeURL},
-	}
+	hosts := []host{{"tenrai-anime", TenraiAnimeURL}, {"jikan-anime", JikanAnimeURL}}
 
-	// Retried across both: a second attempt at the same host often lands because
-	// the first one warmed its cache.
-	var body []byte
+	// Retried across both: a second attempt at the same host often lands because the first one warmed its cache.
+	var res jikanAnime
 	var err error
 	for attempt := range 3 {
 		if attempt > 0 {
@@ -102,27 +128,21 @@ func (c *Client) Anime(ctx context.Context, malID int) (AnimeDetail, error) {
 			case <-time.After(time.Duration(attempt) * time.Second):
 			}
 		}
-		for _, host := range hosts {
-			if body, err = c.get(ctx, c.url(host.name, fmt.Sprintf(host.pattern, malID))); err == nil {
-				break
-			}
-		}
-		if err == nil {
+		_, err = c.fromHosts(ctx, hosts, malID, func(body []byte) bool {
+			res = jikanAnime{}
+			return json.Unmarshal(body, &res) == nil && res.Data.MalID != 0
+		})
+		if err == nil || errors.Is(err, errNoRecord) {
 			break
 		}
+	}
+	if errors.Is(err, errNoRecord) {
+		return AnimeDetail{}, fmt.Errorf("anime %d not found", malID)
 	}
 	if err != nil {
 		return AnimeDetail{}, err
 	}
-
-	var res jikanAnime
-	if err := json.Unmarshal(body, &res); err != nil {
-		return AnimeDetail{}, fmt.Errorf("anime record: %w", err)
-	}
 	d := res.Data
-	if d.MalID == 0 {
-		return AnimeDetail{}, fmt.Errorf("anime %d not found", malID)
-	}
 
 	out := AnimeDetail{
 		MalID:       d.MalID,

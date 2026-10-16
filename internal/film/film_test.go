@@ -248,3 +248,23 @@ func TestLoneFileIsTakenUnlessItNamesAnotherFilm(t *testing.T) {
 		t.Error("picked from a release with no video")
 	}
 }
+
+// A PV beside the film carries its name too; the film is the one that is not a fraction of the other.
+func TestNamedExtraDoesNotTieWithTheFilm(t *testing.T) {
+	ch6 := keyFor("ch6")
+	batch := files(
+		4.0, "[G] Kara no Kyoukai - 06 - Boukyaku Rokuon [BD 1080p].mkv",
+		0.06, "Extras/[G] Kara no Kyoukai - 06 - Boukyaku Rokuon - PV [BD 1080p].mkv",
+		3.8, "[G] Kara no Kyoukai - 05 - Mujun Rasen [BD 1080p].mkv",
+	)
+	if i, ok := ch6.Pick(batch); !ok || i != 0 {
+		t.Errorf("picked %d, %v; want the film", i, ok)
+	}
+	// Two full-size files claiming the same film is still nobody's call.
+	twins := files(4.0, "[G] Kara no Kyoukai - 06 - Boukyaku Rokuon [BD 1080p].mkv",
+		3.9, "[G] Kara no Kyoukai - 06 - Boukyaku Rokuon [BD 720p].mkv",
+		3.8, "[G] Kara no Kyoukai - 05 - Mujun Rasen [BD 1080p].mkv")
+	if _, ok := ch6.Pick(twins); ok {
+		t.Error("two full copies of the film were told apart by nothing")
+	}
+}

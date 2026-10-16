@@ -13,9 +13,7 @@ func exeExtFor(goos string) string {
 	return ""
 }
 
-// componentFiles is the executables a component installs on this OS. mpv on
-// Windows ships a console shim (.com) beside the GUI binary; elsewhere it is
-// one file, and a component with no auto-download here returns nothing.
+// componentFiles is the executables a component installs here (mpv on Windows adds a .com shim).
 func componentFiles(name string) []string { return componentFilesFor(name, runtime.GOOS) }
 
 func componentFilesFor(name, goos string) []string {
@@ -32,8 +30,7 @@ func componentFilesFor(name, goos string) []string {
 	return nil
 }
 
-// ffmpegLinuxURL is John Van Sickle's static build, which bundles ffmpeg and
-// ffprobe in one tar.xz the system tar unpacks.
+// ffmpegLinuxURL is John Van Sickle's static build: ffmpeg and ffprobe in one tar.xz.
 func ffmpegLinuxURL() (string, error) { return ffmpegLinuxURLFor(runtime.GOARCH) }
 
 func ffmpegLinuxURLFor(goarch string) (string, error) {
@@ -42,19 +39,23 @@ func ffmpegLinuxURLFor(goarch string) (string, error) {
 		return "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz", nil
 	case "arm64":
 		return "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz", nil
+	case "386":
+		return "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-i686-static.tar.xz", nil
+	case "arm":
+		return "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-armhf-static.tar.xz", nil
 	}
 	return "", fmt.Errorf("no static ffmpeg build for linux/%s", goarch)
 }
 
-// ManualCommand is the package-manager command for a component kuro cannot
-// fetch on this OS, or "" when it can. Anime4K and, on Windows, everything is
-// auto-fetched; ffmpeg on macOS and mpv on every non-Windows OS are not.
+// ManualCommand is the package-manager command for a component kuro cannot fetch here, or "".
 func ManualCommand(name string) string {
 	if runtime.GOOS == "windows" || name == "anime4k" {
 		return ""
 	}
 	if name == "ffmpeg" && runtime.GOOS == "linux" {
-		return "" // John Van Sickle static build is fetched.
+		if _, err := ffmpegLinuxURL(); err == nil {
+			return "" // John Van Sickle static build is fetched.
+		}
 	}
 	switch runtime.GOOS {
 	case "darwin":
@@ -65,8 +66,7 @@ func ManualCommand(name string) string {
 	return ""
 }
 
-// manualInstall is the resolver error for a component that must come from the
-// system package manager; the binary is then found on PATH.
+// manualInstall: the component comes from the package manager and is then found on PATH.
 func manualInstall(name string) error {
 	how := ManualCommand(name)
 	if how == "" {

@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// ExportEntry is one row of a portable library file: what a tracker holds plus
-// the favourite and note kuro keeps on its own.
+// ExportEntry is a library file row: what a tracker holds, plus kuro's favourite and note.
 type ExportEntry struct {
 	AnimeID     int    `json:"animeId"`
 	MalID       *int   `json:"malId,omitempty"`
@@ -83,8 +82,7 @@ type ImportReport struct {
 	Skipped    int `json:"skipped"`
 }
 
-// ImportEntries merges a library file: progress only moves forward, and what
-// is applied is queued for the trackers as a local edit.
+// ImportEntries merges a library file, progress only forward, queuing changes for the trackers.
 func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (ImportReport, error) {
 	var rep ImportReport
 	now := time.Now().Unix()
@@ -105,7 +103,10 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 			return rep, err
 		}
 
-		if _, err := tx.ExecContext(ctx, `
+		// A favourite never added to the list is exported too; an entry for it would put it on AniList's list.
+		listed := e.Status != "" || e.Progress > 0 || e.Score > 0 || e.Repeat > 0
+		if listed {
+			if _, err := tx.ExecContext(ctx, `
 			INSERT INTO list_entry (id, anime_id, status, progress, score, repeat_count,
 			                        started_at, completed_at,
 			                        remote_updated_at, local_updated_at, dirty)
@@ -118,13 +119,14 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 			    repeat_count = max(list_entry.repeat_count, excluded.repeat_count),
 			    started_at = coalesce(list_entry.started_at, excluded.started_at),
 			    completed_at = coalesce(list_entry.completed_at, excluded.completed_at),
-			    local_updated_at = excluded.local_updated_at,
+			    local_updated_at = max(excluded.local_updated_at, list_entry.local_updated_at + 1),
 			    dirty = 1`,
-			e.AnimeID, nullable(e.Status), e.Progress, e.Score, e.Repeat,
-			nullable(e.StartedAt), nullable(e.CompletedAt), now); err != nil {
-			return rep, err
+				e.AnimeID, nullable(e.Status), e.Progress, e.Score, e.Repeat,
+				nullable(e.StartedAt), nullable(e.CompletedAt), now); err != nil {
+				return rep, err
+			}
+			rep.Entries++
 		}
-		rep.Entries++
 
 		if !e.Favourite && e.Note == "" {
 			continue

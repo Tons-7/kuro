@@ -5,10 +5,7 @@ import (
 	"strings"
 )
 
-// mergeASS unions two reads of the same track. A still-downloading episode is
-// read in pieces (from the start, and around the playhead), and each read
-// recovers a different stretch; together they are the track so far. The
-// header is the first one's; events are deduplicated and put in time order.
+// mergeASS unions two partial reads of a track: the first's header, events deduplicated in time order.
 func mergeASS(have, read string) string {
 	if strings.TrimSpace(have) == "" {
 		return read
@@ -52,8 +49,7 @@ func splitASS(s string) (string, []string) {
 	return header.String(), events
 }
 
-// eventStart is the Start field, zero-padded so it sorts as text: ASS writes
-// H:MM:SS.cc, and one-digit hours cover any episode.
+// eventStart is the Start field (H:MM:SS.cc), zero-padded to sort as text.
 func eventStart(line string) string {
 	_, rest, ok := strings.Cut(line, ":")
 	if !ok {

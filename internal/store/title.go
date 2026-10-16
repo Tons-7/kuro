@@ -2,8 +2,7 @@ package store
 
 import "context"
 
-// Romaji is AniList's Latin transliteration (Sousou no Frieren, not 葬送のフリーレン).
-// Native titles are stored but never chosen by this setting.
+// Romaji is AniList's Latin transliteration (Sousou no Frieren); native titles are never chosen.
 const (
 	TitleRomaji  = "romaji"
 	TitleEnglish = "english"

@@ -1,10 +1,9 @@
-// Package deps downloads the programs kuro shells out to. Over half a gigabyte
-// total, so fetched on demand rather than bundled; same sources as
-// scripts/fetch-deps.ps1 for identical binaries.
+// Package deps fetches the programs kuro shells out to on demand, from scripts/fetch-deps.ps1's sources.
 package deps
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,8 +28,7 @@ type Release struct {
 	Version string
 	URL     string
 	Archive bool
-	// Lowercase hex SHA-256, where the source publishes one. These downloads
-	// are executed, so an unverified one is worth refusing.
+	// Lowercase hex SHA-256 where published; these downloads are executed.
 	Digest string
 }
 
@@ -42,8 +40,7 @@ type component struct {
 	resolve func(context.Context, *Manager) (Release, error)
 }
 
-// Files are per-OS: an executable is ffmpeg.exe on Windows and ffmpeg
-// elsewhere, and mpv ships an extra console shim only on Windows.
+// Files are per OS: ffmpeg.exe on Windows, ffmpeg elsewhere, and mpv's console shim only on Windows.
 var components = []component{
 	{name: "ffmpeg", files: componentFiles("ffmpeg"), resolve: resolveFfmpeg},
 	{name: "mpv", files: componentFiles("mpv"), resolve: resolveMpv},
@@ -94,8 +91,7 @@ func (m *Manager) OnInstalled(hook func(name string)) {
 	m.installed = hook
 }
 
-// Latest is the newest version published for a component, remembered for an
-// hour; the resolvers ask GitHub and the setup page asks often.
+// Latest is a component's newest version, kept an hour since the setup page asks GitHub often.
 func (m *Manager) Latest(ctx context.Context, name string) (string, error) {
 	m.mu.Lock()
 	if v, ok := m.latest[name]; ok && time.Since(v.at) < time.Hour {
@@ -326,7 +322,9 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 		return err
 	}
 
-	if digest != "" && !strings.EqualFold(hex.EncodeToString(sum.Sum(nil)), digest) {
+	if digest == "" {
+		m.log.Warn("no checksum published for this download; installing unverified", "component", name)
+	} else if !strings.EqualFold(hex.EncodeToString(sum.Sum(nil)), digest) {
 		os.Remove(dest)
 		return fmt.Errorf("%s: checksum mismatch, refusing to install", name)
 	}
@@ -560,14 +558,19 @@ func findAll(root, pattern string) ([]string, error) {
 // obsolete are components kuro no longer uses: rqbit, replaced by the built-in engine.
 var obsolete = []string{"rqbit"}
 
-// RemoveObsolete deletes binaries of components kuro dropped and their
-// versions.json entries, returning what it removed.
+// RemoveObsolete deletes dropped components and what a killed install left behind, returning what went.
 func (m *Manager) RemoveObsolete() []string {
+	for _, pattern := range []string{".install-*", "*.new", "*.old"} {
+		stale, _ := filepath.Glob(filepath.Join(m.binDir, pattern))
+		for _, p := range stale {
+			os.RemoveAll(p)
+		}
+	}
 	path := filepath.Join(m.binDir, "versions.json")
 	versions := map[string]string{}
 	raw, err := os.ReadFile(path)
 	if err == nil {
-		_ = json.Unmarshal(raw, &versions)
+		_ = json.Unmarshal(withoutBOM(raw), &versions)
 	}
 	var removed []string
 	listed := false
@@ -590,13 +593,16 @@ func (m *Manager) RemoveObsolete() []string {
 	return removed
 }
 
+// withoutBOM drops the mark Windows PowerShell 5.1 puts before UTF-8, which JSON refuses.
+func withoutBOM(raw []byte) []byte { return bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf")) }
+
 // record mirrors what fetch-deps.ps1 writes, so the two are interchangeable.
 func (m *Manager) record(name, version string) error {
 	path := filepath.Join(m.binDir, "versions.json")
 
 	versions := map[string]string{}
 	if raw, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(raw, &versions)
+		_ = json.Unmarshal(withoutBOM(raw), &versions)
 	}
 	versions[name] = version
 

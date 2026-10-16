@@ -8,8 +8,7 @@ import (
 	"kuro/internal/anilist"
 )
 
-// Opt-in: KURO_LIVE=1 go test ./internal/library -run LiveRelated -v
-// Detective Conan is the hard case: two TV entries and dozens of films.
+// Conan (two TV entries, dozens of films) is the hard case. Opt-in: KURO_LIVE=1 go test -run LiveRelated -v
 func TestLiveRelatedFindsTheFilms(t *testing.T) {
 	if os.Getenv("KURO_LIVE") == "" {
 		t.Skip("set KURO_LIVE=1 to query AniList")

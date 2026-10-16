@@ -1,7 +1,4 @@
-// Subtitles after the server reaps the session (a long AFK) and through the
-// fullscreen and tab switching people try when they look wrong. Uses the
-// position-coded marker episode: which cue is painted says exactly where the
-// renderer thinks the clock is.
+// Subtitles after a reaped session and through fullscreen and tab switches, read off the marker episode.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -214,8 +211,7 @@ check(m.worst !== null && m.worst < 1.6, 'subtitles in sync after fullscreen and
 check(m.blank < 6, 'subtitles still being drawn', `${m.blank}/6 blank`)
 check(m.canvases === 1, 'no leaked subtitle canvases', `${m.canvases}`)
 
-// Still tracking: the painted cue must advance with the clock. The readback
-// misses some frames, so each reading waits for a painted one.
+// Still tracking: the painted cue advances with the clock (each reading waits for a painted frame).
 const painted = async () => {
   for (let i = 0; i < 12; i++) {
     const r = await readSubtitle()

@@ -1,6 +1,4 @@
-// Continue watching has to offer the next episode of a show you are partway
-// through even when you never paused mid-episode — including a rewatch, which
-// used to be missing from the row entirely.
+// Continue watching offers the next episode of a show partway through, a rewatch included.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -71,8 +69,7 @@ check(
 await post('/api/watched', { animeId: ANIME, episode: 12 })
 check(!(await pick()), 'a finished show drops off the row')
 
-// Back to partway through, this time as a rewatch. REPEATING resets progress,
-// so the watch has to be redone.
+// Partway through again as a rewatch, which resets progress, so the watch is redone.
 await post('/api/watched', { animeId: ANIME, episode: 2, watched: false })
 await post('/api/status', { animeId: ANIME, status: 'REPEATING' })
 await post('/api/watched', { animeId: ANIME, episode: 1 })

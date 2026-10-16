@@ -34,8 +34,7 @@ func listingFFmpeg(t *testing.T, encoders string) string {
 	return path
 }
 
-// A build without libx264 (Fedora's ffmpeg-free) and no working hardware
-// encoder cannot serve a stream; one with it can.
+// Without libx264 (Fedora's ffmpeg-free) or a working hardware encoder, nothing streams.
 func TestCanEncodeNeedsAnH264Encoder(t *testing.T) {
 	ctx := context.Background()
 	if CanEncode(ctx, listingFFmpeg(t, " V....D libopenh264           OpenH264 H.264")) {

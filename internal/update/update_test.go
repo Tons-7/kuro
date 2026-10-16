@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +17,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,8 +94,12 @@ func testStore(t *testing.T) *store.Store {
 	return store.New(conn)
 }
 
-// fakeGitHub serves one release whose update zip holds a stand-in executable.
+// fakeGitHub serves one release with a stand-in executable, signed by a test key the updater trusts.
 func fakeGitHub(t *testing.T, version string, exeBody []byte, sums bool) *httptest.Server {
+	return fakeGitHubSigned(t, version, exeBody, sums, true)
+}
+
+func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, trusted bool) *httptest.Server {
 	t.Helper()
 
 	var archive bytes.Buffer
@@ -99,6 +108,18 @@ func fakeGitHub(t *testing.T, version string, exeBody []byte, sums bool) *httpte
 	f.Write(exeBody)
 	zw.Close()
 	sum := sha256.Sum256(archive.Bytes())
+	lines := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), AssetName(version))
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		was := signingKey
+		signingKey = pub
+		t.Cleanup(func() { signingKey = was })
+	}
+	sig := ed25519.Sign(priv, []byte(lines))
 
 	mux := http.NewServeMux()
 	var srv *httptest.Server
@@ -107,7 +128,8 @@ func fakeGitHub(t *testing.T, version string, exeBody []byte, sums bool) *httpte
 			{"name": AssetName(version), "browser_download_url": srv.URL + "/dl/" + AssetName(version)},
 		}
 		if sums {
-			assets = append(assets, map[string]string{"name": sumsFile, "browser_download_url": srv.URL + "/dl/" + sumsFile})
+			assets = append(assets, map[string]string{"name": sumsFile, "browser_download_url": srv.URL + "/dl/" + sumsFile},
+				map[string]string{"name": sigFile, "browser_download_url": srv.URL + "/dl/" + sigFile})
 		}
 		json.NewEncoder(w).Encode(map[string]any{"tag_name": "v" + version, "body": "notes", "assets": assets})
 	})
@@ -115,11 +137,42 @@ func fakeGitHub(t *testing.T, version string, exeBody []byte, sums bool) *httpte
 		w.Write(archive.Bytes())
 	})
 	mux.HandleFunc("/dl/"+sumsFile, func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), AssetName(version))
+		io.WriteString(w, lines)
+	})
+	mux.HandleFunc("/dl/"+sigFile, func(w http.ResponseWriter, r *http.Request) {
+		w.Write(sig)
 	})
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// A release signed by any other key is not kuro's, whatever its checksums say.
+func TestApplyRefusesAReleaseSignedByAStranger(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeGitHubSigned(t, "2026.08.27", []byte("new binary"), true, false)
+	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	u := newUpdater(t, st, gh, exe)
+	u.launch = func(string) error { return nil }
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for u.Status().Stage != StageFailed && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	st2 := u.Status()
+	if st2.Stage != StageFailed || !strings.Contains(st2.Error, "signed") {
+		t.Fatalf("status = %+v, want the update refused for its signature", st2)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+		t.Fatal("the executable was replaced")
+	}
 }
 
 func setVersion(t *testing.T, v string) {
@@ -244,8 +297,7 @@ func TestApplyRefusesAnUnverifiableArchive(t *testing.T) {
 	}
 }
 
-// A new binary that can't be started (quarantined, say) must not be left in
-// place with nothing to fall back to.
+// A new binary that can't start (quarantined, say) isn't left with nothing to fall back to.
 func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
@@ -279,5 +331,34 @@ func TestSwapRestoresTheOldBinaryWhenTheNewOneCannotMoveIn(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(exe); string(got) != "old" {
 		t.Errorf("executable = %q after a failed swap", got)
+	}
+}
+
+// Two presses at once start one download: the second sees the first's claim.
+func TestApplyTwiceStartsOneDownload(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
+	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+
+	var restarts atomic.Int32
+	u := newUpdater(t, st, gh, exe).WithRestart(func() { restarts.Add(1) })
+	u.launch = func(string) error { return nil }
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { u.Apply() })
+	}
+	wg.Wait()
+	deadline := time.Now().Add(10 * time.Second)
+	for u.Status().Stage != StageRestarting && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := restarts.Load(); n != 1 {
+		t.Fatalf("%d restarts, want one", n)
 	}
 }

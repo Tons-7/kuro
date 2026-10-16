@@ -1,10 +1,6 @@
 -- +goose Up
 
--- Migration 00005 seeded opening-skip and next-episode as on. Automatic
--- behaviour is now opt-in: skipping an opening the user wanted to watch, or
--- rolling into the next episode unasked, is worse than pressing a button.
--- These rows are rewritten rather than left alone because they were seeded
--- defaults, not choices anyone made.
+-- Auto-skip and auto-next become opt-in; 00005's rows were seeded defaults, not choices, so they change.
 UPDATE setting SET value = 'false'
 WHERE key IN ('playback.autoskip_op', 'playback.autonext');
 

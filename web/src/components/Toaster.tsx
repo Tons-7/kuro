@@ -5,14 +5,23 @@ interface Toast {
   id: number
   message: string
   tone: 'error' | 'info'
+  action?: ToastAction
 }
+
+export interface ToastAction {
+  label: string
+  run: () => void
+}
+
+/** How long a toast stays, and so how long its action (an Undo) can be pressed. */
+export const TOAST_MS = 6000
 
 // Outside React so a mutation cache, which is not a component, can raise one.
 let listeners: Array<(t: Toast) => void> = []
 let next = 1
 
-export function toast(message: string, tone: Toast['tone'] = 'error') {
-  const t = { id: next++, message, tone }
+export function toast(message: string, tone: Toast['tone'] = 'error', action?: ToastAction) {
+  const t = { id: next++, message, tone, action }
   for (const l of listeners) l(t)
 }
 
@@ -22,9 +31,11 @@ export function Toaster() {
 
   useEffect(() => {
     const add = (t: Toast) => {
-      // The same failure twice in a row is one message.
-      setToasts((prev) => (prev.some((p) => p.message === t.message) ? prev : [...prev.slice(-2), t]))
-      window.setTimeout(() => setToasts((prev) => prev.filter((p) => p.id !== t.id)), 6000)
+      // The same failure twice in a row is one message; one with an action is its own.
+      setToasts((prev) =>
+        !t.action && prev.some((p) => p.message === t.message && !p.action) ? prev : [...prev.slice(-2), t],
+      )
+      window.setTimeout(() => setToasts((prev) => prev.filter((p) => p.id !== t.id)), TOAST_MS)
     }
     listeners.push(add)
     return () => {
@@ -35,7 +46,8 @@ export function Toaster() {
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed right-4 bottom-4 z-[90] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2"
+      // Bottom-left from sm up: the device access requests hold the bottom-right corner.
+      className="pointer-events-none fixed right-4 bottom-4 z-[90] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2 sm:right-auto sm:left-4"
     >
       {toasts.map((t) => (
         <div
@@ -50,6 +62,17 @@ export function Toaster() {
             className={cx('mt-1.5 size-2 shrink-0 rounded-full', t.tone === 'error' ? 'bg-recap' : 'bg-accent-400')}
           />
           <p className="min-w-0 flex-1 text-base-100">{t.message}</p>
+          {t.action && (
+            <button
+              onClick={() => {
+                t.action!.run()
+                setToasts((prev) => prev.filter((p) => p.id !== t.id))
+              }}
+              className="-my-0.5 rounded-md px-2 py-0.5 font-medium text-accent-300 hover:bg-white/10"
+            >
+              {t.action.label}
+            </button>
+          )}
           <button
             onClick={() => setToasts((prev) => prev.filter((p) => p.id !== t.id))}
             aria-label="Dismiss"

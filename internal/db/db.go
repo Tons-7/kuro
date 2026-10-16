@@ -26,11 +26,12 @@ const pragmas = "_pragma=journal_mode(WAL)" +
 type DB struct {
 	W *sql.DB
 	R *sql.DB
+
+	dsn string
 }
 
 func Open(path string) (*DB, error) {
-	// Not a file: URI, which would end the path at '#' and decode '%' in a
-	// folder name; the driver still reads the pragmas after '?'.
+	// Not a file: URI, which ends at '#' and decodes '%' in folder names; pragmas after '?' still apply.
 	dsn := path + "?" + pragmas
 
 	write, err := sql.Open("sqlite", dsn)
@@ -59,22 +60,37 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("open %s for reading: %w", path, err)
 	}
 
-	return &DB{W: write, R: read}, nil
+	return &DB{W: write, R: read, dsn: dsn}, nil
 }
 
 func (d *DB) Close() error {
 	return errors.Join(d.R.Close(), d.W.Close())
 }
 
+// Migrate runs with foreign keys off, or a SQLite-style table rebuild cascade-deletes; checked after.
 func (d *DB) Migrate() error {
 	if err := prepareGoose(); err != nil {
 		return err
 	}
-	return goose.Up(d.W, "migrations")
+	migrator, err := sql.Open("sqlite", d.dsn+"&_pragma=foreign_keys(0)")
+	if err != nil {
+		return err
+	}
+	defer migrator.Close()
+	migrator.SetMaxOpenConns(1)
+	if err := goose.Up(migrator, "migrations"); err != nil {
+		return err
+	}
+	var table string
+	if err := migrator.QueryRow("PRAGMA foreign_key_check").Scan(&table); err == nil {
+		return fmt.Errorf("migration left a dangling foreign key in %s", table)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return nil
 }
 
-// MigrateTo stops at a version, so a test can seed data the way an older
-// release wrote it and then run the migration that rewrites it.
+// MigrateTo stops at a version, so a test can seed old-release data, then run the rewriting migration.
 func (d *DB) MigrateTo(version int64) error {
 	if err := prepareGoose(); err != nil {
 		return err

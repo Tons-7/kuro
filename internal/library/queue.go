@@ -14,8 +14,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// Downloader works the queue one episode at a time, across every show, since
-// several at once share one connection and all finish later.
+// Downloader works the queue one episode at a time across shows: several at once all finish later.
 type Downloader struct {
 	store    *store.Store
 	prefetch *Prefetcher
@@ -30,8 +29,7 @@ type Downloader struct {
 	current *inFlight
 	// Paused from the downloads list: the only pause that drops a queued episode.
 	userPaused map[string]bool
-	// Stream sessions currently watching. A queued download shares the on-screen
-	// episode's connection, so on a slow line the queue waits.
+	// Stream sessions watching now; on a slow line the queue waits for them.
 	watching map[string]struct{}
 	// Paused as a whole from the downloads list: nothing starts until it is resumed. Kept across restarts.
 	paused bool
@@ -121,16 +119,14 @@ func (d *Downloader) Restart(ctx context.Context, animeID int, epKey string) (bo
 	return true, d.SetPaused(ctx, false)
 }
 
-// inFlight is what the worker is downloading, so cancelling can reach it — the
-// database has no row naming the torrent until a minute in.
+// inFlight is what the worker fetches, so a cancel reaches it before the database names it.
 type inFlight struct {
 	animeID int
 	epKey   string
 	stop    context.CancelFunc
 }
 
-// session is the stream session id this episode would be watched under, built
-// the same way streamOpen builds it.
+// session is the stream session id this episode would play under, as streamOpen builds it.
 func (f *inFlight) session() string {
 	return fmt.Sprintf("%d-%s", f.animeID, f.epKey)
 }
@@ -174,8 +170,7 @@ func (d *Downloader) Hold(sessionID string) {
 	current.stop()
 }
 
-// Downloading reports that the queue is fetching this episode right now, so
-// closing a player is not a reason to pause it.
+// Downloading: the queue fetches this episode now, so closing a player doesn't pause it.
 func (d *Downloader) Downloading(sessionID string) bool {
 	if d == nil {
 		return false
@@ -243,9 +238,7 @@ var (
 	quietFor     = 15 * time.Minute
 )
 
-// Quiet pauses the torrents the engine resumed on launch, which would otherwise
-// all download at once; a "keep whole episode" one is left to finish. Ones
-// still being verified are revisited once the check ends.
+// Quiet pauses the torrents resumed on launch, which would all download at once; kept episodes finish.
 func (d *Downloader) Quiet(ctx context.Context) {
 	if d == nil || d.prefetch == nil || d.prefetch.torrent == nil {
 		return
@@ -325,8 +318,7 @@ func (d *Downloader) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		// Straight on to the next while there is work; otherwise wait to be
-		// woken rather than polling the database every second.
+		// Straight on while there is work, else wait to be woken instead of polling.
 		if worked {
 			continue
 		}
@@ -437,8 +429,8 @@ func (d *Downloader) step(parent context.Context) bool {
 	d.log.Info("downloading queued episode",
 		"anime", next.AnimeID, "episode", next.Episode)
 
-	// One ahead only: its release is found while this one downloads, so it starts at once.
-	if after, ok, err := d.store.PeekQueued(parent); err == nil && ok {
+	// One ahead, so its release is ready when this one ends; not one whose release was chosen.
+	if after, ok, err := d.store.PeekQueued(parent); err == nil && ok && after.InfoHash == "" {
 		d.prefetch.Ahead(after.AnimeID, after.Episode, after.Season, d.prefs(parent, after.AnimeID))
 	}
 
@@ -447,6 +439,10 @@ func (d *Downloader) step(parent context.Context) bool {
 
 	d.mu.Lock()
 	d.current = &inFlight{animeID: next.AnimeID, epKey: next.EpKey, stop: stop}
+	// A stream opened or a pause landed since Run looked: stood down at once, back in line.
+	if d.paused || len(d.watching) > 0 {
+		stop()
+	}
 	d.mu.Unlock()
 
 	err = d.prefetch.DownloadRelease(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent, next.AnimeID), queueStall, next.InfoHash)

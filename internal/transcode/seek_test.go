@@ -8,10 +8,7 @@ import (
 	"time"
 )
 
-// The seek decision, exhaustively — this is what broke on the friend's machine:
-// the encoder aimed at the resume point while a request for a far segment (with
-// only a stale file from an earlier pass on disk) waited forever instead of
-// relaunching there.
+// The seek decision, exhaustively: a far segment with only a stale file relaunches, not waits.
 func TestShouldRestart(t *testing.T) {
 	const from, to = 38, 45 // a pass started at 38, finished up to 45 (working on 46)
 	cases := []struct {
@@ -36,9 +33,7 @@ func TestShouldRestart(t *testing.T) {
 		}
 	}
 
-	// Right after launch nothing is finished (to = from-1, so the encoder is
-	// working on segment 0). Buffering up to restartAfterSegments past it must
-	// not be mistaken for a jump; one further is a jump.
+	// Right after launch (to = from-1), up to restartAfterSegments ahead is buffering; one more is a jump.
 	for n := 0; n <= restartAfterSegments; n++ {
 		if shouldRestart(n, 0, -1, true) {
 			t.Errorf("fresh pass restarted for a near segment %d", n)
@@ -49,9 +44,7 @@ func TestShouldRestart(t *testing.T) {
 	}
 }
 
-// Real ffmpeg: seeking forward to the end and back to the start must both
-// deliver, and the backward seek must relaunch rather than wait on a segment
-// the forward pass moved beyond.
+// Real ffmpeg: a seek to the end and back both deliver, the backward one by relaunching.
 func TestSeekingForwardAndBackDelivers(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := testMKV(t, ffmpeg, 60)
@@ -77,8 +70,7 @@ func TestSeekingForwardAndBackDelivers(t *testing.T) {
 		t.Fatalf("seek to the final segment: %v", err)
 	}
 
-	// Back to the start: the forward pass is up near the end, so this is a
-	// backward seek that must relaunch, not wait on the running pass.
+	// Back to the start, behind the pass near the end: it must relaunch, not wait.
 	start := time.Now()
 	if _, err := session.WaitSegment(ctx, 1, 90*time.Second); err != nil {
 		t.Fatalf("seek back to segment 1: %v", err)
@@ -91,8 +83,7 @@ func TestSeekingForwardAndBackDelivers(t *testing.T) {
 	}
 }
 
-// advanceHead follows the encoder as it produces, so the restart decision knows
-// where it really is rather than trusting a lingering file.
+// advanceHead follows the encoder, so the restart decision doesn't trust a lingering file.
 func TestAdvanceHeadTracksProducedSegments(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := testMKV(t, ffmpeg, 30)
@@ -109,9 +100,7 @@ func TestAdvanceHeadTracksProducedSegments(t *testing.T) {
 	}
 	defer m.Close("advance")
 
-	// Play every segment in order: they must all be delivered without a stall,
-	// and a forward request must never be treated as a backward seek (headFrom
-	// only ever moves forward with the playhead, never behind it).
+	// Every segment in order, no stall, and no forward request taken for a backward seek.
 	last := -1
 	for n := 0; n < session.Segments; n++ {
 		if _, err := session.WaitSegment(ctx, n, 60*time.Second); err != nil {

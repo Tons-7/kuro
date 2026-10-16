@@ -66,8 +66,7 @@ func (n *Nyaa) searchHTML(ctx context.Context, q Query) ([]Torrent, error) {
 			}
 		}
 	}
-	// Rows that all fail to parse mean the markup changed, not an empty search;
-	// an error is logged and not cached.
+	// No row parsing means the markup changed, not an empty search: an error, logged and not cached.
 	if len(rows) > 0 && len(out) == 0 {
 		return nil, fmt.Errorf("nyaa: listing layout not recognised (%d rows, 0 parsed)", len(rows))
 	}
@@ -158,11 +157,11 @@ func parseRow(row *html.Node) (Torrent, bool) {
 
 func infoHashFromMagnet(magnet string) string {
 	const prefix = "xt=urn:btih:"
-	i := strings.Index(magnet, prefix)
-	if i < 0 {
+	_, after, ok := strings.Cut(magnet, prefix)
+	if !ok {
 		return ""
 	}
-	rest := magnet[i+len(prefix):]
+	rest := after
 	if j := strings.IndexByte(rest, '&'); j >= 0 {
 		rest = rest[:j]
 	}

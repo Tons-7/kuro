@@ -14,8 +14,7 @@ import (
 	"kuro/internal/store"
 )
 
-// A release covering at least this much of a title's characters is a
-// shortened form of it rather than a different show.
+// A release covering this much of a title's characters shortens it, not another show.
 const shortFormCoverage = 0.4
 
 // Below this share of common vocabulary two names are different shows: "Monster" and "Re:Monster" share half.
@@ -37,8 +36,7 @@ func newShowIdentity(known []string) *showIdentity {
 		}
 		id.names = append(id.names, tokens)
 		id.folded = append(id.folded, identityTokens(corpus.Fold(k)))
-		// "Mushoku Tensei II: …" is named "Mushoku Tensei S2" by groups: the
-		// numeral is a season, not part of the name.
+		// Groups name "Mushoku Tensei II: …" "Mushoku Tensei S2": the numeral is a season.
 		base := identityTokens(corpus.Normalise(baseOf(k)))
 		if n := len(base); n > 1 && isNumber(base[n-1]) {
 			base = base[:n-1]
@@ -85,8 +83,7 @@ func (id *showIdentity) matchesName(title string) bool {
 		}
 	}
 
-	// Spelling variants only: same length. Extra words ("Tensura Nikki - …")
-	// are another show, not a respelling.
+	// Same-length respellings only; extra words ("Tensura Nikki - …") are another show.
 	folded := identityTokens(corpus.Fold(title))
 	for _, f := range id.folded {
 		if len(f) > 0 && (slices.Equal(folded, f) ||
@@ -163,8 +160,7 @@ func tokenSet(tokens []string) map[string]bool {
 	return out
 }
 
-// identityTokens drops what says nothing about which show this is: symbols,
-// the year, and the season marker verifies() checks separately.
+// identityTokens drops symbols, the year, and the season marker verifies() checks apart.
 func identityTokens(normalised string) []string {
 	fields := strings.Fields(stripSymbols(normalised))
 	out := make([]string, 0, len(fields))

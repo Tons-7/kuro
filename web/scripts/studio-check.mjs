@@ -1,5 +1,4 @@
-// A show's studio is on its page and links to the studio's other work; the
-// Browse filter finds a studio by name. Chainsaw Man is MAPPA.
+// A show's studio (Chainsaw Man: MAPPA) links to its other work; Browse finds studios by name.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'

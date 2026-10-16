@@ -43,7 +43,7 @@ export function Shortcuts() {
             <button
               onClick={close}
               aria-label="Close"
-              className="grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+              className="tap relative grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
             >
               ✕
             </button>

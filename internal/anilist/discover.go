@@ -7,9 +7,7 @@ import (
 	"time"
 )
 
-// TRENDING_DESC is AniList's rolling measure of current activity, the closest
-// thing it serves to "right now". Week and month are not orderings it offers
-// at all; they are computed from daily trend history, see Rising.
+// TRENDING_DESC is AniList's rolling "right now"; Rising computes week and month from daily trends.
 const (
 	SortTrending  = "trending"
 	SortWeek      = "week"
@@ -48,8 +46,7 @@ func Sorts() []string {
 	}
 }
 
-// Season returns the AniList season enum and year for a moment in time.
-// Northern-hemisphere quarters, which is what AniList uses.
+// Season returns AniList's season enum and year for a moment, by northern-hemisphere quarters.
 func Season(t time.Time) (string, int) {
 	switch t.Month() {
 	case time.January, time.February, time.March:
@@ -82,6 +79,8 @@ type DiscoverPage struct {
 	Media       []Media
 	HasNextPage bool
 	Total       int
+	// Dropped counts entries left out of Media that the Total still counts: a studio's manga.
+	Dropped int
 }
 
 // discoverQuery is built per call because the media filters differ by sort and

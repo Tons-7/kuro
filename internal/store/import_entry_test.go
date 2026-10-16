@@ -18,11 +18,7 @@ func listEntryRow(t *testing.T, s *Store, animeID int) (id, progress int, status
 
 func current() *string { s := "CURRENT"; return &s }
 
-// The friend's crash: an episode marked watched before the anime was on the
-// AniList list creates a local row with a synthetic negative id keyed on
-// anime_id. Importing that anime then brings AniList's own id, which a plain
-// ON CONFLICT(id) misses — the insert used to hit the anime_id UNIQUE
-// constraint and abort the whole sync.
+// A local row (negative id) for an anime later imported takes AniList's id instead of aborting the sync.
 func TestImportReconcilesALocalEntryOntoItsRealID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -54,8 +50,7 @@ func TestImportReconcilesALocalEntryOntoItsRealID(t *testing.T) {
 	}
 }
 
-// AniList returns one entry per custom list the anime belongs to, all sharing
-// one MediaList id. Deduping on the id must still work.
+// AniList returns an entry per custom list, all one MediaList id, which still dedupes.
 func TestImportDedupesRepeatedListEntries(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -74,5 +69,35 @@ func TestImportDedupesRepeatedListEntries(t *testing.T) {
 	}
 	if id, progress, _, _ := listEntryRow(t, s, 7); id != 500 || progress != 4 {
 		t.Errorf("deduped row id=%d progress=%d, want 500/4", id, progress)
+	}
+}
+
+// A replace import mirrors the AniList list, which can never hold a MAL-only show: those entries stay.
+func TestReplaceImportKeepsMALOnlyEntries(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.SaveCorpus(ctx, []CorpusEntry{{AniListID: -777, MalID: 777, Kind: "TV", Episodes: 13,
+		Titles: []CorpusTitle{{Text: "MAL only", Kind: "primary"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyRemote(ctx, RemoteEntry{AnimeID: -777, Status: "CURRENT", Progress: 3}); err != nil {
+		t.Fatal(err)
+	}
+	s.ImportList(ctx, []Anime{{ID: 8, Romaji: "Gone", Synonyms: "[]", Genres: "[]"}},
+		[]Entry{{ID: 501, AnimeID: 8, Status: current(), Progress: 1}}, ImportMerge)
+
+	res, err := s.ImportList(ctx, []Anime{{ID: 7, Romaji: "Show", Synonyms: "[]", Genres: "[]"}},
+		[]Entry{{ID: 500, AnimeID: 7, Status: current(), Progress: 4}}, ImportReplace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Removed != 1 {
+		t.Fatalf("removed %d, want only the AniList show that left the list", res.Removed)
+	}
+	if e := entryOf(t, s, -777); e.Progress != 3 {
+		t.Fatalf("MAL-only entry = %+v, want it kept", e)
+	}
+	if e := entryOf(t, s, 8); e.AnimeID != 0 {
+		t.Fatalf("entry 8 = %+v, want it dropped", e)
 	}
 }

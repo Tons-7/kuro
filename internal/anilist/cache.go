@@ -24,15 +24,14 @@ type responseCache struct {
 	mu      sync.Mutex
 	entries map[string]cached
 
-	// Concurrent identical queries wait on one request rather than each
-	// issuing their own: opening the app fires several at once.
-	inflight map[string]*sync.WaitGroup
+	// Identical queries in flight share one request; opening the app fires several at once.
+	inflight map[string]chan struct{}
 }
 
 func newResponseCache() *responseCache {
 	return &responseCache{
 		entries:  map[string]cached{},
-		inflight: map[string]*sync.WaitGroup{},
+		inflight: map[string]chan struct{}{},
 	}
 }
 
@@ -86,24 +85,22 @@ func (c *responseCache) put(key string, body []byte) {
 	c.entries[key] = cached{body: body, expires: time.Now().Add(cacheTTL)}
 }
 
-// enter reports whether this caller should perform the request. When it should
-// not, the returned group is the one to wait on before reading the cache again.
-func (c *responseCache) enter(key string) (*sync.WaitGroup, bool) {
+// enter says whether this caller makes the request; if not, the channel closes when the one in flight is done.
+func (c *responseCache) enter(key string) (chan struct{}, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if wg, busy := c.inflight[key]; busy {
-		return wg, false
+	if wait, busy := c.inflight[key]; busy {
+		return wait, false
 	}
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	c.inflight[key] = wg
-	return wg, true
+	wait := make(chan struct{})
+	c.inflight[key] = wait
+	return wait, true
 }
 
-func (c *responseCache) done(key string, wg *sync.WaitGroup) {
+func (c *responseCache) done(key string, wait chan struct{}) {
 	c.mu.Lock()
 	delete(c.inflight, key)
 	c.mu.Unlock()
-	wg.Done()
+	close(wait)
 }

@@ -11,8 +11,7 @@ ALTER TABLE anime ADD COLUMN favourites   INTEGER;
 ALTER TABLE anime ADD COLUMN start_date   TEXT;
 ALTER TABLE anime ADD COLUMN end_date     TEXT;
 
--- Artwork proxied through the local server so scrolling stays instant and the
--- library still renders without a connection.
+-- Artwork proxied locally, so scrolling is instant and the library renders offline.
 CREATE TABLE image_cache (
     url        TEXT PRIMARY KEY,
     path       TEXT NOT NULL,

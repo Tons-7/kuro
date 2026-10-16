@@ -8,9 +8,7 @@ import (
 	"testing"
 )
 
-// Opt-in: KURO_LIVE=1 go test ./internal/anilist -run LiveBrowseSort -v
-// Proves AniList itself orders search results by the sort we send, rather than
-// falling back to relevance.
+// Search follows the sort sent, not relevance. Opt-in: KURO_LIVE=1 go test -run LiveBrowseSort -v
 func TestLiveBrowseSortOrdersSearchResults(t *testing.T) {
 	if os.Getenv("KURO_LIVE") == "" {
 		t.Skip("set KURO_LIVE=1 to query AniList")

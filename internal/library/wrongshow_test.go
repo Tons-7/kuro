@@ -118,8 +118,7 @@ func TestOtherShowsAreKeptButBlocked(t *testing.T) {
 	}
 }
 
-// A twelve episode series carries no episode 30, and a pack that states no
-// range used to be allowed to answer for any number at all.
+// A twelve-episode series has no episode 30, even from a pack stating no range.
 func TestUnnumberedPackOfAnotherShowCannotAnswer(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -131,8 +130,7 @@ func TestUnnumberedPackOfAnotherShowCannotAnswer(t *testing.T) {
 	}
 }
 
-// Nothing found is better than the wrong show: an episode with no release must
-// report that rather than play something else.
+// Nothing found beats the wrong show: an episode without a release says so.
 func TestNothingIsPickedWhenOnlyOtherShowsAreFound(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -231,8 +229,7 @@ func TestDownloadWalksPastADeadRelease(t *testing.T) {
 	}
 }
 
-// The picker exists for releases the heuristic rejects; one chosen there has
-// to stick, or every play would send the user back to it.
+// A release picked by hand past the heuristic sticks, or every play sends the user back.
 func TestAReleasePickedByHandIsNeverSecondGuessed(t *testing.T) {
 	st := monsterStore(t)
 	ctx := context.Background()

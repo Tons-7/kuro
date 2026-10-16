@@ -1,7 +1,5 @@
 -- +goose Up
--- A download someone asked for is not a cache entry: it stays until they delete
--- it and does not count against the cache budget. Nothing so far recorded who
--- asked, so existing rows stay in the cache tier.
+-- A requested download stays until deleted and is outside the cache budget; existing rows stay cache.
 ALTER TABLE cache_entry ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;
 
 -- +goose Down

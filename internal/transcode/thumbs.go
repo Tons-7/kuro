@@ -21,6 +21,8 @@ type Thumbnails struct {
 
 	mu      sync.Mutex
 	running map[string]struct{}
+	// failed: when a sheet last failed, so the player polling every 15 s does not restart ffmpeg each time.
+	failed map[string]time.Time
 }
 
 func NewThumbnails(ffmpeg string, log *slog.Logger) *Thumbnails {
@@ -28,6 +30,7 @@ func NewThumbnails(ffmpeg string, log *slog.Logger) *Thumbnails {
 		ffmpeg:  absolute(ffmpeg),
 		log:     log,
 		running: map[string]struct{}{},
+		failed:  map[string]time.Time{},
 	}
 }
 
@@ -44,21 +47,25 @@ type Sheet struct {
 }
 
 const (
-	// Wide enough to make out a scene, small enough that the whole episode fits
-	// in one image a browser will decode without complaint.
+	// Wide enough to make out a scene, small enough for the episode to fit in one image.
 	thumbWidth = 160
-	// Around this many frames per episode whatever its length, so a 24-minute
-	// episode and a two-hour film both give a usable scrub.
+	// About this many frames whatever the length, so episodes and films both scrub well.
 	thumbTarget = 144
-	// A sheet is only worth making from a complete file, and ffmpeg has to walk
-	// the whole episode to build one.
+	// A sheet needs the whole episode, so only a complete file gets one.
 	thumbDeadline = 5 * time.Minute
+	// A failed sheet is tried again this much later, not on the next poll.
+	thumbRetry = time.Hour
 )
 
 func sheetPath(dir string) string { return filepath.Join(dir, "thumbs.jpg") }
 
-// tail keeps the end of ffmpeg's output, which is where it says what went
-// wrong; the start is a page of warnings about holes in the file.
+// sheetArgs decodes keyframes only: 160 px tiles need no more, and every frame of a film took longer than the deadline.
+func sheetArgs(source, filter, part string) []string {
+	return []string{"-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i", source,
+		"-vf", filter, "-frames:v", "1", "-q:v", "6", part}
+}
+
+// tail keeps the end of ffmpeg's output, where it says what went wrong.
 func tail(out string) string {
 	const keep = 300
 	out = strings.TrimSpace(out)
@@ -68,8 +75,7 @@ func tail(out string) string {
 	return out[len(out)-keep:]
 }
 
-// PlanSheet works out the grid for an episode of this length. Exported for the
-// handler, which has to describe a sheet it did not build.
+// PlanSheet works out the grid for this length, for a handler describing a sheet it didn't build.
 func PlanSheet(duration float64) Sheet {
 	if duration <= 0 {
 		return Sheet{}
@@ -107,8 +113,7 @@ func (t *Thumbnails) Read(dir string, duration float64, aspect float64) (Sheet, 
 	return plan, true
 }
 
-// tileHeight keeps the tiles the shape of the video, rounded to an even number
-// because the encoder refuses odd dimensions.
+// tileHeight keeps the video's shape, rounded even as the encoder refuses odd dimensions.
 func tileHeight(aspect float64) int {
 	if aspect <= 0 {
 		aspect = 16.0 / 9.0
@@ -120,9 +125,7 @@ func tileHeight(aspect float64) int {
 	return h
 }
 
-// Generate builds the sheet in the background, once. The source must be the
-// file on disk: sampling across an episode through the torrent engine would
-// fetch the whole thing.
+// Generate builds the sheet once, in the background, from the file on disk (not through the engine).
 func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 	plan := PlanSheet(duration)
 	if t == nil || plan.Count == 0 || source == "" {
@@ -133,7 +136,7 @@ func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 	}
 
 	t.mu.Lock()
-	if _, busy := t.running[dir]; busy {
+	if _, busy := t.running[dir]; busy || time.Since(t.failed[dir]) < thumbRetry {
 		t.mu.Unlock()
 		return
 	}
@@ -153,24 +156,19 @@ func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 		// Written aside and renamed, so a half-finished sheet is never served.
 		// The extension stays .jpg because ffmpeg picks its muxer from it.
 		part := filepath.Join(dir, "thumbs.part.jpg")
-		filter := fmt.Sprintf("fps=1/%g,scale=%d:%d,tile=%dx%d",
-			plan.Interval, thumbWidth, tileHeight(aspect), plan.Columns, plan.Rows)
+		// tpad holds the last keyframe to the end: decoding keyframes only left the tiles after it black.
+		filter := fmt.Sprintf("tpad=stop_mode=clone:stop_duration=%g,fps=1/%g,scale=%d:%d,tile=%dx%d",
+			duration, plan.Interval, thumbWidth, tileHeight(aspect), plan.Columns, plan.Rows)
 
 		started := time.Now()
-		// A still-downloading file is full of holes ffmpeg complains about while
-		// still producing a usable sheet, so its output is only reported on actual
-		// failure.
-		out, err := exec.CommandContext(ctx, t.ffmpeg,
-			"-hide_banner", "-loglevel", "error", "-y",
-			"-i", source,
-			"-vf", filter,
-			"-frames:v", "1",
-			"-q:v", "6",
-			part,
-		).CombinedOutput()
+		// ffmpeg complains about a downloading file's holes yet makes a sheet; only real failure is reported.
+		out, err := exec.CommandContext(ctx, t.ffmpeg, sheetArgs(source, filter, part)...).CombinedOutput()
 		if err != nil {
 			t.log.Warn("scrub previews", "err", err, "detail", tail(string(out)))
 			os.Remove(part)
+			t.mu.Lock()
+			t.failed[dir] = time.Now()
+			t.mu.Unlock()
 			return
 		}
 

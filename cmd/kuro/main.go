@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"kuro/internal/anilist"
@@ -68,8 +71,7 @@ func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, erro
 	if upload == 0 {
 		upload = 4 << 20 // enough to stay unchoked
 	}
-	// Downloads from the rqbit days: kuro's own session for it, else the one
-	// rqbit kept per user before kuro moved it into the cache.
+	// rqbit-era downloads: kuro's own session for it, else the per-user one rqbit kept.
 	legacy := []string{filepath.Join(cfg.CacheDir, library.SessionDirName)}
 	if dir, err := os.UserConfigDir(); err == nil && runtime.GOOS == "windows" {
 		legacy = append(legacy, filepath.Join(dir, "rqbit", "session", "data"))
@@ -168,15 +170,33 @@ func newMAL(ctx context.Context, cfg config.Config, st *store.Store, log *slog.L
 }
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	// To the console and to a file in the data folder: a double-clicked console closes with its last words.
+	log := slog.New(slog.NewTextHandler(logOutput(), nil))
 	if err := run(log); err != nil {
 		log.Error("fatal", "err", err)
+		proc.Alert("kuro could not start", err.Error())
 		os.Exit(1)
 	}
 }
 
+// logOutput is stdout plus kuro.log in the data folder, the last run kept aside as kuro.log.1.
+func logOutput() io.Writer {
+	dir := config.DefaultDataDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return os.Stdout
+	}
+	path := filepath.Join(dir, "kuro.log")
+	os.Rename(path, path+".1")
+	f, err := os.Create(path)
+	if err != nil {
+		return os.Stdout
+	}
+	return io.MultiWriter(os.Stdout, f)
+}
+
 func run(log *slog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// SIGTERM too: closing the console, a log-off or a service manager, which otherwise end the process at once.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Also ended by an update handing over to the new binary.
 	ctx, cancel := context.WithCancel(ctx)
@@ -204,28 +224,35 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("kuro", "version", update.Version)
 
-	// A clean exit stops helpers, but closing the window or a kill skips that
-	// and leaks ffmpeg/mpv, so the OS is made responsible instead.
-	if err := proc.KillChildrenOnExit(); err != nil {
-		log.Warn("helpers may outlive an abrupt exit", "err", err)
-	}
-
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	// Claimed first: a second launch must not touch the running one's state.
-	claim, err := net.Listen("tcp", cfg.Addr)
-	if err != nil {
+	// Claimed first, so a second launch can't touch the running one's state; the port alone doesn't guard it.
+	showRunning := func() error {
 		if !kuroAnswers(cfg.LocalURL()) {
-			return err
+			return fmt.Errorf("kuro is already running on this data folder, or another program holds %s", cfg.Addr)
 		}
 		log.Info("kuro is already running; showing it", "url", cfg.LocalURL())
 		if windowWanted() {
-			config.OpenApp(ctx, cfg.LocalURL())
+			config.OpenApp(ctx, cfg.LocalURL(), cfg.ProfileDir())
 		}
 		return nil
+	}
+	unlock, err := proc.Lock(filepath.Join(cfg.DataDir(), "kuro.lock"))
+	if err != nil {
+		return showRunning()
+	}
+	defer unlock()
+	claim, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		return showRunning()
+	}
+
+	// The OS ends ffmpeg/mpv if kuro is killed; only now, or a hand-off would take its window down too.
+	if err := proc.KillChildrenOnExit(); err != nil {
+		log.Warn("helpers may outlive an abrupt exit", "err", err)
 	}
 	warnSlowDisk(log, cfg.BinDir, cfg.CacheDir)
 
@@ -273,8 +300,7 @@ func run(log *slog.Logger) error {
 
 	malClient := newMAL(ctx, cfg, st, log)
 
-	// In the user's order: the first decides the record kept for a torrent
-	// several carry. Cached: one episode is six queries per site.
+	// In the user's order (the first wins a shared torrent); cached, as one episode is six queries a site.
 	var sites, adultSites []indexer.Source
 	for _, in := range cfg.Indexers {
 		// Skipped, not fatal: kuro then starts and Setup names the bad block.
@@ -343,8 +369,7 @@ func run(log *slog.Logger) error {
 		WithRelations(relations).
 		WithPlayer("vlc", player.NewVLC(vlcBinary, log))
 
-	// Downloads run one at a time: parallel ones share the connection, so each
-	// finishes later and the awaited one finishes last.
+	// Downloads run one at a time: parallel ones share the line, and the awaited one finishes last.
 	downloader := library.NewDownloader(st, prefetcher, func(ctx context.Context, animeID int) score.Preferences {
 		prefs, err := st.Prefs(ctx, animeID)
 		if err != nil {
@@ -352,20 +377,17 @@ func run(log *slog.Logger) error {
 		}
 		return library.Preferences(prefs)
 	}, log)
+	// A pin left behind by a crash would never be released, and Quiet below would keep its torrent running.
+	if err := st.UnpinAll(ctx); err != nil {
+		log.Warn("clear stale cache pins", "err", err)
+	}
 	downloader.Quiet(ctx)
 	go downloader.Run(ctx)
 
 	// Auto-download joins the same queue rather than fetching on its own.
 	watcher.WithDownloader(downloader)
 
-	// A pin left behind by a crash would never be released, slowly
-	// filling the cache with files that can never be evicted.
-	if err := st.UnpinAll(ctx); err != nil {
-		log.Warn("clear stale cache pins", "err", err)
-	}
-
-	// Torrent ids are per session, so stored ids point elsewhere after a
-	// restart; realign before a cache sweep deletes the wrong file.
+	// Torrent ids are per session: realign before a cache sweep deletes the wrong file.
 	if live, err := torrents.Live(ctx); err != nil {
 		log.Warn("list torrents for reconcile", "err", err)
 	} else if matched, orphaned, err := st.ReconcileTorrents(ctx, live); err != nil {
@@ -373,7 +395,8 @@ func run(log *slog.Logger) error {
 	} else if matched+orphaned > 0 {
 		log.Info("torrents reconciled", "matched", matched, "orphaned", orphaned)
 	}
-	cache := library.NewCache(st, torrents, cfg.CacheDir, log).WithClaimed(prefetcher.Claimed)
+	cache := library.NewCache(st, torrents, cfg.CacheDir, log).WithClaimed(prefetcher.Claimed).
+		WithProtected(filepath.Dir(cfg.ConfigPath()), cfg.DataDir(), cfg.BinDir)
 	playback.WithCache(cache)
 	prefetcher.WithRoom(cache.MakeRoom)
 	scheduler.Add(jobs.Job{
@@ -385,14 +408,12 @@ func run(log *slog.Logger) error {
 		Name: "anilist-sync", Every: interval(st, "sync.poll_seconds", 15*time.Minute),
 		Run: func(ctx context.Context) error { _, err := sync.Run(ctx); return err },
 	})
-	// On start too: opened to watch tonight's episode, the bell should already
-	// know about it rather than half an hour later.
+	// On start too, so the bell knows tonight's episode at once, not half an hour later.
 	scheduler.Add(jobs.Job{
 		Name: "release-watch", Every: interval(st, "notify.poll_seconds", 30*time.Minute), OnStart: true,
 		Run: func(ctx context.Context) error { _, err := watcher.Poll(ctx); return err },
 	})
-	// Whole-database mirrors on long timers: the startup run is almost always
-	// a no-op and never blocks the server coming up.
+	// Whole-database mirrors on long timers; the startup run is nearly always a no-op and never blocks.
 	scheduler.Add(jobs.Job{
 		Name: "filler-data", Every: 24 * time.Hour, OnStart: true,
 		Run: func(ctx context.Context) error { _, err := enricher.Fillers(ctx, false); return err },
@@ -401,9 +422,7 @@ func run(log *slog.Logger) error {
 		Name: "seadex", Every: 24 * time.Hour, OnStart: true,
 		Run: func(ctx context.Context) error { _, err := enricher.SeaDex(ctx, false); return err },
 	})
-	// MAL access tokens last an hour. The client renews them in-flight, but a
-	// regular push also keeps the refresh token from going stale unused. Push
-	// first: the pull treats what differs from the last push as a site edit.
+	// Pushing keeps MAL's refresh token alive; push first: the pull reads changes since as site edits.
 	scheduler.Add(jobs.Job{
 		Name: "mal-sync", Every: interval(st, "sync.poll_seconds", 15*time.Minute),
 		Run: func(ctx context.Context) error {
@@ -419,6 +438,8 @@ func run(log *slog.Logger) error {
 	if exe != "" && update.Version != "dev" {
 		updater = update.New(st, exe, filepath.Join(cfg.CacheDir, "update"), log).
 			WithRestart(cancel)
+		// Before the first check, which frames "what's new" by the version this one replaced.
+		updater.Started(ctx)
 		scheduler.Add(jobs.Job{
 			Name: "update-check", Every: 6 * time.Hour, OnStart: true,
 			Run: func(ctx context.Context) error { _, err := updater.Check(ctx); return err },
@@ -431,14 +452,11 @@ func run(log *slog.Logger) error {
 	if _, err := streams.Purge(); err != nil {
 		log.Warn("purge transcode output", "err", err)
 	}
-	// A GPU encoder is preferred when one actually works here: it encodes 1080p
-	// far faster than realtime. Probing takes trial encodes, so it runs after
-	// the window opens rather than before.
+	// A working GPU encoder is preferred; probing takes trial encodes, so it runs after the window opens.
 	detectEncoder := func(ctx context.Context) {
 		encoder := transcode.DetectEncoder(ctx, cfg.Tool("ffmpeg"), log)
 		streams.SetEncoder(encoder)
-		// Without a real-time hardware encoder, HEVC/10-bit releases stall on
-		// seeks, so the finder prefers a directly-playable one.
+		// Without a hardware encoder HEVC/10-bit stalls on seeks, so the finder prefers playable releases.
 		finder.WithHardwareTranscode(transcode.IsHardwareEncoder(encoder))
 		log.Info("video encoder", "encoder", encoder)
 	}
@@ -499,24 +517,14 @@ func run(log *slog.Logger) error {
 		}
 	})
 
-	// A killed browser never says it stopped watching; the reaper is the only
-	// signal, or the episode stays pinned and downloading. api is set below,
-	// before the reaper can fire.
+	// A killed browser never says it stopped; the reaper is the only signal. api is set before it fires.
 	var api *server.Server
 	streams.OnIdle(func(sessionID string) {
-		// Also the only signal that would ever release the queue's hold.
-		downloader.Release(sessionID)
-		if api != nil {
-			api.SessionGone(sessionID)
-		}
-
-		animeID, episode, ok := parseStreamID(sessionID)
-		if !ok {
+		if api == nil {
+			downloader.Release(sessionID)
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		playback.Suspend(ctx, animeID, episode)
+		api.SessionIdle(sessionID)
 	})
 
 	api = server.New(server.Deps{
@@ -536,11 +544,12 @@ func run(log *slog.Logger) error {
 		Jobs:       scheduler,
 		MAL:        malClient,
 		MALSync:    malSync,
-		Scanner:    library.NewScanner(st, log),
+		Scanner:    library.NewScanner(st, log).WithCacheDir(cfg.CacheDir),
 		Sync:       sync,
 		Prefetch:   prefetcher,
 		Downloader: downloader,
 		Updater:    updater,
+		Relaunch:   relaunchSelf(exe, cancel),
 		Token:      token,
 		Player:     mpv,
 		Indexer:    sources,
@@ -551,16 +560,12 @@ func run(log *slog.Logger) error {
 	// After api exists: the idle hook reads it.
 	go streams.Reap(ctx)
 
-	// The catalogue every mirror hangs off; without a job a new install had
-	// nothing to search or randomise. Its sources decide staleness (a month for
-	// the seed, a day for the rest), so this is a near-noop after the first daily launch.
+	// The catalogue every mirror hangs off; its sources decide staleness, so most runs are near no-ops.
 	scheduler.Add(jobs.Job{
 		Name: "corpus", Every: 24 * time.Hour, OnStart: true,
 		Run: func(ctx context.Context) error {
 			rep, err := ingester.Run(ctx, false)
-			// Nothing arrived, so the index built below already matches the
-			// corpus — rebuilding it would be 34,000 entries of wasted work.
-			// A partial run still indexes what it saved.
+			// Nothing arrived, so the index already matches; a partial run still indexes what it saved.
 			if rep.Seeded == 0 && rep.Fetched == 0 {
 				return err
 			}
@@ -583,8 +588,7 @@ func run(log *slog.Logger) error {
 	})
 	scheduler.Start(ctx)
 
-	// Around a second and a half over a full corpus, and only the local-file
-	// scanner needs it, so the port opens first.
+	// About 1.5 s over a full corpus and only the scanner needs it, so the port opens first.
 	go func() {
 		if err := api.RebuildIndex(ctx); err != nil {
 			log.Warn("match index unavailable", "err", err)
@@ -654,8 +658,7 @@ func run(log *slog.Logger) error {
 	}
 
 	<-ctx.Done()
-	// Requests still in flight would otherwise meet a closed database and a
-	// stopped torrent engine, which the deferred cleanup does next.
+	// Or requests in flight meet the closed database and engine the deferred cleanup leaves.
 	<-drained
 	// Closed before this process ends, so a relaunch finds the profile free.
 	window.Close()
@@ -681,7 +684,17 @@ func (b *binder) bind(addr string) error {
 	if ln == nil {
 		var err error
 		if ln, err = net.Listen("tcp", addr); err != nil {
-			return err
+			// Linux refuses a wildcard beside a loopback listener on the port: a moment of nothing listening it is.
+			b.mu.Lock()
+			previous := b.ln
+			b.mu.Unlock()
+			if previous == nil {
+				return err
+			}
+			previous.Close()
+			if ln, err = net.Listen("tcp", addr); err != nil {
+				return err
+			}
 		}
 	}
 	if b.tls != nil {
@@ -701,11 +714,20 @@ func (b *binder) bind(addr string) error {
 
 	b.log.Info("listening", "addr", "http://"+ln.Addr().String())
 	go func() {
-		// The old listener closing is how a rebind ends the previous Serve, and
-		// Shutdown is how the process ends both.
+		// Closing the old listener ends the previous Serve; Shutdown ends both.
 		if err := b.srv.Serve(ln); err != nil &&
 			!errors.Is(err, net.ErrClosed) && !errors.Is(err, http.ErrServerClosed) {
 			b.log.Error("serve", "addr", ln.Addr().String(), "err", err)
+			// Listening again rather than going quiet: an accept error on Windows is not retried by Serve.
+			time.Sleep(2 * time.Second)
+			b.mu.Lock()
+			current := b.ln == ln
+			b.mu.Unlock()
+			if current {
+				if err := b.bind(addr); err != nil {
+					b.log.Error("listen again", "addr", addr, "err", err)
+				}
+			}
 		}
 	}()
 	return nil
@@ -727,6 +749,18 @@ func (b *binder) takeClaim(addr string) net.Listener {
 	return nil
 }
 
+// relaunchSelf starts a fresh kuro that waits for this one, then ends this one; nil for a build with no exe.
+func relaunchSelf(exe string, cancel context.CancelFunc) func() {
+	if exe == "" {
+		return nil
+	}
+	return func() {
+		if err := update.RelaunchSelf(exe); err == nil {
+			cancel()
+		}
+	}
+}
+
 // kuroAnswers tells a running kuro from another program holding the port.
 func kuroAnswers(base string) bool {
 	client := http.Client{Timeout: 2 * time.Second}
@@ -741,9 +775,7 @@ func kuroAnswers(base string) bool {
 	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&body) == nil && body.Version != ""
 }
 
-// warnSlowDisk warns when kuro is unpacked somewhere disk-bound work will crawl.
-// On a network share or USB stick everything (downloads, torrent writes,
-// transcoding) is slow at once, indistinguishable from kuro being broken.
+// warnSlowDisk warns when kuro sits on a network share or USB stick: all of it is slow, and looks broken.
 func warnSlowDisk(log *slog.Logger, dirs ...string) {
 	seen := map[string]bool{}
 	for _, dir := range dirs {

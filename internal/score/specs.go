@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// Rejection names the rule that refused a release, so the reason survives to
-// the UI instead of collapsing into one opaque string.
+// Rejection names the rule that refused a release, so the UI shows the reason.
 type Rejection struct {
 	Rule   string `json:"rule"`
 	Reason string `json:"reason"`
@@ -65,8 +64,7 @@ var specs = []spec{
 		},
 	},
 	{
-		// A disc image is a whole Blu-ray, not an episode: hours of menus and
-		// VOB structure that no player here can seek into.
+		// A disc image is a whole Blu-ray no player here can seek into, not an episode.
 		name: "disc image", tier: tierUnplayable,
 		reject: func(c Candidate, _ Preferences) string {
 			if discImage.MatchString(c.Torrent.Title) {
@@ -167,8 +165,7 @@ func Unwanted(c Candidate, prefs Preferences) bool {
 	return (!prefs.AllowRaw && IsRaw(c)) || audioMismatch(c.Release, prefs.Audio)
 }
 
-// IsRaw reports an untranslated broadcast capture. Transport streams are
-// always raws, and trackers file them under a raw category.
+// IsRaw reports an untranslated broadcast capture (transport streams always are).
 func IsRaw(c Candidate) bool {
 	return c.Release.Extension == "ts" ||
 		strings.Contains(strings.ToLower(c.Torrent.Category), "raw")

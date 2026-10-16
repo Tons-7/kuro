@@ -6,8 +6,7 @@ import (
 	"fmt"
 )
 
-// Almost every AniList field is nullable (episodes while airing, title.english
-// often), so pointers keep "absent" distinct from "zero".
+// Nearly every AniList field is nullable, so pointers keep "absent" apart from "zero".
 type Media struct {
 	ID              int       `json:"id"`
 	IDMal           *int      `json:"idMal"`
@@ -202,9 +201,7 @@ func (c *Client) Relations(ctx context.Context, ids []int) ([]RelatedMedia, erro
 	return out.Page.Media, err
 }
 
-// airingAt is a unix timestamp in UTC; grouping by local day is the caller's
-// job. perPage caps at 50 server-side and pageInfo.total is a fixed 5000, so
-// paging must follow hasNextPage.
+// airingAt is unix UTC (callers group by local day); total is a fixed 5000, so paging follows hasNextPage.
 const scheduleQuery = `query Schedule($start: Int!, $end: Int!, $page: Int!) {
   Page(page: $page, perPage: 50) {
     pageInfo { hasNextPage }
@@ -258,8 +255,7 @@ const byIDsQuery = `query ByIDs($ids: [Int]!) {
   }
 }`
 
-// MediaByIDs fetches up to 50 anime per request. A missing id is silently
-// omitted rather than nulling the entire response.
+// MediaByIDs fetches up to 50 anime per request; a missing id is omitted, not a null response.
 func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -274,9 +270,7 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 		return out.Page.Media, err
 	}
 
-	// AniList hides adult titles from an account that has not opted into them,
-	// and says nothing about it. They still appear in the schedule, so their
-	// pages have to open.
+	// AniList hides adult titles from accounts not opted in, but the schedule lists them, so they must open.
 	var anon page
 	if err := c.queryAnonymous(ctx, byIDsQuery, map[string]any{"ids": ids}, &anon); err != nil {
 		return out.Page.Media, fmt.Errorf("%w: %v", ErrIncomplete, err)
@@ -287,8 +281,7 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 	return out.Page.Media, nil
 }
 
-// ErrIncomplete comes with a partial result: the missing ids may be hidden,
-// not gone, so they must not be written off.
+// ErrIncomplete comes with a partial result; the missing ids may be hidden, not gone.
 var ErrIncomplete = errors.New("anilist: some titles could not be checked")
 
 // missingAny reports that an id was asked for and not returned.
@@ -329,8 +322,7 @@ func (c *Client) StreamingEpisodes(ctx context.Context, id int) ([]StreamingEpis
 		} `json:"Media"`
 	}
 	if err := c.Query(ctx, streamingQuery, map[string]any{"id": id}, &out); err != nil {
-		// An adult title is invisible to an authenticated account, and a
-		// missing thumbnail is not worth failing the page over.
+		// Adult titles hide from an authenticated account, and a missing thumbnail can't fail the page.
 		if c.queryAnonymous(ctx, streamingQuery, map[string]any{"id": id}, &out) != nil {
 			return nil, err
 		}

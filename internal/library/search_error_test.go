@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// Every query failing against a site that is down reads as one short line per
-// site, not the raw error of each query.
+// A site that is down reads as one line, not each query's raw error.
 func TestSearchFailureReadsAsOneLinePerSite(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -39,8 +38,7 @@ func TestSearchFailureReadsAsOneLinePerSite(t *testing.T) {
 	if strings.Contains(got.Error(), addr) {
 		t.Error("the message carries raw URLs")
 	}
-	var op *net.OpError
-	if !errors.As(got, &op) {
+	if _, ok := errors.AsType[*net.OpError](got); !ok {
 		t.Error("the underlying network error is no longer reachable")
 	}
 }

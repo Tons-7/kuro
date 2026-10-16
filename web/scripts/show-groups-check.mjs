@@ -1,5 +1,4 @@
-// A release group preferred for one show only, and the release picking that
-// follows from it.
+// A release group preferred for one show only, and the release picking that follows.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'

@@ -16,6 +16,32 @@ type studioLists struct {
 	mu      sync.Mutex
 	done    map[int]studioList
 	running map[int]chan struct{}
+	// first: what the catalogue's first page held per studio and sort, where later pages start.
+	first map[int]firstPage
+}
+
+type firstPage struct {
+	sort string
+	n    int
+}
+
+func (c *studioLists) servedFirst(id int, sort string, n int) {
+	c.mu.Lock()
+	if c.first == nil {
+		c.first = map[int]firstPage{}
+	}
+	c.first[id] = firstPage{sort: sort, n: n}
+	c.mu.Unlock()
+}
+
+// shortfall is how many works fewer than perPage the first page showed, for the same sort.
+func (c *studioLists) shortfall(id int, sort string, perPage int) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if f, ok := c.first[id]; ok && f.sort == sort && f.n < perPage {
+		return perPage - f.n
+	}
+	return 0
 }
 
 type studioList struct {
@@ -101,8 +127,10 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 			return
 		}
 		go s.fillStudio(studio)
+		// The total counts the manga the page dropped; page 2 starts where this one ended.
+		s.studioWorks.servedFirst(studio, b.Sort, len(result.Media))
 		send(w, http.StatusOK, map[string]any{
-			"items": s.decorate(r, result.Media), "page": 1, "hasMore": result.HasNextPage, "total": result.Total,
+			"items": s.decorate(r, result.Media), "page": 1, "hasMore": result.HasNextPage, "total": result.Total - result.Dropped,
 			"studio": map[string]any{"id": studio, "name": name},
 		})
 		return
@@ -118,7 +146,11 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 	works := narrowMedia(list.works, b)
 	sortMedia(works, b.Sort)
 	total := len(works)
-	from := min((page-1)*perPage, total)
+	from := (page - 1) * perPage
+	if page > 1 && !narrows(b) {
+		from -= s.studioWorks.shortfall(studio, b.Sort, perPage)
+	}
+	from = min(max(from, 0), total)
 	to := min(from+perPage, total)
 	send(w, http.StatusOK, map[string]any{
 		"items": s.decorate(r, works[from:to]), "page": page, "hasMore": to < total, "total": total,

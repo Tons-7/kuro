@@ -19,8 +19,7 @@ import (
 const (
 	SegmentSeconds = 6.0
 
-	// Restarting the encoder is expensive, so a forward seek within this many
-	// segments is served by letting the existing one catch up.
+	// A forward seek within this many segments waits for the encoder instead of restarting it.
 	restartAfterSegments = 4
 
 	sessionIdle = 10 * time.Minute
@@ -28,8 +27,7 @@ const (
 	// What always works, and what a hardware encoder that fails at its first frame is swapped for.
 	softwareEncoder = "libx264"
 
-	// The last lines carry the cause: ffmpeg's thread-exit lines come last, and
-	// the one naming the failure sits just above them.
+	// The cause sits just above ffmpeg's closing thread-exit lines.
 	encoderLogLines = 10
 )
 
@@ -52,14 +50,10 @@ type Session struct {
 
 	mu  sync.Mutex
 	run *run
-	// Segments requests are waiting on right now, so a restart can let the
-	// pass serving them finish first (Jellyfin waits for active requests the
-	// same way) instead of stranding a waiter on a killed pass.
+	// Segments requests wait on now, so a restart lets their pass finish first (as Jellyfin does).
 	waiters  map[int]int
 	headFrom int
-	// headTo is the highest segment the current pass has finished, headFrom-1
-	// before it produces any. The restart decision compares against this — where
-	// the encoder actually is — not against a stale file from an earlier pass.
+	// headTo: the current pass's highest finished segment (headFrom-1 before any), where it really is.
 	headTo  int
 	touched time.Time
 	// The encoded track's index in Info.Audio and the preference that picked
@@ -71,11 +65,9 @@ type Session struct {
 	// Set once the session is released, so a late waiter's restart branch does
 	// not relaunch ffmpeg into a directory that is being torn down.
 	closed bool
-	// Serialises a whole start (kill, launch, publish) so two callers cannot
-	// each spawn an encoder into the same directory.
+	// Serialises a start (kill, launch, publish), so two encoders never share a directory.
 	startMu sync.Mutex
-	// Opening the same episode twice returns this session, so closing it once
-	// must not stop what another holder is still watching.
+	// Holders of this session; closing once mustn't stop what another watches.
 	refs int
 	// A software failure is reported, not retried.
 	fellBack bool
@@ -92,8 +84,7 @@ type run struct {
 	stderr strings.Builder
 	from   int
 	exited chan struct{}
-	// Files older than this past a gap are an earlier pass's, kept for an
-	// instant seek but no proof of this pass's progress.
+	// Older files past a gap are an earlier pass's: good for a seek, no proof of progress.
 	began time.Time
 	// The process writing subtitle lines beside this pass, if any: whether it was told to stop, and is running.
 	subs        *exec.Cmd
@@ -107,8 +98,7 @@ func (r *run) wrote(path string) bool {
 	return err == nil && info.Size() > 0 && !info.ModTime().Before(r.began)
 }
 
-// SeekHook is told where playback jumped to, as a fraction of the file, so the
-// source can start fetching there.
+// SeekHook is told where playback jumped (a fraction), so the source fetches there.
 type SeekHook func(sessionID string, fraction float64)
 
 type Manager struct {
@@ -163,8 +153,7 @@ func absolute(path string) string {
 	return abs
 }
 
-// Purge clears transcode output from a previous run. No session survives a
-// restart, so anything still on disk is dead weight.
+// Purge clears a previous run's output, as no session survives a restart.
 func (m *Manager) Purge() (int, error) {
 	root := filepath.Join(m.root, "hls")
 
@@ -221,9 +210,7 @@ func (m *Manager) Open(ctx context.Context, id, source string) (*Session, error)
 	return m.OpenProbing(ctx, id, source, source)
 }
 
-// OpenProbing probes one source and encodes from another. A torrent must be
-// encoded through the engine so ranged reads move the priority window, but
-// probed from disk to avoid waiting on the header.
+// OpenProbing probes a torrent from disk but encodes through the engine, whose reads move the window.
 func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource string) (*Session, error) {
 	m.mu.Lock()
 	if s, ok := m.sessions[id]; ok && s.Source == source {
@@ -275,12 +262,11 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 		headFrom:   -1,
 		touched:    time.Now(),
 		refs:       1,
-		liveSubs:   true,
+		liveSubs:   liveSubtitlesWanted(source),
 	}
 
 	m.mu.Lock()
-	// Another open raced this one to the same episode; keep theirs so both
-	// holders are counted against a single encoder.
+	// Another open won the race to this episode; keep theirs, both counted on one encoder.
 	if existing, ok := m.sessions[id]; ok {
 		if existing.Source == source {
 			existing.mu.Lock()
@@ -308,8 +294,7 @@ func (m *Manager) currentEncoder() string {
 	return m.encoder
 }
 
-// SetEncoder replaces what new sessions encode with, for when ffmpeg arrives
-// after launch and the detection at startup had nothing to ask.
+// SetEncoder sets new sessions' encoder, for ffmpeg arriving after startup detection.
 func (m *Manager) SetEncoder(encoder string) {
 	if encoder == "" {
 		return
@@ -342,9 +327,7 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
-// Close releases one hold on a session and reports whether that was the last
-// one. Anything that stops the download belongs behind a true, so the encoder
-// is not killed while another holder is still watching.
+// Close releases one hold and reports the last; stopping the download belongs behind a true.
 func (m *Manager) Close(id string) bool {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
@@ -366,11 +349,23 @@ func (m *Manager) Close(id string) bool {
 	}
 	m.mu.Unlock()
 
-	if last {
-		s.stop()
-		os.RemoveAll(s.dir)
+	if !last {
+		return false
 	}
-	return last
+	return m.teardown(id, s)
+}
+
+// teardown stops an unlinked session; true, and its shared directory gone, when no replacement opened.
+func (m *Manager) teardown(id string, s *Session) bool {
+	s.stop()
+	m.mu.Lock()
+	owner := m.sessions[id]
+	m.mu.Unlock()
+	if owner != nil && owner != s {
+		return false
+	}
+	os.RemoveAll(s.dir)
+	return true
 }
 
 // discard drops a session outright, however many holders it has: the reaper,
@@ -386,8 +381,7 @@ func (m *Manager) discard(id string) {
 	}
 }
 
-// discardSession tears down an unlinked session; the directory is shared by id,
-// so it goes only if no replacement owns it.
+// discardSession tears down an unlinked session, its shared directory only if unowned.
 func (m *Manager) discardSession(id string, s *Session) {
 	s.mu.Lock()
 	s.closed = true
@@ -402,9 +396,7 @@ func (m *Manager) discardSession(id string, s *Session) {
 	}
 }
 
-// Sources lists what the open sessions are reading. A season pack serves
-// several episodes from one torrent, so closing one is not a reason to stop
-// fetching it.
+// Sources lists what open sessions read, since a pack's torrent may serve another episode still.
 func (m *Manager) Sources() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -415,6 +407,9 @@ func (m *Manager) Sources() []string {
 	}
 	return out
 }
+
+// liveSubtitlesWanted: only a torrent still arriving gets lines written beside the picture.
+func liveSubtitlesWanted(source string) bool { return strings.Contains(source, "/torrents/") }
 
 // Reap discards sessions nobody is watching. Each one holds an ffmpeg process and a directory of segments.
 func (m *Manager) Reap(ctx context.Context) {
@@ -470,9 +465,7 @@ func (s *Session) lastTouch() time.Time {
 	return s.touched
 }
 
-// segmentCount is how many segments the playlist advertises. A remainder under
-// a second folds into the previous segment: the muxer cuts on keyframes and
-// never writes a sliver that short on its own.
+// segmentCount is the playlist's segments; a sub-second remainder folds into the last, as the muxer does.
 func segmentCount(duration float64) int {
 	n := int(duration / SegmentSeconds)
 	if duration-float64(n)*SegmentSeconds >= 1 {
@@ -538,9 +531,7 @@ func (s *Session) startIfIdle(from int) error {
 	return s.startLocked(from)
 }
 
-// WaitInit returns once the init segment exists, starting a pass at from if
-// none runs. It never redirects a running encoder: init and the first segment
-// arrive together, and aiming both killed each other's pass.
+// WaitInit waits for the init segment, starting a pass at from if none runs; never redirecting one.
 func (s *Session) WaitInit(ctx context.Context, from int, timeout time.Duration) (string, error) {
 	path := s.InitPath()
 	if fileReady(path) {
@@ -592,8 +583,7 @@ func (s *Session) awaitFile(ctx context.Context, path string, deadline <-chan ti
 	return nil
 }
 
-// WaitSegment returns once a segment exists, starting or moving the encoder if
-// it is not already producing it.
+// WaitSegment returns once a segment exists, starting or moving the encoder if needed.
 func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration) (string, error) {
 	path := s.SegmentPath(n)
 	if fileReady(path) {
@@ -621,9 +611,7 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 			return path, nil
 		}
 
-		// The pass ended before this segment: stream copy cuts on keyframes, so
-		// the last keyframe can fall short of the arithmetic. A pass aimed at the
-		// segment writes its tail — once.
+		// The pass ended short (copy cuts on keyframes); one pass aimed at the segment writes its tail.
 		if !s.running() && !fileReady(path) {
 			if restarted {
 				return "", fmt.Errorf("segment %d was not produced", n)
@@ -645,8 +633,7 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 	}
 }
 
-// produced lists what the encoder actually wrote, which is the only way to
-// tell a dead encoder from one writing somewhere unexpected.
+// produced lists what the encoder wrote, telling a dead one from one writing elsewhere.
 func (s *Session) produced() []string {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -683,26 +670,20 @@ func (s *Session) CurrentPlan() Plan {
 	return s.Plan
 }
 
-// advanceHead moves headTo up to the highest segment the current pass has
-// finished, so the restart decision knows where the encoder really is. A
-// segment counts as done once the next one has started (the same rule
-// WaitSegment returns on), so a half-written tail is not mistaken for progress.
+// advanceHead moves headTo up to the current pass's highest finished segment.
 func (s *Session) advanceHead() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.run == nil {
 		return
 	}
-	// A segment counts once the next one has started, the same "complete" rule
-	// WaitSegment returns on. Only this pass's files count: one left past a gap
-	// by an earlier pass would mark a half-written segment done.
+	// Done once the next has started (WaitSegment's rule), and only this pass's files count.
 	for s.run.wrote(s.SegmentPath(s.headTo+1)) && s.run.wrote(s.SegmentPath(s.headTo+2)) {
 		s.headTo++
 	}
 }
 
-// nextStarted is WaitSegment's completeness proof for n: the following file,
-// from the running pass when that pass is the one writing n.
+// nextStarted proves n complete: the next file, from the running pass if it writes n.
 func (s *Session) nextStarted(n int) bool {
 	s.mu.Lock()
 	r := s.run
@@ -732,9 +713,7 @@ func (s *Session) ensureHead(n int) error {
 // reach before killing it. Bounded: a slow pass must not hold a seek hostage.
 const strandedGrace = 12 * time.Second
 
-// awaitStranded holds a restart while another request waits on a segment the
-// running pass reaches soon and the new pass, starting at from, would not.
-// Caller holds startMu, so no other restart can slip in while this waits.
+// awaitStranded holds a restart while a waiter's segment is near for this pass but not the new one.
 func (s *Session) awaitStranded(from int) {
 	deadline := time.Now().Add(strandedGrace)
 	for time.Now().Before(deadline) {
@@ -774,9 +753,7 @@ func (s *Session) dropWaiter(n int) {
 	s.mu.Unlock()
 }
 
-// shouldRestart is Jellyfin's rule: relaunch for a segment before the current
-// pass or far past the one it is on; anything else the pass will reach. from
-// is the pass start, to the highest finished segment (from-1 before any).
+// shouldRestart is Jellyfin's rule: relaunch for a segment before the pass or far past where it is.
 func shouldRestart(n, from, to int, active bool) bool {
 	switch {
 	case !active:
@@ -811,10 +788,7 @@ func (s *Session) startLocked(from int) error {
 	}
 	s.mu.Unlock()
 
-	// hls.js asks for the resume fragment and segment 0 (its timestamp anchor)
-	// together. Killing the pass one request is about to be served by strands
-	// that waiter on a segment nobody produces, so requests the current pass
-	// reaches soon — and the new pass will not — get a moment to be served.
+	// hls.js asks for the resume point and segment 0 at once; a soon-served waiter gets a moment first.
 	s.awaitStranded(from)
 
 	// The pass just killed was most likely half way through a segment, and a
@@ -860,8 +834,7 @@ func (s *Session) launch(from int) (*run, error) {
 	r := &run{from: from, exited: make(chan struct{}), began: time.Now()}
 	r.cmd = exec.Command(s.ffmpeg, s.args(float64(from)*SegmentSeconds, from)...)
 	r.cmd.Dir = s.dir
-	// Without this an encoder that dies on startup leaves no trace at all, and
-	// the only symptom is segments that never appear.
+	// Or an encoder dying on startup leaves no trace beyond segments that never come.
 	r.cmd.Stderr = &r.stderr
 
 	if err := r.cmd.Start(); err != nil {
@@ -872,9 +845,7 @@ func (s *Session) launch(from int) (*run, error) {
 	return r, nil
 }
 
-// await sees one encoder process out. Clearing s.run lets a waiter tell "still
-// encoding" from "finished". A hardware encoder that dies before writing
-// anything is replaced by software here, under the lock, so no waiter sees the gap.
+// await sees an encoder out, swapping a hardware one that died at once for software under the lock.
 func (s *Session) await(r *run) {
 	err := r.cmd.Wait()
 	close(r.exited)
@@ -908,8 +879,7 @@ func (s *Session) await(r *run) {
 		return
 	}
 
-	previous := s.Plan.VideoCodec
-	s.Plan.VideoCodec, s.encoder, s.fellBack = softwareEncoder, softwareEncoder, true
+	previous := s.switchToSoftware()
 	s.log.Warn("falling back to software encoding", "session", s.ID, "was", previous)
 	if s.onFallback != nil {
 		go s.onFallback(previous)
@@ -924,16 +894,31 @@ func (s *Session) await(r *run) {
 	go s.await(next)
 }
 
-// canFallBack reports a hardware encoder that died at init before writing
-// anything. A source read error exits non-zero the same way but software
-// cannot help, so it must not trigger a fallback.
+// switchToSoftware moves to libx264, dropping the hardware encoder's segments and init, which don't match.
+func (s *Session) switchToSoftware() (previous string) {
+	previous = s.Plan.VideoCodec
+	s.Plan.VideoCodec, s.encoder, s.fellBack = softwareEncoder, softwareEncoder, true
+	if fileReady(s.InitPath()) {
+		s.wipeOutput()
+	}
+	return previous
+}
+
+// wipeOutput removes every segment and the init file.
+func (s *Session) wipeOutput() {
+	for n := 0; n < s.Segments; n++ {
+		os.Remove(s.SegmentPath(n))
+	}
+	os.Remove(s.InitPath())
+}
+
+// canFallBack: a hardware encoder died at init; a source read error looks alike but software can't help.
 func (s *Session) canFallBack(from int, detail string) bool {
 	return !s.fellBack && !s.Plan.VideoCopy && usesHardware(s.Plan.VideoCodec) &&
 		!fileReady(s.SegmentPath(from)) && encoderInitFailed(detail)
 }
 
-// encoderInitFailed spots the stderr of an encoder that could not start on this
-// machine, as opposed to one that ran but lost its input.
+// encoderInitFailed spots an encoder that couldn't start here, not one that lost its input.
 func encoderInitFailed(detail string) bool {
 	d := strings.ToLower(detail)
 	for _, m := range []string{
@@ -948,9 +933,7 @@ func encoderInitFailed(detail string) bool {
 	return false
 }
 
-// dropTail removes the last segment the killed pass wrote. Only the top of the
-// contiguous run from `from` belongs to that pass; a higher number past a gap
-// is from an earlier, complete pass.
+// dropTail removes the killed pass's last segment: the top of the run from `from`, not one past a gap.
 func (s *Session) dropTail(from int) {
 	last := from - 1
 	for n := from; fileReady(s.SegmentPath(n)); n++ {
@@ -976,9 +959,7 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, " | ")
 }
 
-// stop kills the running pass, if any, and reports which segment it had
-// started from. It returns only once the process has gone; until then its
-// segment cannot be removed.
+// stop kills the running pass and returns its start segment, once the process has gone.
 func (s *Session) stop() (head int, killed bool) {
 	s.mu.Lock()
 	r := s.run

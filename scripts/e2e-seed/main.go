@@ -1,6 +1,4 @@
-// Seeds a scratch database for the E2E run with two finished downloads, one
-// cached and one kept, so the Downloads page has both tiers to show without the
-// engine holding anything.
+// Seeds a scratch E2E database with one cached and one kept download, so Downloads shows both tiers.
 package main
 
 import (

@@ -16,8 +16,7 @@ func animeWithCount(t *testing.T, s *Store, id, episodes int) {
 	}
 }
 
-// A show the metadata sources have never heard of still has a known episode
-// count, and used to render as having no episodes at all.
+// A show no metadata source knows still lists its counted episodes.
 func TestEpisodesFallBackToTheCount(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

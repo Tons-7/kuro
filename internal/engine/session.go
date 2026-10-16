@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,8 +17,7 @@ import (
 	"kuro/internal/torrent"
 )
 
-// record is one torrent in session.json; the field names are rqbit's, so its
-// session reads with the same type.
+// record is one torrent in session.json, with rqbit's field names so its session reads too.
 type record struct {
 	InfoHash     string   `json:"info_hash"`
 	Trackers     []string `json:"trackers,omitempty"`
@@ -26,14 +26,15 @@ type record struct {
 	Paused       bool     `json:"is_paused"`
 	// Verify: data came from elsewhere (rqbit), so completion is unknown until hashed.
 	Verify bool `json:"verify,omitempty"`
+	// Top is the file or folder name the data lives under, when not the torrent's own.
+	Top string `json:"top,omitempty"`
 }
 
 type sessionDoc struct {
 	Torrents []record `json:"torrents"`
 }
 
-// saveSession writes the torrent list and any metainfo not yet on disk, so a
-// restart needs nothing from the swarm before resuming.
+// saveSession writes the torrents and missing metainfo, so a restart needs nothing from the swarm.
 func (e *Engine) saveSession() {
 	e.saveMu.Lock()
 	defer e.saveMu.Unlock()
@@ -46,6 +47,11 @@ func (e *Engine) saveSession() {
 	var withInfo []*atorrent.Torrent
 	for _, en := range e.byID {
 		r := record{InfoHash: en.t.InfoHash().HexString(), Trackers: en.trackers, Paused: en.paused, Verify: en.verifying}
+		if info := en.t.Info(); info != nil {
+			if top := e.names.top(info.BestName(), en.t.InfoHash()); top != info.BestName() {
+				r.Top = top
+			}
+		}
 		for i, on := range en.selected {
 			if on {
 				r.OnlyFiles = append(r.OnlyFiles, i)
@@ -94,8 +100,21 @@ func writeMetainfo(path string, mi metainfo.MetaInfo) error {
 	return os.Rename(path+".tmp", path)
 }
 
+// writeAtomic lands the whole file or none: synced before the rename, so a crash cannot truncate the session.
 func writeAtomic(path string, body []byte) error {
-	if err := os.WriteFile(path+".tmp", body, 0o644); err != nil {
+	f, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(path+".tmp", path)
@@ -105,7 +124,9 @@ func writeAtomic(path string, body []byte) error {
 func (e *Engine) restore() error {
 	var imported string
 	doc, err := readSession(e.opts.SessionDir)
-	if errors.Is(err, fs.ErrNotExist) {
+	var broken *json.SyntaxError
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		doc, imported, err = e.importLegacy()
 		if err != nil {
 			return err
@@ -113,7 +134,11 @@ func (e *Engine) restore() error {
 		if imported != "" {
 			e.log.Info("carried over downloads from rqbit", "torrents", len(doc.Torrents), "from", imported)
 		}
-	} else if err != nil {
+	case errors.As(err, &broken) || errors.Is(err, io.ErrUnexpectedEOF):
+		// A damaged list: every torrent whose metainfo is here comes back paused, nothing is dropped.
+		doc = e.rebuildSession()
+		e.log.Warn("torrent session unreadable; rebuilt from the saved torrents", "err", err, "torrents", len(doc.Torrents))
+	case err != nil:
 		return err
 	}
 
@@ -123,6 +148,7 @@ func (e *Engine) restore() error {
 			e.log.Warn("restore torrent: bad info hash", "hash", r.InfoHash, "err", err)
 			continue
 		}
+		e.names.claim(hash, r.Top)
 		var t *atorrent.Torrent
 		path := filepath.Join(e.opts.SessionDir, hash.HexString()+".torrent")
 		if mi, err := metainfo.LoadFromFile(path); err == nil {
@@ -168,8 +194,7 @@ func (e *Engine) restore() error {
 	return nil
 }
 
-// resume applies a restored torrent's selection once its info is known, after
-// hashing data that came from rqbit.
+// resume applies a restored torrent's selection once its info is known and rqbit data hashed.
 func (e *Engine) resume(en *entry) {
 	select {
 	case <-en.t.GotInfo():
@@ -192,6 +217,34 @@ func (e *Engine) resume(en *entry) {
 		e.saveSession()
 	}
 	e.apply(en)
+}
+
+// rebuildSession lists the torrents whose metainfo is on disk, all paused, and moves the unreadable list aside.
+func (e *Engine) rebuildSession() sessionDoc {
+	var doc sessionDoc
+	path := sessionFile(e.opts.SessionDir)
+	os.Rename(path, path+".bad")
+	entries, _ := os.ReadDir(e.opts.SessionDir)
+	for _, d := range entries {
+		name := d.Name()
+		if !strings.HasSuffix(name, ".torrent") {
+			continue
+		}
+		mi, err := metainfo.LoadFromFile(filepath.Join(e.opts.SessionDir, name))
+		if err != nil {
+			continue
+		}
+		info, err := mi.UnmarshalInfo()
+		if err != nil {
+			continue
+		}
+		r := record{InfoHash: mi.HashInfoBytes().HexString(), Paused: true}
+		for i := range info.UpvertedFiles() {
+			r.OnlyFiles = append(r.OnlyFiles, i)
+		}
+		doc.Torrents = append(doc.Torrents, r)
+	}
+	return doc
 }
 
 func readSession(dir string) (sessionDoc, error) {

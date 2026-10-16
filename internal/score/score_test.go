@@ -38,8 +38,7 @@ func TestParseTier(t *testing.T) {
 	}
 }
 
-// Only the components a tier names are required, so a broad tier must not
-// reject a release that happens to specify more.
+// A tier requires only what it names, so a broad tier accepts a release stating more.
 func TestTierMatchesOnSpecifiedFieldsOnly(t *testing.T) {
 	rel := parse.Release{Resolution: "1080p", Source: "BD", Codec: "HEVC", BitDepth: 10}
 
@@ -95,8 +94,7 @@ func TestSeaDexOutweighsTier(t *testing.T) {
 	}
 }
 
-// An indexer that publishes no peer counts must not have its releases read as
-// dead swarms, nor be rewarded as if they were healthy.
+// An indexer without peer counts has releases read as neither dead nor healthy.
 func TestUncountedSwarmIsNeitherRejectedNorRewarded(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -172,8 +170,7 @@ func TestDisqualifiers(t *testing.T) {
 	}
 }
 
-// Blocked releases still have to be listed so the manual picker can offer
-// them; they are only barred from being started automatically.
+// Blocked releases stay listed for the manual picker, barred only from starting automatically.
 func TestBlockedCandidatesAreStillReturned(t *testing.T) {
 	prefs := DefaultPreferences()
 	ranked := Rank([]Candidate{
@@ -216,8 +213,7 @@ func TestSeedersBreakTiesWithoutDominating(t *testing.T) {
 	}
 }
 
-// A release with no source tag matches no ladder tier, but its resolution is
-// still known and must not lose to a fully-tagged lower one.
+// A release with no source tag matches no tier, yet beats a fully tagged lower resolution.
 func TestUnlabelledHighResBeatsLabelledLowRes(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -243,8 +239,7 @@ func TestFullTierBeatsPartialCredit(t *testing.T) {
 	}
 }
 
-// An unlabelled source is worth less than any labelled tier at its resolution:
-// a bare "1080p HEVC" pack must not outrank a 1080p WEB-DL.
+// Unlabelled is worth less than any labelled tier at its resolution: "1080p HEVC" < 1080p WEB-DL.
 func TestUnlabelledSourceSitsUnderEveryTierOfItsResolution(t *testing.T) {
 	prefs := DefaultPreferences()
 	prefs.HardwareTranscode = true
@@ -261,8 +256,7 @@ func TestUnlabelledSourceSitsUnderEveryTierOfItsResolution(t *testing.T) {
 	}
 }
 
-// 2160p anime is nearly always an upscale of a 1080p master, so a resolution
-// absent from the ladder must not outrank one that is on it.
+// 2160p anime is nearly always upscaled, so a resolution off the ladder can't outrank one on it.
 func TestResolutionRankFollowsTheLadder(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -409,9 +403,7 @@ func containsReason(reasons []string, substr string) bool {
 	return false
 }
 
-// The friend's bug: on a machine that must software-transcode, a well-formed
-// HEVC 10-bit release stalls on seeks, so a directly-playable H.264 of the same
-// resolution is preferred — but a lower resolution never wins on playability.
+// Without a hardware encoder, H.264 beats HEVC at one resolution; a lower resolution never wins on it.
 func TestPlayabilityBreaksTiesWithinAResolution(t *testing.T) {
 	software := DefaultPreferences() // HardwareTranscode defaults false
 	hardware := DefaultPreferences()
@@ -421,8 +413,7 @@ func TestPlayabilityBreaksTiesWithinAResolution(t *testing.T) {
 	hevc := candidate("[G] Show - 01 [BD 1080p HEVC 10bit FLAC].mkv", 400, 1<<30)
 	lower := candidate("[G] Show - 01 [720p][WEB-DL].mkv", 900, 500<<20)
 
-	// No hardware: the playable 1080p H.264 wins its resolution despite the HEVC
-	// being Blu-ray and better seeded.
+	// No hardware: playable 1080p H.264 beats a better-seeded Blu-ray HEVC.
 	if top := Rank([]Candidate{hevc, h264}, software)[0]; top.Release.Codec == "HEVC" {
 		t.Errorf("software machine chose the stall-prone HEVC over a playable H.264")
 	}

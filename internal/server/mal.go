@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"kuro/internal/library"
 	"kuro/internal/mal"
 )
 
@@ -97,6 +98,8 @@ func (s *Server) saveMALToken(ctx context.Context, t mal.Token, name string) err
 		"mal.token":         t.Access,
 		"mal.refresh.token": t.Refresh,
 		"mal.expires_at":    strconv.FormatInt(t.Expires.Unix(), 10),
+		// A new login is the reconnect the flag asked for.
+		library.MALAuthErrorSetting: "",
 	}
 	if name != "" {
 		values["mal.user_name"] = name
@@ -107,24 +110,30 @@ func (s *Server) saveMALToken(ctx context.Context, t mal.Token, name string) err
 // malLogout forgets the account, leaving the client credentials so it can
 // reconnect. MAL has no revocation endpoint, so the grant remains until removed.
 func (s *Server) malLogout(w http.ResponseWriter, r *http.Request) {
-	err := s.store.SetSettings(r.Context(), map[string]string{
-		"mal.token":          "",
-		"mal.refresh.token":  "",
-		"mal.expires_at":     "",
-		"mal.user_name":      "",
-		"mal.state":          "",
-		"mal.verifier.token": "",
-	})
-	if err == nil {
-		err = s.store.ForgetPushed(r.Context(), "mal")
+	clear := func() error {
+		err := s.store.SetSettings(r.Context(), map[string]string{
+			"mal.token":                 "",
+			"mal.refresh.token":         "",
+			"mal.expires_at":            "",
+			"mal.user_name":             "",
+			"mal.state":                 "",
+			"mal.verifier.token":        "",
+			library.MALAuthErrorSetting: "",
+		})
+		if err == nil {
+			err = s.store.ForgetPushed(r.Context(), "mal")
+		}
+		return err
+	}
+	var err error
+	if s.mal != nil {
+		err = s.mal.Forget(clear)
+	} else {
+		err = clear()
 	}
 	if err != nil {
 		s.fail(w, "myanimelist logout", err)
 		return
-	}
-
-	if s.mal != nil {
-		s.mal.SetToken(mal.Token{})
 	}
 
 	s.log.Info("myanimelist disconnected")

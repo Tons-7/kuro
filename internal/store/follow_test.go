@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// The same episode is subbed by a dozen groups. Announcing each one is the
-// same news repeated, which is what made notifications unusable.
+// A dozen groups sub the same episode; it is announced once, not per group.
 func TestNotifiedOncePerEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

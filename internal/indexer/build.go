@@ -12,8 +12,7 @@ const (
 	KindTokyoTosho = "tokyotosho"
 )
 
-// Build makes a source for one configured site. An adult Nyaa-style site uses
-// the sister site's category numbering.
+// Build makes a source for a configured site; an adult Nyaa-style one uses the sister site's categories.
 func Build(kind, base string, adult bool) (Source, error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Scheme == "" || u.Host == "" {

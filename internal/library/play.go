@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -46,8 +45,7 @@ type Playback struct {
 	cacheDir  string
 	log       *slog.Logger
 
-	// mpv has one event channel, so a tracker left over from the previous
-	// episode would consume this one's events under the old number.
+	// mpv has one event channel, so a leftover tracker would take this episode's events.
 	trackGen atomic.Uint64
 
 	// Downloads paused by yield, and Starts still in flight.
@@ -168,7 +166,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 	p.SetStage(req.AnimeID, req.Episode, Stage{Step: "search"})
 	defer p.ClearStage(req.AnimeID, req.Episode)
 
-	p.yield(ctx, req.AnimeID, req.Episode)
+	// Counted before yielding, or a stream closing meanwhile would resume what was just paused.
 	p.yieldMu.Lock()
 	p.starting++
 	p.yieldMu.Unlock()
@@ -181,6 +179,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 			p.resumeYielded(context.WithoutCancel(ctx))
 		}
 	}()
+	p.yield(ctx, req.AnimeID, req.Episode)
 
 	// The series page pre-resolves this episode, so play can arrive mid-resolve.
 	// Waiting beats repeating the search and avoids picking a different release.
@@ -188,8 +187,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 		p.prefetch.AwaitPrepare(ctx, req.AnimeID, req.Episode)
 	}
 
-	// Already downloading or downloaded: the release is known, so searching
-	// every indexer again answers a question already on disk.
+	// Already fetching or fetched: the release is known, so no search.
 	if req.InfoHash == "" {
 		if session, ok, err := p.reattach(ctx, req); err != nil {
 			return nil, err
@@ -261,13 +259,8 @@ func (p *Playback) prefetchAfter(req PlayRequest) {
 // startLocal plays a scanned file. It reports false rather than an error when
 // there is nothing on disk, so the caller falls through to torrents.
 func (p *Playback) startLocal(ctx context.Context, req PlayRequest) (*Session, bool, error) {
-	f, err := p.store.LocalEpisode(ctx, req.AnimeID, req.Episode)
-	if err != nil || f.ID == 0 {
-		return nil, false, nil
-	}
-	if _, err := os.Stat(f.Path); err != nil {
-		// Recorded but gone: the next scan will mark it missing.
-		p.log.Warn("local file unreadable, falling back to torrent", "path", f.Path, "err", err)
+	f, ok := localCopy(ctx, p.store, p.log, req.AnimeID, req.Episode)
+	if !ok {
 		return nil, false, nil
 	}
 
@@ -319,8 +312,7 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 		return nil, false, nil
 	}
 
-	// Ids are per engine session, so the recorded one may now name a different
-	// torrent; the hash is what identifies it.
+	// Ids are per engine session, so the hash identifies the torrent.
 	live, err := p.torrent.Live(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("list downloads: %w", err)
@@ -384,8 +376,7 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 var peerProbeDeadline = 8 * time.Second
 
 const (
-	// Hashing carried-over data is disk work, not swarm work; its own allowance
-	// so a held release isn't judged dead.
+	// Hashing is disk work, with its own allowance, so a held release isn't judged dead.
 	engineReadyDeadline = 4 * time.Minute
 )
 
@@ -407,9 +398,7 @@ func (p *Playback) warmed(ctx context.Context, id, fileIndex int, waiting func(p
 		return err
 	}
 
-	// Only the head — waiting on the end-of-file seek index too left ready episodes
-	// spinning. A short first look, since a dead release looks slow until peers are
-	// counted.
+	// Only the head, briefly: the seek index left ready episodes spinning, and a dead release looks slow.
 	warm, cancel := context.WithTimeout(ctx, peerProbeDeadline)
 	err := p.torrent.PrewarmHead(warm, id, fileIndex, 2<<20)
 	cancel()
@@ -422,8 +411,7 @@ func (p *Playback) warmed(ctx context.Context, id, fileIndex int, waiting func(p
 		return err
 	}
 
-	// Nothing downloaded and no peers: the tracker's seeder count was wrong, and
-	// the time belongs to the next candidate.
+	// Nothing and no peers: the seeder count lied, and the time goes to the next candidate.
 	if !picked && stats.Received() == 0 && stats.Peers() == 0 {
 		return fmt.Errorf("no peers after %s", peerProbeDeadline)
 	}
@@ -437,8 +425,7 @@ func (p *Playback) warmed(ctx context.Context, id, fileIndex int, waiting func(p
 	return p.awaitHead(ctx, id, fileIndex, stats.Received(), waiting, stall)
 }
 
-// On a slow line one piece can take minutes, so the head waits while bytes
-// keep arriving, up to a cap. Vars for tests.
+// A piece can take minutes on a slow line, so the head waits while bytes arrive, to a cap.
 var (
 	headPoll  = 3 * time.Second
 	headStall = 45 * time.Second
@@ -511,8 +498,7 @@ func (p *Playback) inspectAhead(ctx context.Context, picked bool, candidates []s
 	return pending
 }
 
-// awaitInspect takes the lookup already in flight, or runs one for a candidate
-// too far down the list to have been prefetched.
+// awaitInspect takes the lookup in flight, or runs one for a candidate too far down to be prefetched.
 func (p *Playback) awaitInspect(
 	ctx context.Context, pending []chan inspection, i int, picked bool, magnet string,
 ) (*torrent.Torrent, error) {
@@ -532,13 +518,11 @@ func (p *Playback) awaitInspect(
 func (p *Playback) attach(ctx context.Context, req PlayRequest) (
 	score.Result, *torrent.Torrent, *torrent.Torrent, torrent.File, int, error,
 ) {
-	// A release resolved while the series page was open skips the indexer search,
-	// the slow part; a full search still follows if it is gone or does not seed.
-	// Not over a release picked by hand, or one this attempt's choices rule out.
+	// A prepared release skips the slow search (not over a hand pick); a full search follows if it fails.
 	var failed string
-	if p.prefetch != nil {
+	if p.prefetch != nil && req.InfoHash == "" {
 		if rel, ok := p.prefetch.TakePrepared(req.AnimeID, req.Episode); ok &&
-			req.InfoHash == "" && !req.ruledOut(rel.Torrent.Title, rel.Torrent.Title) {
+			!req.ruledOut(rel.Torrent.Title, rel.Torrent.Title) {
 			if r, a, l, f, fi, err := p.attachFrom(ctx, req, []score.Result{rel}); err == nil {
 				return r, a, l, f, fi, nil
 			}
@@ -604,6 +588,8 @@ func (p *Playback) race(
 
 	results := make(chan attempt)
 	slots := make(chan struct{}, raceWidth)
+	// A candidate failing at once (a dead magnet, the episode not in the pack) starts the next without the stagger.
+	failed := make(chan struct{}, n)
 	go func() {
 		for i := range n {
 			select {
@@ -614,6 +600,9 @@ func (p *Playback) race(
 			go func(i int) {
 				defer func() { <-slots }()
 				a := p.tryCandidate(raceCtx, req, candidates[i], pending, held, i)
+				if a.err != nil {
+					failed <- struct{}{}
+				}
 				select {
 				case results <- a:
 				case <-raceCtx.Done():
@@ -626,6 +615,7 @@ func (p *Playback) race(
 			select {
 			case <-raceCtx.Done():
 				return
+			case <-failed:
 			case <-time.After(stagger):
 			}
 		}
@@ -657,6 +647,8 @@ func (p *Playback) race(
 			}
 			continue
 		case <-ctx.Done():
+			// Whatever already warmed is nobody's now.
+			go p.discardLosers(ctx, outcomes, -1)
 			return zero, nil, nil, torrent.File{}, 0, ctx.Err()
 		}
 		outcomes[a.index] = &a
@@ -665,8 +657,7 @@ func (p *Playback) race(
 		} else if patience == nil {
 			patience = time.After(racePatience)
 		}
-		// The first success whose better-ranked rivals have all resolved; a nil
-		// ahead of it means a better one is still racing.
+		// The first success with every better-ranked rival resolved; a nil ahead is still racing.
 		for i := range n {
 			if outcomes[i] == nil {
 				break
@@ -757,9 +748,7 @@ func (p *Playback) tryCandidate(
 	}
 }
 
-// Suspend stops fetching an episode nobody is watching; without it the engine
-// pulls the whole file long after the viewer left. The caller checks nothing
-// else (a season pack) still needs the torrent.
+// Suspend stops fetching an episode nobody watches; the caller checks no pack still needs the torrent.
 func (p *Playback) Suspend(ctx context.Context, animeID, episode int) {
 	if p.torrent == nil || animeID == 0 || episode <= 0 {
 		return
@@ -846,8 +835,7 @@ func (p *Playback) yield(ctx context.Context, animeID, episode int) {
 	p.yieldMu.Unlock()
 }
 
-// yieldWanted: not under "continue", and not for an episode already whole on disk, which has nothing
-// to gain from the line.
+// yieldWanted: not under "continue", nor for an episode already whole on disk.
 func (p *Playback) yieldWanted(ctx context.Context, animeID, episode int) bool {
 	if prefs, err := p.store.Prefs(ctx, 0); err == nil && prefs.String("downloads.while_watching") == "continue" {
 		return false
@@ -859,8 +847,7 @@ func (p *Playback) yieldWanted(ctx context.Context, animeID, episode int) bool {
 	return !p.store.FileComplete(ctx, hash, index) && !(p.cache != nil && p.cache.Finished(ctx, hash))
 }
 
-// resumeYielded restarts what yield paused, once no episode is playing (pinned)
-// or starting: those still want the line.
+// resumeYielded restarts what yield paused once no episode is playing or starting.
 func (p *Playback) resumeYielded(ctx context.Context) {
 	p.yieldMu.Lock()
 	busy := p.starting > 0
@@ -921,15 +908,7 @@ func discardUnclaimed(ctx context.Context, st *store.Store, tc *torrent.Client, 
 func (p *Playback) candidates(ctx context.Context, req PlayRequest) ([]score.Result, error) {
 	req.Prefs.AllowRaw = req.AllowRaw
 
-	// Bounded: a throttled AniList must not hold up every play.
-	if p.relations != nil {
-		named, cancel := context.WithTimeout(ctx, relationsDeadline)
-		if err := p.relations.Ensure(named, req.AnimeID); err != nil {
-			p.log.Warn("franchise for matching", "anime", req.AnimeID, "err", err)
-		}
-		cancel()
-	}
-
+	// Find learns the franchise itself; asking here too cost a second wait on a throttled AniList.
 	found, err := p.finder.Find(ctx, Request{
 		AnimeID: req.AnimeID,
 		Episode: req.Episode,
@@ -955,8 +934,7 @@ func (p *Playback) candidates(ctx context.Context, req PlayRequest) ([]score.Res
 		return nil, noRelease(found, req, aired, airsAt)
 	}
 
-	// The best release first, then the rest as fallbacks, capped so a show
-	// with no live seeders anywhere fails in a reasonable time.
+	// The best release, then capped fallbacks, so a show with no seeders fails in good time.
 	out := []score.Result{*found.Best}
 	for _, r := range found.Results {
 		if len(out) >= maxAttempts {
@@ -979,8 +957,7 @@ type NoRelease struct {
 	Found    int
 	RawOnly  bool
 	RawTitle string
-	// Unaired is set when the catalogue puts this episode in the future; AirsAt
-	// is that broadcast time, zero when unknown.
+	// Unaired: the catalogue puts it in the future, at AirsAt (zero when unknown).
 	Unaired bool
 	AirsAt  int64
 	message string
@@ -998,11 +975,11 @@ func airsIn(at int64) string {
 	case d <= 0:
 		return ""
 	case d < time.Hour:
-		return fmt.Sprintf(" — it airs in %d minutes", int(d.Minutes()))
+		return fmt.Sprintf("; it airs in %d minutes", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf(" — it airs in %d hours", int(d.Hours()))
+		return fmt.Sprintf("; it airs in %d hours", int(d.Hours()))
 	}
-	return fmt.Sprintf(" — it airs in %d days", int(d.Hours()/24))
+	return fmt.Sprintf("; it airs in %d days", int(d.Hours()/24))
 }
 
 func noRelease(found Candidates, req PlayRequest, aired bool, airsAt int64) error {
@@ -1027,15 +1004,15 @@ func noRelease(found Candidates, req PlayRequest, aired bool, airsAt int64) erro
 		out.message = fmt.Sprintf("episode %d has not aired yet%s", req.Episode, airsIn(airsAt))
 	case out.RawOnly:
 		out.message = fmt.Sprintf(
-			"episode %d is out as a raw broadcast, but no subtitled release yet — "+
+			"episode %d is out as a raw broadcast, but no subtitled release yet; "+
 				"subs usually follow within a few hours", req.Episode)
 	case out.Found == 0:
 		out.message = fmt.Sprintf(
-			"no release found for episode %d — the search covered %d title variant(s)",
+			"no release found for episode %d (the search covered %d title variant(s))",
 			req.Episode, out.Queries)
 	default:
 		out.message = fmt.Sprintf(
-			"found %d release(s) for episode %d, but none met your quality or audio preferences — "+
+			"found %d release(s) for episode %d, but none met your quality or audio preferences: "+
 				"pick one manually or relax the settings", out.Found, req.Episode)
 	}
 	return out
@@ -1049,8 +1026,7 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		Audio:        req.Prefs.Audio,
 		SubLanguages: req.Prefs.SubLanguages,
 	}
-	// mpv can open the file directly; going back out through HTTP would add a
-	// loopback copy of every byte for no benefit.
+	// mpv opens the file directly, sparing a loopback copy of every byte.
 	if s.LocalPath != "" {
 		opts.URL = s.LocalPath
 	}
@@ -1088,11 +1064,13 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 	if pl == nil {
 		return fmt.Errorf("no desktop player")
 	}
+	// Before Play: it ends the previous mpv, whose tracker must not unpin the episode starting now.
+	gen := p.trackGen.Add(1)
 	if err := pl.Play(ctx, opts); err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 	s.Player = name
-	go p.track(pl, req.AnimeID, req.Episode, req.Season, p.trackGen.Add(1))
+	go p.track(pl, req.AnimeID, req.Episode, req.Season, gen)
 	return nil
 }
 
@@ -1160,8 +1138,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 	const maxStep = 5.0
 
 	for ev := range pl.Events() {
-		// A newer episode owns the player now; this one must not write its
-		// positions under the previous episode's number.
+		// A newer episode owns the player; this one must not write positions under the old number.
 		if p.trackGen.Load() != gen {
 			return
 		}
@@ -1192,8 +1169,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 			if ev.Position == 0 {
 				ev.Position = lastPos
 			}
-			// The end was reached; whether enough of it played is still the
-			// store's call, or a seek to the credits would count as watched.
+			// The end was reached; the store decides if enough played, or a seek to the credits counts.
 			if ev.Reason == "eof" && lastDur > 0 {
 				ev.Position, ev.Duration = lastDur, lastDur
 			}
@@ -1211,10 +1187,12 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 			if !reported && !positioned && ev.Reason == "eof" {
 				p.watched(animeID, episode)
 			}
-			p.unpin(animeID, episode)
+			// The player closing is the stream closing: unpinned, paused per the prefs, and what yielded resumes.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			p.Suspend(ctx, animeID, episode)
+			cancel()
 
-			// Only a natural end advances. Closing the window is a decision
-			// to stop, and starting the next episode would ignore it.
+			// Only a natural end advances: closing the window is a decision to stop.
 			if ev.Kind == player.EventEnd && ev.Reason == "eof" {
 				p.advance(animeID, episode, season)
 			}
@@ -1223,8 +1201,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 	}
 }
 
-// advance plays the next episode when one exists. The prefetcher has usually
-// already pulled it, so this starts almost immediately.
+// advance plays the next episode, if any, usually already prefetched so it starts at once.
 func (p *Playback) advance(animeID, episode, season int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

@@ -92,8 +92,7 @@ func TestMALPullWhenNotConnectedIsANoOp(t *testing.T) {
 	}
 }
 
-// First connection with a local list already ahead of MAL: the site's state
-// is recorded, not applied, and the next push corrects MAL.
+// Connecting with a list ahead of MAL records the site's state, not applies it; the push corrects MAL.
 func TestMALPullSeedsWithoutApplyingWhenLocalExists(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},

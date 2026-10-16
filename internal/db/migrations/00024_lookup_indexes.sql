@@ -2,8 +2,7 @@
 -- The library's default sort, which otherwise builds a temp b-tree per page.
 CREATE INDEX IF NOT EXISTS list_entry_updated ON list_entry(local_updated_at);
 
--- An import resolves every entry by MAL id, and titles never imported into
--- anime fall through to the corpus, which had no index for it.
+-- An import resolves every entry by MAL id, falling through to the corpus, which lacked an index.
 CREATE INDEX IF NOT EXISTS corpus_mal ON corpus_anime(mal_id) WHERE mal_id IS NOT NULL;
 
 -- Checked once per release the watcher inspects, on a table that only grows.

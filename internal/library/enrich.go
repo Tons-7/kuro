@@ -14,8 +14,7 @@ import (
 	"kuro/internal/store"
 )
 
-// Enricher fills in what AniList does not carry: per-episode titles and
-// stills, filler classification, and opening/ending timestamps.
+// Enricher fills in what AniList lacks: episode titles and stills, filler flags, op/ed times.
 type Enricher struct {
 	store *store.Store
 	meta  *metadata.Client
@@ -24,6 +23,7 @@ type Enricher struct {
 
 	mu       sync.Mutex
 	fetching map[int]struct{}
+	stilling map[int]struct{}
 	cast     map[int]castEntry
 	extra    map[int]extraEntry
 	// One page lists every show the filler site covers, so it is worth keeping.
@@ -35,6 +35,7 @@ func NewEnricher(s *store.Store, m *metadata.Client, log *slog.Logger) *Enricher
 	return &Enricher{
 		store: s, meta: m, log: log,
 		fetching: map[int]struct{}{},
+		stilling: map[int]struct{}{},
 		cast:     map[int]castEntry{},
 		extra:    map[int]extraEntry{},
 	}
@@ -47,14 +48,37 @@ func (e *Enricher) WithAniList(c *anilist.Client) *Enricher {
 	return e
 }
 
-// Anime reads a MyAnimeList record: anime AniList never catalogued have no
-// other source of cover art or a synopsis.
+// Anime reads a MAL record, the only cover and synopsis for anime AniList never catalogued.
 func (e *Enricher) Anime(ctx context.Context, malID int) (metadata.AnimeDetail, error) {
 	return e.meta.Anime(ctx, malID)
 }
 
 // A cast never changes after airing, so don't ask twice for the same show.
 const castTTL = 12 * time.Hour
+
+// An answer missing its staff half is asked for again this soon, not after castTTL.
+const partialTTL = 10 * time.Minute
+
+// How many shows each cache holds; a tray app open for days would otherwise keep every page ever opened.
+const cacheShows = 200
+
+// prune drops expired entries and, past cacheShows, the oldest, making room for one more. Called under e.mu.
+func prune[T any](m map[int]T, at func(T) time.Time, ttl time.Duration) {
+	for id, v := range m {
+		if time.Since(at(v)) >= ttl {
+			delete(m, id)
+		}
+	}
+	for len(m) >= cacheShows {
+		oldest, first := 0, true
+		for id, v := range m {
+			if first || at(v).Before(at(m[oldest])) {
+				oldest, first = id, false
+			}
+		}
+		delete(m, oldest)
+	}
+}
 
 type castEntry struct {
 	cast []metadata.Character
@@ -66,11 +90,18 @@ type extraEntry struct {
 	at    time.Time
 }
 
+func (x extraEntry) fresh() bool {
+	if x.extra.StaffMissing {
+		return time.Since(x.at) < partialTTL
+	}
+	return time.Since(x.at) < castTTL
+}
+
 // Extra resolves a show's themes, key staff and trailer. Cached like the cast:
 // keyed by AniList id, resolved via MyAnimeList, kept since it never changes.
 func (e *Enricher) Extra(ctx context.Context, animeID int) (metadata.Extra, error) {
 	e.mu.Lock()
-	if hit, ok := e.extra[animeID]; ok && time.Since(hit.at) < castTTL {
+	if hit, ok := e.extra[animeID]; ok && hit.fresh() {
 		e.mu.Unlock()
 		return hit.extra, nil
 	}
@@ -86,14 +117,17 @@ func (e *Enricher) Extra(ctx context.Context, animeID int) (metadata.Extra, erro
 		return metadata.Extra{}, err
 	}
 
+	if extra.StaffMissing {
+		e.log.Warn("show staff unavailable", "anime", animeID)
+	}
 	e.mu.Lock()
+	prune(e.extra, func(x extraEntry) time.Time { return x.at }, castTTL)
 	e.extra[animeID] = extraEntry{extra: extra, at: time.Now()}
 	e.mu.Unlock()
 	return extra, nil
 }
 
-// Characters resolves the show's cast. The id is AniList's; the upstream is keyed
-// by MyAnimeList, so it needs the mapping first.
+// Characters resolves the cast, mapping the AniList id to the MAL id upstream keys on.
 func (e *Enricher) Characters(ctx context.Context, animeID int) ([]metadata.Character, error) {
 	e.mu.Lock()
 	if hit, ok := e.cast[animeID]; ok && time.Since(hit.at) < castTTL {
@@ -113,13 +147,13 @@ func (e *Enricher) Characters(ctx context.Context, animeID int) ([]metadata.Char
 	}
 
 	e.mu.Lock()
+	prune(e.cast, func(c castEntry) time.Time { return c.at }, castTTL)
 	e.cast[animeID] = castEntry{cast: cast, at: time.Now()}
 	e.mu.Unlock()
 	return cast, nil
 }
 
-// Only the ani.zip fetch is synchronous. Recap markers need a paginated crawl
-// of up to twenty requests, which must never sit in front of a page load.
+// Only the ani.zip fetch is synchronous; stills and recap markers arrive on the next load.
 func (e *Enricher) Episodes(ctx context.Context, animeID int) (int, error) {
 	var saved int
 
@@ -136,7 +170,7 @@ func (e *Enricher) Episodes(ctx context.Context, animeID int) (int, error) {
 				return 0, err
 			}
 		}
-		e.fillStills(ctx, animeID)
+		e.stillsAsync(animeID)
 
 		// Recorded even on an empty result, else an unknown show refetches every load.
 		if err := e.store.MarkEpisodesFetched(ctx, animeID, saved); err != nil {
@@ -148,9 +182,33 @@ func (e *Enricher) Episodes(ctx context.Context, animeID int) (int, error) {
 	return saved, nil
 }
 
-// Streaming listings label episodes "Episode 4 - The Perfect Crimson", and a
-// few sites use the Japanese counter instead.
+// Streaming listings label episodes "Episode 4 - The Perfect Crimson", or with the Japanese counter.
 var episodeLabel = regexp.MustCompile(`(?i)(?:episode|ep\.?|第)\s*0*(\d+)`)
+
+// stillsAsync runs fillStills off the request, once per show at a time.
+func (e *Enricher) stillsAsync(animeID int) {
+	if e.ani == nil {
+		return
+	}
+	e.mu.Lock()
+	if _, busy := e.stilling[animeID]; busy {
+		e.mu.Unlock()
+		return
+	}
+	e.stilling[animeID] = struct{}{}
+	e.mu.Unlock()
+
+	go func() {
+		defer func() {
+			e.mu.Lock()
+			delete(e.stilling, animeID)
+			e.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		e.fillStills(ctx, animeID)
+	}()
+}
 
 // fillStills covers the gap between an episode airing and TheTVDB having a frame from it.
 func (e *Enricher) fillStills(ctx context.Context, animeID int) {
@@ -224,8 +282,7 @@ func (e *Enricher) flagsAsync(animeID int) {
 	}()
 }
 
-// Recorded whatever the outcome: a show with no flags returns nothing, and
-// without a marker every page load would restart the crawl.
+// Recorded whatever the outcome, or a show with no flags restarts the crawl on every page load.
 func (e *Enricher) flags(ctx context.Context, animeID, malID int) {
 	if e.store.FlagsFetched(ctx, malID) {
 		return
@@ -350,8 +407,7 @@ func (e *Enricher) fillerSlug(ctx context.Context, titles []string) string {
 	return ""
 }
 
-// Skips are per episode and only useful just before playback, so they are
-// fetched on demand rather than crawled.
+// Skips are per episode and needed only before playback, so fetched on demand, not crawled.
 func (e *Enricher) Skips(ctx context.Context, animeID, episode int, durationSeconds int) error {
 	malID, err := e.store.MalID(ctx, animeID)
 	if err != nil || malID == 0 {
@@ -378,8 +434,7 @@ const (
 	episodeRefresh = 6 * time.Hour
 )
 
-// SeaDex is human-curated and changes slowly, so the whole database is
-// mirrored on a timer and every lookup afterwards is local.
+// SeaDex changes slowly, so the whole database is mirrored on a timer and looked up locally.
 func (e *Enricher) SeaDex(ctx context.Context, force bool) (int, error) {
 	if !force {
 		at, err := e.store.SourceRefreshedAt(ctx, "seadex")

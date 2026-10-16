@@ -1,5 +1,4 @@
-// Entering and leaving fullscreen keeps the picture: exiting once showed a
-// black screen while the episode kept playing.
+// Entering and leaving fullscreen keeps the picture, not a black screen over a playing episode.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 

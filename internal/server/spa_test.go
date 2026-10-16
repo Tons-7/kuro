@@ -38,8 +38,7 @@ func TestSPAServesIndexForClientRoutes(t *testing.T) {
 	}
 }
 
-// A missing asset used to answer with index.html. A module worker handed HTML
-// fails to parse, which silently disabled subtitle rendering.
+// A missing asset 404s, not index.html, which a module worker fails to parse.
 func TestSPAMissingAssetIsNotFound(t *testing.T) {
 	h := spa(spaFS())
 
@@ -82,8 +81,7 @@ func TestAPIPathsNeverFallThroughToTheApp(t *testing.T) {
 	}
 }
 
-// Both providers redirect into the app after signing in. A catch-all that
-// swallowed either would break the connection silently.
+// Both providers' sign-in redirects reach the app, not the catch-all.
 func TestCallbackRoutesAreNotSwallowedByTheApp(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 

@@ -1,16 +1,9 @@
-// Package parse turns an anime release filename into structured fields.
-//
-// Release names follow fansub convention rather than any standard, so this is
-// pattern matching against the shapes that actually occur on public trackers:
-//
-//	[SubsPlease] Sousou no Frieren - 10 (1080p) [7D35515E].mkv
-//	[Erai-raws] Show - 07 [1080p HIDIVE WEB-DL AVC AAC][ABCD1234]
-//	Show - S01E01 (BD Remux 1080p AVC FLAC) [Dual Audio] [PMR].mkv
-//	[SubsPlease] Show (01-12) [Batch]
+// Package parse reads release filenames by fansub convention: "[SubsPlease] Frieren - 10 (1080p) [7D35515E].mkv".
 package parse
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -35,8 +28,7 @@ type Release struct {
 	BitDepth   int
 	Audio      []string
 	DualAudio  bool
-	// Subtitles are the languages the name claims, which is all there is to go
-	// on before downloading. Empty means unlabelled, not absent.
+	// Subtitles are the languages the name claims; empty means unlabelled, not absent.
 	Subtitles []string
 	HardSub   bool
 	Batch     bool
@@ -52,10 +44,13 @@ var (
 	// Also glued to the source: "BD1080p", "WEB_1080p".
 	resolution = regexp.MustCompile(`(?i)(?:\b|_|BD|WEB|DVD|HDTV|Rip)(\d{3,4})[pi]\b|\b(\d{3,4})x(\d{3,4})\b`)
 	seasonEp   = regexp.MustCompile(`(?i)\bS(\d{1,2})\s*E(\d{1,4})\b`)
-	dashEp     = regexp.MustCompile(`(?:^|\s)-\s*(\d{1,4})(?:v(\d))?(?:\s|$)`)
-	rangeEp    = regexp.MustCompile(`(?:^|[\s\(\[])(\d{1,4})\s*[-~]\s*(\d{1,4})(?:[\s\)\]]|$)`)
-	// "E06", "EP06", "Ep. 6": S01E06 without the season. The leading boundary
-	// keeps it out of checksums and codec names.
+	// "S01E01-E12", "S01E01-12": a pack spelled as a span of the marked form.
+	seasonEpSpan = regexp.MustCompile(`(?i)\bS(\d{1,2})\s*E(\d{1,4})\s*[-~]\s*(?:S\d{1,2})?E?(\d{1,4})\b`)
+	// "[05]", "[05v2]": a number alone in its own bracket, as Chinese groups write the episode.
+	bracketEp = regexp.MustCompile(`\[(\d{1,4})(?:v(\d))?\]`)
+	dashEp    = regexp.MustCompile(`(?:^|\s)-\s*(\d{1,4})(?:v(\d))?(?:\s|$)`)
+	rangeEp   = regexp.MustCompile(`(?:^|[\s\(\[])(\d{1,4})\s*[-~]\s*(\d{1,4})(?:[\s\)\]]|$)`)
+	// "E06", "EP06", "Ep. 6"; the leading boundary keeps it out of checksums and codecs.
 	markedEp = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(])E(?:P|PISODE)?\.?\s*(\d{1,4})(?:v(\d))?\b`)
 	// The same form listed rather than ranged: "[E41 E42 E43]".
 	listedEp = regexp.MustCompile(`(?i)\bE(\d{1,4})(?:[\s,]+E(\d{1,4}))+\b`)
@@ -69,9 +64,8 @@ var (
 	metaTokens = `\d{3,4}[pi]|BD|BDRip|BDMV|Blu-?ray|Remux|WEB-?DL|WEB-?Rip|WEB|HDTV|TVRip|DVD|DVDRip|CR|HIDIVE|AMZN|NF|Baha|Funi|x26[45]|H\.?26[45]|HEVC|AVC|AV1|VP9|MPEG-?2|AAC|FLAC|Opus|E?-?AC-?3|DDP?|DTS|TrueHD|Dual|Multi|10-?bits?|8-?bits?|Hi10P|Complete|Batch`
 	metaStart  = regexp.MustCompile(`(?i)[\s._]+\b(` + metaTokens + `)\b`)
 
-	// "Show 08 1080p": a bare number counts only against the quality run, and
-	// needs a word before it, or a show named 86 is episode 86.
-	bareEp = regexp.MustCompile(`(?i)(?:^|[\s._])(\d{2,3})(?:v(\d))?[\s._]+\[?(` + metaTokens + `)\b`)
+	// A bare number counts before the quality run, after a word, and before a bracket only with two digits.
+	bareEp = regexp.MustCompile(`(?i)(?:^|[\s._])(?:(\d{2,3})(?:v(\d))?[\s._]+|(\d{2})(?:v(\d))?[\s._]*\[)(` + metaTokens + `)\b`)
 
 	dotSeparated = regexp.MustCompile(`[._]`)
 
@@ -111,8 +105,7 @@ var codecs = table(
 	`\bvp9\b`, "VP9",
 )
 
-// Channel counts are commonly glued on ("AAC2.0", "EAC3 5.1"), so the trailing
-// word boundary has to allow digits.
+// Channel counts are often glued on ("AAC2.0"), so the trailing boundary allows digits.
 var audioCodecs = table(
 	`\be-?ac-?3\b|\bddp\b|dolby\s*digital\s*plus`, "EAC3",
 	`\bac-?3\b`, "AC3",
@@ -215,8 +208,8 @@ func detectGroup(work string) string {
 	}
 
 	tokens := bracketed.FindAllStringSubmatch(work, -1)
-	for i := len(tokens) - 1; i >= 0; i-- {
-		field := strings.TrimSpace(tokens[i][1])
+	for _, token := range slices.Backward(tokens) {
+		field := strings.TrimSpace(token[1])
 		if field == "" || len(field) > 20 || strings.ContainsAny(field, " .") {
 			continue
 		}
@@ -228,8 +221,7 @@ func detectGroup(work string) string {
 	return ""
 }
 
-// The resolution token 1920x1080 can look like a checksum once brackets are
-// stripped, so exclude anything that parses as a resolution.
+// Unbracketed, 1920x1080 can pass for a checksum, so anything parsing as a resolution is excluded.
 func isResolution(s string) bool {
 	return resolution.MatchString(s)
 }
@@ -260,8 +252,7 @@ func isBatch(lower string) bool {
 
 var romanParts = map[string]int{"I": 1, "II": 2, "III": 3, "IV": 4}
 
-// PartOf reads the cour out of a catalogue title, the same way it is read out
-// of a release name, so the two can be compared.
+// PartOf reads a catalogue title's cour as a release name's is read, so the two compare.
 func PartOf(title string) int { return partNumber(title) }
 
 // SeasonOf reads the season out of a show's own title — "Frieren 2nd Season"
@@ -276,9 +267,7 @@ var (
 	romanSeasons    = map[string]int{"II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10}
 )
 
-// NumeralSeason reads a sequel's number off the end of its title, before any
-// subtitle: "Overlord IV", "Mushoku Tensei II: …", "… Shukufuku wo! 3".
-// roman says the numeral was a roman one, which never names a show itself.
+// NumeralSeason reads a sequel's number before any subtitle ("Overlord IV", "… wo! 3"); roman says which kind.
 func NumeralSeason(title string) (season int, roman bool) {
 	for _, sep := range []string{":", " - "} {
 		if i := strings.Index(title, sep); i > 0 {
@@ -308,6 +297,14 @@ func partNumber(work string) int {
 }
 
 func numbering(work string, batch bool) (season, episode, end, version int) {
+	if m := seasonEpSpan.FindStringSubmatch(work); m != nil {
+		season, _ = strconv.Atoi(m[1])
+		episode, _ = strconv.Atoi(m[2])
+		end, _ = strconv.Atoi(m[3])
+		if end > episode {
+			return season, episode, end, 0
+		}
+	}
 	if m := seasonEp.FindStringSubmatch(work); m != nil {
 		season, _ = strconv.Atoi(m[1])
 		episode, _ = strconv.Atoi(m[2])
@@ -323,9 +320,7 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 		}
 	}
 
-	// A range only means a batch; "01-12" inside a single-episode name would
-	// otherwise swallow the episode number. A spaced dash is the episode
-	// separator: "Steins;Gate 0 - 03" is episode 3, "Show 00-12" a pack.
+	// A range means a batch, but a spaced dash separates the episode: "Steins;Gate 0 - 03" is episode 3.
 	if m := rangeEp.FindStringSubmatchIndex(work); m != nil {
 		lo, _ := strconv.Atoi(work[m[2]:m[3]])
 		hi, _ := strconv.Atoi(work[m[4]:m[5]])
@@ -358,6 +353,9 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 			}
 		}
 	}
+	if m == nil {
+		m = bracketEpisode(work)
+	}
 	if m != nil {
 		episode, _ = strconv.Atoi(m[1])
 		if m[2] != "" {
@@ -371,6 +369,12 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 // not belong to a number of its own, or "Evangelion.3.33.1080p" is episode 33.
 func bareEpisode(work string) []int {
 	for _, m := range bareEp.FindAllStringSubmatchIndex(work, -1) {
+		// Either form of the number: [match, number, version] as six indexes.
+		if m[2] < 0 {
+			m = []int{m[0], m[1], m[6], m[7], m[8], m[9]}
+		} else {
+			m = m[:6]
+		}
 		if !hasWordBefore(work, m[2]) {
 			continue
 		}
@@ -379,6 +383,17 @@ func bareEpisode(work string) []int {
 		}
 		// The 264 of "H.264".
 		if m[0] > 0 && work[m[0]] == '.' && strings.ContainsRune("hHxX", rune(work[m[0]-1])) {
+			continue
+		}
+		return m
+	}
+	return nil
+}
+
+// bracketEpisode reads "[05]" as the episode, skipping a year and a number that is the whole name.
+func bracketEpisode(work string) []string {
+	for _, m := range bracketEp.FindAllStringSubmatch(work, -1) {
+		if n, _ := strconv.Atoi(m[1]); len(m[1]) == 4 && n >= 1900 && n <= 2100 {
 			continue
 		}
 		return m
@@ -409,13 +424,17 @@ func title(work string, r Release) string {
 	if r.Group != "" {
 		s = strings.TrimSuffix(strings.TrimSpace(s), "-"+r.Group)
 	}
-	// Underscores are always separators; dots only when they outnumber spaces,
-	// since a title can legitimately contain one.
+	// Underscores always separate; dots only when they outnumber spaces, as titles can hold one.
 	s = strings.ReplaceAll(s, "_", " ")
 	if isDotSeparated(s) {
 		s = dotSeparated.ReplaceAllString(s, " ")
 	}
 	if r.Episode > 0 || r.Batch {
+		s = seasonEpSpan.ReplaceAllString(s, " ")
+		// "Show - 02 - Downfall": the title stops at the episode; what follows names the episode, not the show.
+		if r.Episode > 0 && r.EpisodeEnd == 0 {
+			s = beforeEpisode(s)
+		}
 		s = seasonEp.ReplaceAllString(s, " ")
 		// Only a span the numbering accepted, or "Steins;Gate 0" loses its 0.
 		if r.EpisodeEnd > 0 {
@@ -430,11 +449,53 @@ func title(work string, r Release) string {
 		s = seasonOnly.ReplaceAllString(s, " ")
 	}
 
-	// Scene names carry no brackets, so the quality run is the only marker
-	// separating the title from everything after it.
+	// Scene names have no brackets, so the quality run alone ends the title.
 	if loc := metaStart.FindStringIndex(s); loc != nil {
 		s = s[:loc[0]]
 	}
 
-	return strings.Trim(strings.Join(strings.Fields(s), " "), " -_~,")
+	out := strings.Trim(strings.Join(strings.Fields(s), " "), " -_~,")
+	if out == "" {
+		out = bracketedTitle(work, r)
+	}
+	return out
+}
+
+// altName separates two names for the same show: "English … | Romaji".
+var altName = regexp.MustCompile(`\s+[|/]\s+`)
+
+// beforeEpisode cuts the name at its episode marker when a name precedes it, keeping an alternative name after.
+func beforeEpisode(s string) string {
+	for _, re := range []*regexp.Regexp{seasonEp, dashEp, markedEp} {
+		loc := re.FindStringIndex(s)
+		if loc == nil {
+			continue
+		}
+		if !strings.ContainsFunc(s[:loc[0]], unicode.IsLetter) {
+			return s
+		}
+		if alt := altName.FindStringIndex(s[loc[1]:]); alt != nil {
+			return s[:loc[1]] + s[loc[1]+alt[0]:]
+		}
+		return s[:loc[1]]
+	}
+	return s
+}
+
+// bracketedTitle reads "[Group][Title][05][1080p]": the first bracket not a group, number, checksum or tag.
+func bracketedTitle(work string, r Release) string {
+	for i, tok := range bracketed.FindAllStringSubmatch(work, -1) {
+		field := strings.TrimSpace(tok[1])
+		if i == 0 && field == r.Group || !strings.ContainsFunc(field, unicode.IsLetter) {
+			continue
+		}
+		if crc32Re.MatchString(field) || isResolution(field) || metaStart.MatchString(" "+field) {
+			continue
+		}
+		if langs, _ := detectSubtitles("[" + field + "]"); len(langs) > 0 {
+			continue
+		}
+		return field
+	}
+	return ""
 }

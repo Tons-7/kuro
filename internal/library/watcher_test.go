@@ -8,8 +8,7 @@ import (
 	"kuro/internal/store"
 )
 
-// A dual-audio release satisfies both preferences: both tracks are in the file
-// and the choice happens at playback.
+// A dual-audio release satisfies both preferences; the track is chosen at playback.
 func TestAudioFilter(t *testing.T) {
 	sub := parse.Parse("[SubsPlease] Show - 07 (1080p) [ABCD1234].mkv")
 	dual := parse.Parse("[Group] Show - 07 [1080p][Dual Audio].mkv")
@@ -66,8 +65,7 @@ func TestSearchTermsLeadWithEpisodeNumber(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("no search terms produced")
 	}
-	// Results are ranked by seeders, and a season batch always out-seeds a
-	// single episode, so the number has to be in the first query.
+	// A batch always out-seeds one episode, so the number goes in the first query.
 	if got[0] != "Sousou no Frieren 10" {
 		t.Errorf("first term = %q, want the episode number included", got[0])
 	}
@@ -82,8 +80,7 @@ func TestSearchTermsLeadWithEpisodeNumber(t *testing.T) {
 	}
 }
 
-// Release groups split by naming convention, so romaji-only search can miss the
-// healthy releases posted under the English name.
+// Groups split by naming, so a romaji-only search misses releases under the English name.
 func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 	titles := []string{
 		"Bleach: Sennen Kessen-hen - Kashin-tan",
@@ -94,8 +91,7 @@ func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 
 	got := searchTerms(titles, english, 41, 0, nil, false)
 
-	// Punctuation is stripped before searching: it never appears in a release
-	// filename, and trackers match on tokens.
+	// Punctuation is stripped: filenames never carry it, and trackers match tokens.
 	var romajiWithEp, englishWithEp bool
 	for _, term := range got {
 		if term == "Bleach Sennen Kessen-hen - Kashin-tan 41" {
@@ -139,8 +135,7 @@ func TestSearchTermsAllNonLatin(t *testing.T) {
 	}
 }
 
-// A generic title search ranks by seeders and the curated release is often not
-// the most-seeded, so it has to be asked for by name.
+// The curated release is often not the most seeded, so it is asked for by name.
 func TestSearchTermsLeadWithCuratedGroup(t *testing.T) {
 	got := searchTerms([]string{"Sousou no Frieren"}, "", 10, 0, []string{"PMR"}, false)
 	if len(got) == 0 {
@@ -155,8 +150,7 @@ func TestSearchTermsLeadWithCuratedGroup(t *testing.T) {
 	}
 }
 
-// A curated release may use a different title, and the shortest title is the
-// safest substring to pair the group with.
+// A curated release may use another title; the shortest is the safest to pair the group with.
 func TestCuratedGroupPairsWithShortestTitle(t *testing.T) {
 	titles := []string{"Sousou no Frieren", "Frieren", "Frieren Beyond Journeys End"}
 
@@ -212,9 +206,7 @@ func TestVerifiesRejectsWrongEpisodeAndSeason(t *testing.T) {
 	}
 }
 
-// Attack on Titan's Final Season Part 2: its own episode 1, 17 counted through
-// the season. Cours restart numbering, so a Part 3 episode 1 is not the Part 2
-// episode 1 asked for; season alone can't separate them.
+// AoT Final Season Part 2 episode 1 (17 through the season); Part 3's episode 1 is not it.
 func part2Request() Request {
 	return Request{
 		Episode: 1, Season: 1, Part: 2, Alias: store.EpisodeAlias{Tvdb: 17},
@@ -301,8 +293,7 @@ func TestSearchTermsAskForTheDubByName(t *testing.T) {
 	}
 }
 
-// Most single-season shows never mention a season, so only an explicitly
-// higher one contradicts a season-1 request.
+// Most shows never state a season, so only an explicit higher one contradicts season 1.
 func TestVerifiesSeasonOneAllowsUnmarked(t *testing.T) {
 	req := Request{Episode: 5, Season: 1}
 

@@ -263,6 +263,10 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 	if plan := session.CurrentPlan(); !plan.VideoCopy || plan.AudioCopy {
 		t.Fatalf("plan = %+v, want the picture copied and the sound re-encoded", plan)
 	}
+	// The clip is a whole file; a torrent still arriving is what gets the writer beside the pass.
+	session.mu.Lock()
+	session.liveSubs = true
+	session.mu.Unlock()
 
 	// In order, as a player asks: jumping ahead would restart the pass there. Segment 3 means 0 to 2 are whole.
 	for n := range 4 {

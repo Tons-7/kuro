@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query } from '../lib/api'
 import { cx } from '../lib/format'
-import { useDebounced, useDismiss } from './ui'
+import { TextInput, useDebounced, useDismiss, useModalFocus } from './ui'
 
 interface Studio {
   id: number
@@ -22,9 +22,12 @@ export function StudioFilter({
   const [term, setTerm] = useState('')
   const search = useDebounced(term.trim(), 250)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
   const box = trigger.current?.getBoundingClientRect()
+  // As FilterMenu: focus goes in on open and back to the pill on close.
+  const menuRef = useRef<HTMLDivElement>(null)
+  useModalFocus(menuRef, open)
 
   const found = useQuery({
     enabled: open && search.length >= 2,
@@ -59,22 +62,29 @@ export function StudioFilter({
         box &&
         createPortal(
           <div
+            ref={menuRef}
             data-portal-menu
-            style={{ top: box.bottom + 6, left: Math.max(8, Math.min(box.left, window.innerWidth - 264)) }}
+            style={{
+              top: Math.min(box.bottom + 6, window.innerHeight - 340),
+              left: Math.max(8, Math.min(box.left, window.innerWidth - 264)),
+            }}
             className="fixed z-50 w-64 animate-rise rounded-xl border border-base-750 bg-base-850 p-2 shadow-panel"
           >
-            <input
+            <TextInput
               autoFocus
               value={term}
               onChange={(e) => setTerm(e.target.value)}
               placeholder="Search studios…"
-              className="w-full rounded-md border border-base-750 bg-base-950 px-2 py-1.5 text-sm text-base-100 outline-none focus:border-accent-500"
+              aria-label="Search studios"
+              className="w-full"
             />
             <ul role="listbox" className="mt-1.5 max-h-64 overflow-y-auto scrollbar-thin">
               {search.length < 2 ? (
                 <li className="px-2 py-1.5 text-xs text-base-500">Type a name, e.g. MAPPA</li>
               ) : found.isPending ? (
                 <li className="px-2 py-1.5 text-xs text-base-500">Searching…</li>
+              ) : found.isError ? (
+                <li className="px-2 py-1.5 text-xs text-recap">Studio search is unavailable right now</li>
               ) : (found.data?.studios ?? []).length === 0 ? (
                 <li className="px-2 py-1.5 text-xs text-base-500">No studio by that name</li>
               ) : (

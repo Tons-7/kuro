@@ -35,8 +35,7 @@ func TestDerivedEpisodesReplaceInventedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Still eight: four evidenced, four padded from the catalogue count, so a
-	// show mid-season does not appear to end at its latest release.
+	// Still eight, four padded from the count, so a mid-season show doesn't end at its latest release.
 	if len(after) != 8 {
 		t.Fatalf("got %d episodes, want 8", len(after))
 	}
@@ -52,8 +51,7 @@ func TestDerivedEpisodesReplaceInventedRows(t *testing.T) {
 	}
 }
 
-// Padding is only for release-derived lists: a real source lists unaired
-// episodes itself, and inventing more on top would duplicate them.
+// Padding is for release-derived lists only; a real source lists unaired episodes itself.
 func TestPaddingLeavesRealMetadataAlone(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

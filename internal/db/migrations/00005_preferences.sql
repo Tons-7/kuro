@@ -1,7 +1,6 @@
 -- +goose Up
 
--- Local-only state that has no AniList equivalent, kept out of list_entry so
--- a sync can never overwrite it.
+-- Local-only state with no AniList equivalent, kept out of list_entry so a sync can never overwrite it.
 CREATE TABLE user_anime (
     anime_id   INTEGER PRIMARY KEY REFERENCES anime(id) ON DELETE CASCADE,
     favourite  INTEGER NOT NULL DEFAULT 0,

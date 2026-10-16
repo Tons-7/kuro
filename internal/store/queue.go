@@ -41,9 +41,7 @@ func (s *Store) SetQueuedRelease(ctx context.Context, animeID int, epKey, infoHa
 	return n > 0, nil
 }
 
-// Enqueue adds episodes to the back of the queue. An already-queued episode keeps
-// its place (pressing download twice is harmless); one already on disk is dropped
-// by the worker, not here.
+// Enqueue adds episodes at the back; a queued one keeps its place, and the worker drops ones on disk.
 func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int) (int, error) {
 	if animeID == 0 || len(episodes) == 0 {
 		return 0, nil
@@ -115,10 +113,10 @@ func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	q := QueuedDownload{State: "pending"}
 	err := s.r.QueryRowContext(ctx, `
-		SELECT anime_id, ep_key, episode, season FROM download_queue
+		SELECT anime_id, ep_key, episode, season, coalesce(info_hash, '') FROM download_queue
 		WHERE state = 'pending' AND (retry_at IS NULL OR retry_at <= ?)
 		ORDER BY queued_at, episode
-		LIMIT 1`, time.Now().UnixMilli()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season)
+		LIMIT 1`, time.Now().UnixMilli()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &q.InfoHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
 	}
@@ -248,9 +246,7 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 	return out, rows.Err()
 }
 
-// Dequeue drops queued episodes in any state, including the one being fetched
-// (a cancel must actually stop it) and failed ones. Bytes already on disk stay;
-// removing those is a separate choice.
+// Dequeue drops queued episodes in any state, the one fetching included; bytes on disk stay.
 func (s *Store) Dequeue(ctx context.Context, animeID int, epKey string) (int, error) {
 	query := `DELETE FROM download_queue WHERE anime_id = ?`
 	args := []any{animeID}

@@ -1,9 +1,6 @@
 -- +goose Up
 
--- list_entry.dirty is a single flag holding AniList's push state, which cannot
--- express "sent to AniList, not yet sent to MyAnimeList". This records what
--- each tracker was last told, so a pending push is a comparison rather than a
--- flag that two writers would fight over.
+-- What each tracker was last told, so a pending push is a comparison, not one flag two trackers fight over.
 CREATE TABLE tracker_push (
     tracker   TEXT    NOT NULL,
     anime_id  INTEGER NOT NULL REFERENCES anime(id) ON DELETE CASCADE,

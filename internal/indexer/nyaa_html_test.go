@@ -66,8 +66,7 @@ func TestSearchUsesSortedListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sorting by seeders is the whole point: the RSS feed cannot do it, which
-	// is why back-catalogue searches returned only recent batches.
+	// Sorting by seeders is the point: the RSS feed can't, so old shows got only recent batches.
 	if got.Get("s") != "seeders" || got.Get("o") != "desc" {
 		t.Errorf("sort = %q/%q, want seeders/desc", got.Get("s"), got.Get("o"))
 	}
@@ -167,8 +166,7 @@ func TestSearchHTMLHandlesEmptyAndBrokenPages(t *testing.T) {
 		}
 	})
 
-	// Rows present but none readable is a changed layout, which must surface
-	// rather than read as "no release found" for every show.
+	// Rows but none readable is a changed layout, surfaced, not "no release" for every show.
 	t.Run("unrecognised rows", func(t *testing.T) {
 		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `<table class="torrent-list"><tbody><tr class="x"><td>`)

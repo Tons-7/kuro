@@ -1,6 +1,13 @@
 package anilist
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"testing"
+	"time"
+)
 
 func media(id, popularity int) Media {
 	return Media{ID: id, Popularity: &popularity}
@@ -27,8 +34,7 @@ func TestRankByGainOrdersByWhatWasAddedInTheWindow(t *testing.T) {
 	}
 }
 
-// A title with no reading at the window start has no measurable gain, so it is
-// dropped rather than credited with its whole count.
+// A title with no reading at the window start is dropped, not credited its whole count.
 func TestRankByGainDropsUnmeasurableTitles(t *testing.T) {
 	pool := []Media{
 		media(1, 61_000), // announced mid-window, no baseline
@@ -58,4 +64,59 @@ func ids(list []Media) []int {
 		out[i] = m.ID
 	}
 	return out
+}
+
+// A batch is one request: a title missing the first day is dropped, not a reason to page on.
+func TestPopularityAtReadsOnlyTheWindowsFirstDay(t *testing.T) {
+	day := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	first, fourth := day.Unix(), day.AddDate(0, 0, 3).Unix()
+	requests := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		io.WriteString(w, fmt.Sprintf(`{"data":{"Page":{"pageInfo":{"hasNextPage":true},"mediaTrends":[
+			{"mediaId":1,"date":%d,"popularity":100},
+			{"mediaId":1,"date":%d,"popularity":130},
+			{"mediaId":2,"date":%d,"popularity":60}]}}}`, first, first+86400, fourth))
+	})
+
+	got, err := c.popularityAt(context.Background(), []int{1, 2}, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[1] != 100 {
+		t.Fatalf("baseline = %v, want only title 1 at its first-day reading", got)
+	}
+	if requests != 1 {
+		t.Fatalf("%d requests; the page already ran past the first day", requests)
+	}
+}
+
+// Paging goes on only while the first day's rows may continue on the next page.
+func TestPopularityAtPagesWhileStillOnTheFirstDay(t *testing.T) {
+	day := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	first := day.Unix()
+	var pages []float64
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables map[string]any `json:"variables"`
+		}
+		decode(t, r, &req)
+		page := req.Variables["page"].(float64)
+		pages = append(pages, page)
+		if page == 1 {
+			io.WriteString(w, fmt.Sprintf(`{"data":{"Page":{"pageInfo":{"hasNextPage":true},"mediaTrends":[
+				{"mediaId":1,"date":%d,"popularity":100}]}}}`, first))
+			return
+		}
+		io.WriteString(w, fmt.Sprintf(`{"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaTrends":[
+			{"mediaId":2,"date":%d,"popularity":50}]}}}`, first+3600))
+	})
+
+	got, err := c.popularityAt(context.Background(), []int{1, 2}, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 || got[1] != 100 || got[2] != 50 {
+		t.Fatalf("pages %v, baseline %v; both first-day readings should be read", pages, got)
+	}
 }

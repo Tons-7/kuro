@@ -1,6 +1,5 @@
-// Reports, on a downloading episode, the seconds a line should be on screen and the subtitle layer drew nothing.
-//   KURO_EXTRA_CONFIG='[[indexer]] ...' KURO_SHOW_ID=235 EPISODE=1 [SEEK_TO=600] \
-//     node scripts/run-player-check.mjs subs-lag-probe.mjs
+// Reports the seconds a downloading episode's line was due but nothing was drawn.
+//   KURO_EXTRA_CONFIG='[[indexer]] ...' KURO_SHOW_ID=235 EPISODE=1 [SEEK_TO=600] node scripts/run-player-check.mjs subs-lag-probe.mjs
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'

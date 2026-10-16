@@ -25,8 +25,7 @@ func TestWithin(t *testing.T) {
 	}
 }
 
-// Headers arrive before the first byte, so a stream that sends them and then
-// nothing (or an error status) is not a release delivering.
+// Headers then nothing, or an error status, is not a release delivering.
 func TestPrewarmFailsWhenNothingArrives(t *testing.T) {
 	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "2097152")

@@ -1,10 +1,5 @@
-// Are subtitles still in sync after leaving the tab and coming back?
-//
-// The episode's subtitle track is 90 position-coded markers: cue i is a block
-// drawn at x = 40 + 12i of a 1280-wide frame, shown from 2i to 2i+1.9s. So the
-// centroid of whatever JASSUB has painted says exactly which cue is on screen,
-// and comparing that against the video's clock measures sync directly rather
-// than by eye.
+// Subtitle sync after leaving the tab and coming back, measured from which position-coded cue is
+// painted (cue i at x = 40 + 12i, from 2i s) against the video's clock.
 import { chromium } from 'playwright'
 
 const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
@@ -43,9 +38,7 @@ if (!file) process.exit(1)
 check((await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: EP })).ok, 'assigned as episode 3')
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 
-// Headed by default: headless Chromium reports every tab as visible and keeps
-// presenting frames to a background one, so the scenario under test cannot
-// happen there.
+// Headed by default: headless Chromium keeps drawing background tabs, so the scenario never happens.
 const browser = await chromium.launch({
   headless: process.env.HEADLESS === '1',
   args: ['--autoplay-policy=no-user-gesture-required'],
@@ -56,8 +49,7 @@ const errors = []
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 200)))
 page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 
-// Every seek the page performs, so a watchdog that fires while nobody is
-// looking cannot go unnoticed.
+// Every seek the page performs, so a watchdog firing unwatched can't go unnoticed.
 await page.addInitScript(() => {
   window.__seeks = []
   document.addEventListener(
@@ -192,9 +184,7 @@ const hideFor = async (seconds, { paused = false } = {}) => {
 let away = await hideFor(20)
 const ran = away.immediate.time - away.before.t
 const drawn = away.frames - away.before.frames
-// visibilityState is the coarse signal and Playwright does not always flip it;
-// what the subtitles actually depend on is frames being presented, so that is
-// what has to have stopped for this to be the scenario people report.
+// Subtitles depend on frames being presented, not visibilityState, so frames must have stopped.
 console.log(`     backgrounded: visibilityState=${away.visibility}, ${drawn} frames presented over ${ran.toFixed(1)}s of media`)
 check(ran > 10, 'playback carried on while the tab was in the background', `${ran.toFixed(1)}s of media`)
 check(
@@ -234,8 +224,7 @@ check(
 )
 
 // ---------------------------------------------------------------- watchdog
-// A seek immediately before the tab goes away: no frames are presented while
-// hidden, which must not read as a stuck decoder and provoke a recovery seek.
+// A seek right before hiding: no frames while hidden must not read as a stuck decoder.
 await page.evaluate(() => {
   window.__seeks.length = 0
   const v = document.querySelector('video')

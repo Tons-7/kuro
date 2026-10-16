@@ -27,8 +27,7 @@ var broadcastForm = []struct {
 	{"[AnoZu] Bleach S17E43 1080p CR WEB-DL AAC 2.0 H.264", false},
 }
 
-// A pack stating no range could hold any episode; the watcher used to take it
-// as proof the next one was out and announce it.
+// A pack stating no range could hold any episode, so it is no proof the next one is out.
 func TestUnnumberedPackConfirmsNothing(t *testing.T) {
 	st := bleachStore(t)
 	ctx := context.Background()

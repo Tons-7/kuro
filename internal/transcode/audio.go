@@ -1,7 +1,6 @@
 package transcode
 
 import (
-	"os"
 	"regexp"
 )
 
@@ -10,9 +9,7 @@ var (
 	japaneseTag = regexp.MustCompile(`(?i)^(ja|jp|jpn|japanese)$|\bjapanese\b`)
 )
 
-// ChooseAudio picks the track for a sub/dub preference: by language tag, then
-// by the track's title, then whatever the file marks default. Positions index
-// info.Audio, which is how ffmpeg's "0:a:N" counts too.
+// ChooseAudio picks by language tag, then title, then the file's default; an index into info.Audio (0:a:N).
 func ChooseAudio(info *MediaInfo, want string) int {
 	if info == nil || len(info.Audio) < 2 {
 		return 0
@@ -50,10 +47,7 @@ func (s *Session) AudioTrack() int {
 	return s.audioTrack
 }
 
-// ApplyAudioPreference reports whether the sub/dub preference needs a track
-// picked: on the first open, and again when the preference changes (the Sub/Dub
-// toggle). A reopen with the same preference returns false, so the track the
-// viewer is on is kept rather than reset mid-load.
+// ApplyAudioPreference: pick a track on first open or a changed preference, not on a same-choice reopen.
 func (s *Session) ApplyAudioPreference(want string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,9 +61,7 @@ func (s *Session) ApplyAudioPreference(want string) bool {
 	return true
 }
 
-// SetAudioTrack switches the track being encoded. A running pass is stopped
-// and what it wrote is dropped — every segment carries the old track — so the
-// next request re-encodes from wherever the viewer is.
+// SetAudioTrack switches the encoded track, stopping the pass and dropping segments with the old one.
 func (s *Session) SetAudioTrack(n int) bool {
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
@@ -85,13 +77,8 @@ func (s *Session) SetAudioTrack(n int) bool {
 	s.mu.Unlock()
 
 	s.stop()
-	// Every segment and the init file carry the old track, so all of them go:
-	// leaving stale segments would serve the wrong audio, and a later request
-	// would be answered from disk without the encoder ever rewriting init.mp4.
-	for n := 0; n < s.Segments; n++ {
-		os.Remove(s.SegmentPath(n))
-	}
-	os.Remove(s.InitPath())
+	// Every segment and the init file carry the old track, so all of them go.
+	s.wipeOutput()
 	s.log.Info("audio track switched", "session", s.ID, "track", n)
 	return true
 }

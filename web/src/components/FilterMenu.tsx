@@ -1,12 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cx } from '../lib/format'
-import { useDismiss, useModalFocus } from './ui'
+import { TextInput, useDismiss, useModalFocus } from './ui'
 
-/**
- * A multi-value filter; a native select holds only one and ignores the design.
- * A portal so a scrolling filter bar can't clip it; the trigger shows the count.
- */
+/** A multi-value filter (a native select holds one), portalled so the scrolling bar can't clip it. */
 export function FilterMenu({
   label,
   values,
@@ -25,7 +22,7 @@ export function FilterMenu({
   const [open, setOpen] = useState(false)
   const [term, setTerm] = useState('')
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close)
+  const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
   // A portal sits at the end of the tab order: focus moves in and back out.
   const menuRef = useRef<HTMLDivElement>(null)
@@ -68,8 +65,7 @@ export function FilterMenu({
             : 'bg-base-850 text-base-200 ring-white/[0.07] hover:bg-base-800 hover:text-white',
         )}
       >
-        {/* A single choice (year, sort) reads as its value; a list keeps its name
-            and says how many, the values themselves are in the chips below. */}
+        {/* One choice reads as its value; a list keeps its name and count, the values in chips. */}
         <span className="capitalize">
           {!multiple && values.length === 1 ? pretty(values[0]) : label}
         </span>
@@ -103,12 +99,13 @@ export function FilterMenu({
             )}
           >
             {wide && (
-              <input
+              <TextInput
                 autoFocus
                 value={term}
                 onChange={(e) => setTerm(e.target.value)}
                 placeholder={`Filter ${label.toLowerCase()}…`}
-                className="mb-1.5 w-full rounded-lg bg-base-900 px-2.5 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:outline-none"
+                aria-label={`Filter ${label.toLowerCase()}`}
+                className="mb-1.5 w-full"
               />
             )}
 

@@ -11,9 +11,7 @@ import (
 	"kuro/internal/store"
 )
 
-// The on-disk copy is found for a single file and for a pack, whose episodes
-// sit in a folder named after it, even with another release's file of the same
-// name in the cache root.
+// The disk copy is found for a file and inside a pack's folder, despite a same-named file in the root.
 func TestReadablePathFindsPackEpisodes(t *testing.T) {
 	cache := t.TempDir()
 	h := newHarness(t, config.Config{CacheDir: cache}, nil)
