@@ -15,7 +15,7 @@ Neither carries bin/, cache/ or config.toml. bin/ is over half a gigabyte and
 the app downloads it itself on first run; cache/ is downloaded episodes; and
 config.toml holds the AniList client secret, which must never be shipped.
 
-Updating means replacing kuro.exe, not the folder — the folder is where the
+Updating means replacing kuro.exe, not the folder: the folder is where the
 downloaded programs, the episode cache and the credentials live. The database is in
 %LOCALAPPDATA%\kuro and is migrated on startup, so watch history survives
 whatever happens to the folder.
@@ -95,8 +95,42 @@ Where things go.
 
 Updates: kuro checks for a new version on launch and offers it under
 Settings -> About. Only kuro.exe is replaced; the downloaded programs, the
-episode cache and your settings stay. To update by hand, replace kuro.exe —
+episode cache and your settings stay. To update by hand, replace kuro.exe,
 never the whole folder.
+
+Connecting an AniList account is optional and needs a client id of your own;
+config.toml, written on first run, says how.
+"@
+
+# macOS and Linux get their own: the Windows one named kuro.exe, %LOCALAPPDATA% and Windows' warning.
+$unixReadme = @"
+kuro $Version
+
+Extract this zip to a folder of its own and run kuro from there:
+    chmod +x kuro    (once, if unzipping dropped the permission)
+    ./kuro
+
+kuro opens in its own window when Chrome, Edge, Brave or Chromium is installed,
+otherwise in your default browser.
+
+ffmpeg: on Linux kuro offers to download it on first run. On macOS install it
+first with Homebrew: brew install ffmpeg. An ffmpeg already on PATH is used as
+is. mpv, for playing outside the browser, comes from your package manager too.
+
+macOS blocks programs from unidentified developers. Run this once in the folder:
+    xattr -d com.apple.quarantine kuro
+or allow kuro under System Settings -> Privacy & Security after the first try.
+
+kuro ships with no torrent sites. The setup screen shows the block to add to
+config.toml (written beside kuro on first run); add your sites and restart.
+
+Your watch history, library and settings are kept in ~/.kuro. To keep
+everything in this folder instead, pick a folder under Setup -> Where things go.
+
+Updates: kuro checks for a new version on launch and offers it under
+Settings -> About. Only the kuro program is replaced; the downloaded programs,
+the episode cache and your settings stay. To update by hand, replace the kuro
+file, never the whole folder.
 
 Connecting an AniList account is optional and needs a client id of your own;
 config.toml, written on first run, says how.
@@ -130,7 +164,8 @@ try {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         & (Join-Path $PSScriptRoot 'build.ps1') -SkipWeb -Target $platform -Version $Version -Out (Join-Path $dir 'kuro')
         if ($LASTEXITCODE -ne 0) { throw "build for $platform failed" }
-        Set-Content -Path (Join-Path $dir 'README.txt') -Value $readme -Encoding utf8
+        # LF and no BOM there, where a BOM shows as a stray character.
+        [IO.File]::WriteAllText((Join-Path $dir 'README.txt'), ($unixReadme -replace "`r`n", "`n") + "`n")
         Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $dir 'LICENSE.md')
         $zip = Join-Path $OutDir "kuro-$Version-$goos-$goarch.zip"
         Remove-Item $zip -ErrorAction SilentlyContinue
