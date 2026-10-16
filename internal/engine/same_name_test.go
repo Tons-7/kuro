@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	atorrent "github.com/anacrolix/torrent"
+	"kuro/internal/bt"
 )
 
 // Two releases with one name and different content live in their own folders; deleting one leaves the
@@ -18,13 +18,13 @@ func TestSameNamedReleasesKeepTheirOwnFiles(t *testing.T) {
 	miA, contentA := makePack(t, dirA)
 	miB, contentB := makePack(t, dirB)
 	sA, sB := seeder(t, dirA, miA), seeder(t, dirB, miB)
-	peers := []atorrent.PeerInfo{
+	peers := []bt.PeerInfo{
 		{Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: sA.LocalPort()}, Trusted: true},
 		{Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: sB.LocalPort()}, Trusted: true},
 	}
 	f := &fixture{cache: t.TempDir(), session: t.TempDir(), peer: peers[0].Addr.(*net.TCPAddr)}
 	f.start(t)
-	f.engine.onNew = func(tt *atorrent.Torrent) { tt.AddPeers(peers) }
+	f.engine.onNew = func(tt *bt.Torrent) { tt.AddPeers(peers) }
 	c := ctx(t)
 
 	magnetA, magnetB := magnetOf(t, &miA), magnetOf(t, &miB)

@@ -387,16 +387,17 @@ func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction f
 		return nil
 	}
 
-	stats, err := c.Stats(ctx, id)
+	// The file's own length: the selected files' total put a pack's later episode at the wrong place.
+	d, err := c.Details(ctx, id)
 	if err != nil {
 		return err
 	}
-	if stats.TotalBytes <= 0 {
+	if fileIndex < 0 || fileIndex >= len(d.Files) || d.Files[fileIndex].Length <= 0 {
 		return nil
 	}
 
 	const window = 2 << 20
-	offset := int64(float64(stats.TotalBytes) * fraction)
+	offset := int64(float64(d.Files[fileIndex].Length) * fraction)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.StreamURL(id, fileIndex), nil)
 	if err != nil {

@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,12 +18,18 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/caddyserver/certmagic"
 )
 
 // A second save replaces the running DuckDNS manager and stops it; none is left pushing the address for good.
 func TestSecondDuckDNSSetupStopsTheFirst(t *testing.T) {
 	var calls []url.Values
 	duckServer(t, "OK", &calls)
+	// No certificate: a real order went to Let's Encrypt, and its lock file outlived the test's folder.
+	was := manageCert
+	manageCert = func(context.Context, *certmagic.Config, string) error { return nil }
+	t.Cleanup(func() { manageCert = was })
 	s := New(t.TempDir(), func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := s.UseDuckDNS("mykuro", "token-1"); err != nil {
 		t.Fatal(err)

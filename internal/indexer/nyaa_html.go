@@ -128,6 +128,7 @@ func parseRow(row *html.Node) (Torrent, bool) {
 	for _, a := range descendants(cells[2], "a") {
 		if href := attr(a, "href"); strings.HasPrefix(href, "magnet:") {
 			t.InfoHash = infoHashFromMagnet(href)
+			t.Trackers = trackersOf(href)
 		}
 	}
 	if t.InfoHash == "" {

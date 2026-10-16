@@ -13,14 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/bencode"
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
+	"kuro/internal/bt"
+	"kuro/internal/bt/bencode"
+	"kuro/internal/bt/metainfo"
+	"kuro/internal/bt/storage"
 
 	"kuro/internal/torrent"
 )
@@ -55,11 +56,11 @@ func makePack(t *testing.T, dir string) (metainfo.MetaInfo, map[string][]byte) {
 }
 
 func TestMain(m *testing.M) {
-	janitorEvery, stallAfter, regroupAfter = 500*time.Millisecond, 2*time.Second, 1500*time.Millisecond
+	janitorEvery, regroupAfter = 500*time.Millisecond, 1500*time.Millisecond
 	os.Exit(m.Run())
 }
 
-func quietConfig(cfg *atorrent.ClientConfig) {
+func quietConfig(cfg *bt.ClientConfig) {
 	cfg.ListenPort = freePort()
 	cfg.NoDHT = true
 	cfg.DisableTrackers = true
@@ -69,13 +70,13 @@ func quietConfig(cfg *atorrent.ClientConfig) {
 }
 
 // seeder serves the pack from dir.
-func seeder(t *testing.T, dir string, mi metainfo.MetaInfo, tweaks ...func(*atorrent.ClientConfig)) *atorrent.Client {
+func seeder(t *testing.T, dir string, mi metainfo.MetaInfo, tweaks ...func(*bt.ClientConfig)) *bt.Client {
 	t.Helper()
-	var cl *atorrent.Client
+	var cl *bt.Client
 	var err error
 	// Retried: a random port can land in a range Windows reserves.
 	for range 5 {
-		cfg := atorrent.NewDefaultClientConfig()
+		cfg := bt.NewDefaultClientConfig()
 		quietConfig(cfg)
 		cfg.DataDir = dir
 		cfg.DefaultStorage = files{base: dir, pieces: storage.NewMapPieceCompletion()}
@@ -83,7 +84,7 @@ func seeder(t *testing.T, dir string, mi metainfo.MetaInfo, tweaks ...func(*ator
 		for _, tweak := range tweaks {
 			tweak(cfg)
 		}
-		if cl, err = atorrent.NewClient(cfg); err == nil {
+		if cl, err = bt.NewClient(cfg); err == nil {
 			break
 		}
 	}
@@ -112,7 +113,7 @@ type fixture struct {
 	peer    *net.TCPAddr
 }
 
-func newFixture(t *testing.T, seed ...func(*atorrent.ClientConfig)) *fixture {
+func newFixture(t *testing.T, seed ...func(*bt.ClientConfig)) *fixture {
 	t.Helper()
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
@@ -136,8 +137,8 @@ func (f *fixture) start(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.configure = quietConfig
-	e.onNew = func(tt *atorrent.Torrent) {
-		tt.AddPeers([]atorrent.PeerInfo{{Addr: f.peer, Trusted: true}})
+	e.onNew = func(tt *bt.Torrent) {
+		tt.AddPeers([]bt.PeerInfo{{Addr: f.peer, Trusted: true}})
 	}
 	t.Cleanup(e.Stop)
 	f.engine, f.client = e, e.Client()
@@ -262,7 +263,7 @@ func TestNextEpisodeOfHeldPack(t *testing.T) {
 }
 
 // slowSeed serves about 64 KiB/s: a local seeder otherwise finishes the episode before the pause lands.
-func slowSeed(cfg *atorrent.ClientConfig) { cfg.UploadRateLimiter = rate.NewLimiter(64<<10, 16<<10) }
+func slowSeed(cfg *bt.ClientConfig) { cfg.UploadRateLimiter = rate.NewLimiter(64<<10, 16<<10) }
 
 func TestPauseStartAndRemove(t *testing.T) {
 	f := newFixture(t, slowSeed)
@@ -429,9 +430,11 @@ func TestImportedSessionInTheCacheIsRemoved(t *testing.T) {
 	}
 }
 
-// A stream waiting on data that has not arrived must outlive a re-plan: the re-plan exists for exactly
-// that torrent, and ending its readers ended playback of every slow release half a minute in.
-func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
+// A read waiting on data must outlive the rescue, which says once that no peer was asked for its piece.
+func TestRescueDoesNotEndAStreamWaitingForData(t *testing.T) {
+	was := rescueAfter
+	rescueAfter = 200 * time.Millisecond
+	t.Cleanup(func() { rescueAfter = was })
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
 	s := seeder(t, seedDir, mi)
@@ -441,6 +444,8 @@ func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
 		magnet: magnetOf(t, &mi),
 	}
 	f.start(t)
+	lines := &lineLog{}
+	f.engine.log = slog.New(lines)
 	c := ctx(t)
 
 	// The file list is known, then the only peer goes: nothing can arrive.
@@ -472,45 +477,58 @@ func TestReplanDoesNotEndAStreamWaitingForData(t *testing.T) {
 		read <- err
 	}()
 
-	// Waiting, as a player on a slow swarm does.
+	// Waiting, as a player on a slow swarm does, through several janitor rounds of rescue.
 	select {
 	case err := <-read:
-		t.Fatalf("the read ended before any re-plan: %v", err)
-	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("the rescue ended the stream: %v", err)
+	case <-time.After(6 * janitorEvery):
 	}
-
-	en, err := f.engine.entryByID(added.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Half a minute apart on a quiet swarm; the reader gives up after three failed waits.
-	for range 3 {
-		f.engine.replan(en)
-		select {
-		case err := <-read:
-			t.Fatalf("the re-plan ended the stream: %v", err)
-		case <-time.After(300 * time.Millisecond):
-		}
-	}
-	if !en.quietSince.After(time.Now().Add(-time.Minute)) {
-		t.Error("a torrent added after its inspection starts with no stall clock")
+	if n := lines.count("a stream waits on a piece no peer was asked for"); n != 1 {
+		t.Errorf("no-holder line logged %d times, want once per wait", n)
 	}
 }
 
+// lineLog keeps log messages for a test to count.
+type lineLog struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (l *lineLog) Enabled(context.Context, slog.Level) bool { return true }
+func (l *lineLog) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	l.msgs = append(l.msgs, r.Message)
+	l.mu.Unlock()
+	return nil
+}
+func (l *lineLog) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *lineLog) WithGroup(string) slog.Handler      { return l }
+
+func (l *lineLog) count(msg string) (n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, m := range l.msgs {
+		if m == msg {
+			n++
+		}
+	}
+	return n
+}
+
 // seederOn serves the pack from dir on a given port, so a peer can come back where it was.
-func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *atorrent.Client {
+func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *bt.Client {
 	t.Helper()
-	cfg := atorrent.NewDefaultClientConfig()
+	cfg := bt.NewDefaultClientConfig()
 	quietConfig(cfg)
 	cfg.ListenPort = port
 	cfg.DataDir = dir
 	cfg.DefaultStorage = files{base: dir, pieces: storage.NewMapPieceCompletion()}
 	cfg.Seed = true
-	var cl *atorrent.Client
+	var cl *bt.Client
 	var err error
 	// The port is being let go by the seeder that just closed.
 	for range 40 {
-		if cl, err = atorrent.NewClient(cfg); err == nil {
+		if cl, err = bt.NewClient(cfg); err == nil {
 			break
 		}
 		time.Sleep(250 * time.Millisecond)

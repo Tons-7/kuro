@@ -414,9 +414,9 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	if !have {
 		path, err = s.subtitles.Extract(r.Context(), local, dir, index, codec, complete)
 
-		// The on-disk file is fast but holey while downloading, and ffmpeg stops at the
-		// first gap; fall back to the slow in-order engine read only if nothing came.
-		if (err != nil || s.subtitles.Cues(dir, index, codec) == 0) && local != session.Source {
+		// The on-disk file is holey while downloading; the engine read from byte 0 outranks the encoder's own
+		// window, so only when no live process writes the lines beside the pass.
+		if (err != nil || s.subtitles.Cues(dir, index, codec) == 0) && local != session.Source && !live {
 			if p, retry := s.subtitles.Extract(r.Context(), session.Source, dir, index, codec, false); retry == nil {
 				path, err = p, nil
 			}

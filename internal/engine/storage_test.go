@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/storage"
+	"kuro/internal/bt/metainfo"
+	"kuro/internal/bt/storage"
 )
 
 // A path climbing out of the cache is refused, even into a sibling named like it.

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
+	"kuro/internal/bt"
+	"kuro/internal/bt/metainfo"
 )
 
 // Two torrents named alike get their own folders, the first keeping the plain name; a torrent asks once
@@ -52,14 +52,14 @@ func TestRememberKeepsTheLatestPeers(t *testing.T) {
 	t.Cleanup(func() { rememberedPeers = old })
 	e := &Engine{known: map[metainfo.Hash]map[string]remembered{}}
 	hash := metainfo.Hash{9}
-	addr := func(port int) atorrent.PeerInfo {
-		return atorrent.PeerInfo{Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: port}}
+	addr := func(port int) bt.PeerInfo {
+		return bt.PeerInfo{Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: port}}
 	}
 	now := time.Now()
-	e.remember(hash, []atorrent.PeerInfo{addr(1)}, now)
-	e.remember(hash, []atorrent.PeerInfo{addr(2)}, now.Add(time.Second))
-	e.remember(hash, []atorrent.PeerInfo{addr(1)}, now.Add(2*time.Second))
-	e.remember(hash, []atorrent.PeerInfo{addr(3)}, now.Add(3*time.Second))
+	e.remember(hash, []bt.PeerInfo{addr(1)}, now)
+	e.remember(hash, []bt.PeerInfo{addr(2)}, now.Add(time.Second))
+	e.remember(hash, []bt.PeerInfo{addr(1)}, now.Add(2*time.Second))
+	e.remember(hash, []bt.PeerInfo{addr(3)}, now.Add(3*time.Second))
 	known := e.known[hash]
 	if len(known) != 2 {
 		t.Fatalf("%d remembered, want 2", len(known))

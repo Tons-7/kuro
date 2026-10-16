@@ -11,8 +11,8 @@ import (
 	"slices"
 	"strings"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
+	"kuro/internal/bt"
+	"kuro/internal/bt/metainfo"
 
 	"kuro/internal/torrent"
 )
@@ -35,16 +35,19 @@ type sessionDoc struct {
 }
 
 // saveSession writes the torrents and missing metainfo, so a restart needs nothing from the swarm.
-func (e *Engine) saveSession() {
+func (e *Engine) saveSession() { e.writeSession(false) }
+
+// writeSession is saveSession; once Stop has written the last one (final), a late save is dropped.
+func (e *Engine) writeSession(final bool) {
 	e.saveMu.Lock()
 	defer e.saveMu.Unlock()
 	e.mu.Lock()
-	if e.cl == nil {
+	if e.cl == nil || (e.closed && !final) {
 		e.mu.Unlock()
 		return
 	}
 	var doc sessionDoc
-	var withInfo []*atorrent.Torrent
+	var withInfo []*bt.Torrent
 	for _, en := range e.byID {
 		r := record{InfoHash: en.t.InfoHash().HexString(), Trackers: en.trackers, Paused: en.paused, Verify: en.verifying}
 		if info := en.t.Info(); info != nil {
@@ -149,10 +152,10 @@ func (e *Engine) restore() error {
 			continue
 		}
 		e.names.claim(hash, r.Top)
-		var t *atorrent.Torrent
+		var t *bt.Torrent
 		path := filepath.Join(e.opts.SessionDir, hash.HexString()+".torrent")
 		if mi, err := metainfo.LoadFromFile(path); err == nil {
-			spec, err := atorrent.TorrentSpecFromMetaInfoErr(mi)
+			spec, err := bt.TorrentSpecFromMetaInfoErr(mi)
 			if err == nil {
 				t, _, err = e.cl.AddTorrentSpec(spec)
 			}

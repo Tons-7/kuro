@@ -200,9 +200,14 @@ const (
 	duckIPCheck    = 5 * time.Minute
 )
 
+// manageCert starts the certificate's upkeep; a var so tests never ask Let's Encrypt for one.
+var manageCert = func(ctx context.Context, cfg *certmagic.Config, domain string) error {
+	return cfg.ManageAsync(ctx, []string{domain})
+}
+
 func (s *Source) runDuck(ctx context.Context, d *duck) {
 	// The certificate on disk serves at once; async, so it never prompts, and a new one comes via OnEvent.
-	if err := d.config.ManageAsync(ctx, []string{d.domain}); err != nil {
+	if err := manageCert(ctx, d.config, d.domain); err != nil {
 		d.set(StateError, plainProblem(err, d.token))
 		s.log.Warn("https certificate", "name", d.domain, "err", plainProblem(err, d.token))
 	} else if d.ready() {

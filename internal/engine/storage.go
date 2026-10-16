@@ -9,13 +9,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/storage"
+	"kuro/internal/bt/metainfo"
+	"kuro/internal/bt/storage"
 
 	"kuro/internal/torrent"
 )
 
-// files opens a file per read or write: anacrolix maps them, and Windows can't delete a mapped file.
+// files opens a file per read or write: bt's file storage maps them, and Windows can't delete a mapped file.
 type files struct {
 	base   string
 	pieces storage.PieceCompletion

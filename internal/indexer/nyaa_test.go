@@ -196,6 +196,23 @@ func TestMagnet(t *testing.T) {
 	}
 }
 
+// A release's own trackers come first, where most of its swarm announces; Nyaa's always (its feed names none).
+func TestMagnetKeepsTheReleasesOwnTrackers(t *testing.T) {
+	own := "udp://tracker.example:1337/announce"
+	got := trackersOf(Torrent{InfoHash: "abc", Trackers: []string{own, trackers[1]}}.Magnet())
+	if len(got) != 1+len(trackers) || got[0] != own {
+		t.Errorf("trackers %v; want the release's own first, the public ones after, none twice", got)
+	}
+	nyaa := trackersOf(Torrent{InfoHash: "abc", Indexer: "nyaa"}.Magnet())
+	if len(nyaa) == 0 || nyaa[0] != nyaaTracker {
+		t.Errorf("a Nyaa release's trackers %v; want Nyaa's own first", nyaa)
+	}
+	// A raw % in the name fails the query's parse; the trackers beside it still count.
+	if got := trackersOf("magnet:?xt=urn:btih:abc&dn=100%+Ep&tr=" + url.QueryEscape(own)); len(got) != 1 || got[0] != own {
+		t.Errorf("trackers %v beside a bad name; want %s", got, own)
+	}
+}
+
 type fakeSource struct {
 	name    string
 	results []Torrent

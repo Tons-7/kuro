@@ -130,11 +130,8 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	ctx, cancel := context.WithTimeout(ctx, subtitleDeadline)
 	defer cancel()
 
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-i", source,
-		"-map", fmt.Sprintf("0:%d", track),
-	}
+	args := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, reconnectArgs(source)...)
+	args = append(args, "-i", source, "-map", fmt.Sprintf("0:%d", track))
 	// ASS is copied verbatim so its positioning and karaoke survive intact.
 	if isASS(codec) {
 		args = append(args, "-c:s", "copy")
@@ -208,9 +205,9 @@ func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track
 		"-ss", strconv.FormatFloat(from, 'f', 3, 64), "-t", strconv.FormatFloat(aroundSpan, 'f', 0, 64),
 		// Times as in the file, not from the seek point, or the merge misplaces them.
 		"-copyts",
-		"-i", source,
-		"-map", fmt.Sprintf("0:%d", track),
 	}
+	args = append(args, reconnectArgs(source)...)
+	args = append(args, "-i", source, "-map", fmt.Sprintf("0:%d", track))
 	if isASS(codec) {
 		args = append(args, "-c:s", "copy")
 	} else {

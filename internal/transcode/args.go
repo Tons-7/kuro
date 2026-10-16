@@ -48,6 +48,7 @@ func (s *Session) args(offset float64, startSegment int) []string {
 		"-readrate_initial_burst", fmt.Sprintf("%.0f", initialBurstSeconds),
 	)
 
+	a = append(a, reconnectArgs(s.Source)...)
 	a = append(a,
 		"-i", s.Source,
 		"-map", "0:v:0",
@@ -140,6 +141,19 @@ func (s *Session) audioArgs() []string {
 		return a
 	}
 	return []string{"-c:a", "aac", "-b:a", "192k", "-ac", "2"}
+}
+
+// reconnectArgs re-asks a cut HTTP stream from where it stopped; other inputs reject them (FFmpeg 3 and up).
+func reconnectArgs(source string) []string {
+	if !remote(source) {
+		return nil
+	}
+	return []string{"-reconnect", "1", "-reconnect_delay_max", "10"}
+}
+
+// remote: read over HTTP, as the engine's stream of a download is; it can be cut short and read again.
+func remote(source string) bool {
+	return strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")
 }
 
 func usesHardware(codec string) bool {

@@ -1,6 +1,6 @@
 // Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/kuro-release-check.
 //   node scripts/release-check.mjs [only.mjs …]    env: LANES=4, SKIP_BUILD=1, SKIP_GO=1
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -66,12 +66,24 @@ const checks = only.length ? only.map((name) => CHECKS.find(([c]) => c === name)
 const LANES = Number(process.env.LANES ?? 4)
 const failed = []
 
-const step = (name, cmd, cwd) => {
-  console.log(`\n▶ ${name}`)
-  const ok = spawnSync(cmd, [], { cwd, shell: true, stdio: 'inherit' }).status === 0
-  if (!ok) failed.push(name)
-  return ok
-}
+// A step shows as it runs and is kept in the logs too: a flaky Go test scrolled away before anyone read it.
+const step = (name, cmd, cwd) =>
+  new Promise((done) => {
+    console.log(`\n▶ ${name}`)
+    const child = spawn(cmd, [], { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const log = createWriteStream(join(logs, `${name.replaceAll(' ', '-')}.log`))
+    for (const out of [child.stdout, child.stderr]) {
+      out.on('data', (chunk) => {
+        process.stdout.write(chunk)
+        log.write(chunk)
+      })
+    }
+    child.on('close', (code) => {
+      log.end()
+      if (code !== 0) failed.push(name)
+      done(code === 0)
+    })
+  })
 
 function runCheck([name, env = {}], port) {
   return new Promise((done) => {
@@ -96,18 +108,18 @@ function runCheck([name, env = {}], port) {
 rmSync(logs, { recursive: true, force: true })
 mkdirSync(logs, { recursive: true })
 
-if (!only.length && process.env.SKIP_GO !== '1') step('go vet', 'go vet ./...', repo) && step('go test', 'go test ./...', repo)
-if (!only.length) step('format helpers', 'node scripts/format-check.mjs', webDir)
-if (!only.length) step('release notes', 'node scripts/notes-check.mjs', webDir)
+if (!only.length && process.env.SKIP_GO !== '1') (await step('go vet', 'go vet ./...', repo)) && (await step('go test', 'go test ./...', repo))
+if (!only.length) await step('format helpers', 'node scripts/format-check.mjs', webDir)
+if (!only.length) await step('release notes', 'node scripts/notes-check.mjs', webDir)
 
 let built = process.env.SKIP_BUILD === '1'
 if (!built) {
   const exe = join(tmpdir(), 'kuro-e2e-bin', process.platform === 'win32' ? 'kuro.exe' : 'kuro')
-  built = step('web build', 'npm run build', webDir) && step('server build', `go build -o "${exe}" ./cmd/kuro`, repo)
+  built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build -o "${exe}" ./cmd/kuro`, repo))
 }
 
 // The updater end to end on two real builds; its own ports, so it never meets a lane.
-if (built && !only.length) step('self-update', 'node scripts/update-check.mjs', webDir)
+if (built && !only.length) await step('self-update', 'node scripts/update-check.mjs', webDir)
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)

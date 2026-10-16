@@ -86,6 +86,9 @@ func TestSearchUsesSortedListing(t *testing.T) {
 	if first.Title != "[SubsPlease] Sousou no Frieren - 10 (1080p) [7D35515E].mkv" {
 		t.Errorf("title = %q; the comments anchor should not win", first.Title)
 	}
+	if len(first.Trackers) != 1 || first.Trackers[0] != "http://x" {
+		t.Errorf("trackers %v; the magnet's own should be kept", first.Trackers)
+	}
 	if first.InfoHash != "abcdef0123456789abcdef0123456789abcdef01" {
 		t.Errorf("infohash = %q", first.InfoHash)
 	}

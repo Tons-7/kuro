@@ -74,7 +74,8 @@ func (e *Engine) census(en *entry, now time.Time) {
 	st := t.Stats()
 	e.log.Info("download peers changed", "name", t.Name(),
 		"connected", st.ActivePeers, "seeders", st.ConnectedSeeders,
-		"known", st.TotalPeers+st.PendingPeers, "halfOpen", st.HalfOpenPeers,
+		// TotalPeers already counts the connected, half-open and waiting addresses.
+		"known", st.TotalPeers, "waiting", st.PendingPeers, "halfOpen", st.HalfOpenPeers,
 		"joined", len(joined), "left", len(left),
 		"joinedFrom", firstFew(joined), "leftFrom", firstFew(left))
 }

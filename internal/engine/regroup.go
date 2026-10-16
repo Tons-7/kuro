@@ -3,8 +3,8 @@ package engine
 import (
 	"time"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
+	"kuro/internal/bt"
+	"kuro/internal/bt/metainfo"
 )
 
 // Vars so tests need not wait.
@@ -19,24 +19,24 @@ var (
 
 // remembered is a peer a torrent was connected to, and when it was last seen.
 type remembered struct {
-	info atorrent.PeerInfo
+	info bt.PeerInfo
 	seen time.Time
 }
 
-// connected is the torrent's peers now; KnownSwarm reads anacrolix's maps unlocked and can crash the process.
-func connected(t *atorrent.Torrent) []atorrent.PeerInfo {
+// connected is the torrent's peers now; KnownSwarm also lists ones only heard of.
+func connected(t *bt.Torrent) []bt.PeerInfo {
 	conns := t.PeerConns()
-	out := make([]atorrent.PeerInfo, 0, len(conns))
+	out := make([]bt.PeerInfo, 0, len(conns))
 	for _, c := range conns {
 		if c.RemoteAddr != nil {
-			out = append(out, atorrent.PeerInfo{Addr: c.RemoteAddr, Source: c.Discovery})
+			out = append(out, bt.PeerInfo{Addr: c.RemoteAddr, Source: c.Discovery})
 		}
 	}
 	return out
 }
 
 // remember notes the torrent's peers; when full, the one seen longest ago makes way. Caller holds e.mu.
-func (e *Engine) remember(hash metainfo.Hash, peers []atorrent.PeerInfo, now time.Time) {
+func (e *Engine) remember(hash metainfo.Hash, peers []bt.PeerInfo, now time.Time) {
 	if len(peers) == 0 {
 		return
 	}
@@ -63,7 +63,7 @@ func (e *Engine) remember(hash metainfo.Hash, peers []atorrent.PeerInfo, now tim
 			delete(known, oldest)
 		}
 		// As an address to try, not as trusted.
-		known[key] = remembered{info: atorrent.PeerInfo{Addr: p.Addr, Source: p.Source}, seen: now}
+		known[key] = remembered{info: bt.PeerInfo{Addr: p.Addr, Source: p.Source}, seen: now}
 	}
 }
 
@@ -81,7 +81,7 @@ func (en *entry) tryAgain(now time.Time) bool {
 	return true
 }
 
-// regroup retries a starved torrent's remembered peers (anacrolix forgets them), doubling the wait each time.
+// regroup retries a starved torrent's remembered peers (bt forgets them), doubling the wait each time.
 func (e *Engine) regroup(en *entry, now time.Time) {
 	t := en.t
 	if t.Info() == nil {
@@ -101,7 +101,7 @@ func (e *Engine) regroup(en *entry, now time.Time) {
 	}
 	tries := en.regroups
 	due := en.tryAgain(now)
-	var again []atorrent.PeerInfo
+	var again []bt.PeerInfo
 	if due {
 		for _, r := range e.known[hash] {
 			again = append(again, r.info)

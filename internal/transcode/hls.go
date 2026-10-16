@@ -1,9 +1,11 @@
 package transcode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"kuro/internal/sound"
 	"log/slog"
 	"os"
@@ -75,6 +77,8 @@ type Session struct {
 	liveSubs bool
 	// The last pass to end on its own: its subtitle process may still be finishing.
 	finished *run
+	// ended: the last pass to finish, its cut tail dropped if it stopped short, so every file it left is whole.
+	ended *run
 }
 
 // run is one encoder process: what it was started from and when it has gone,
@@ -586,7 +590,7 @@ func (s *Session) awaitFile(ctx context.Context, path string, deadline <-chan ti
 // WaitSegment returns once a segment exists, starting or moving the encoder if needed.
 func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration) (string, error) {
 	path := s.SegmentPath(n)
-	if fileReady(path) {
+	if segmentReady(path) {
 		s.touch()
 		return path, nil
 	}
@@ -604,15 +608,15 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 	for {
 		s.advanceHead()
 
-		// A segment is only known complete once the next one appears, the
-		// encoder has exited, or it is the last one the playlist advertises.
-		if fileReady(path) && (s.nextStarted(n) || n >= s.Segments-1 || !s.running()) {
+		// Complete once the next appears, it is the last advertised, or a pass that read to the end wrote it.
+		ready := segmentReady(path)
+		if ready && (s.nextStarted(n) || n >= s.Segments-1 || s.wroteWhole(path)) {
 			s.touch()
 			return path, nil
 		}
 
-		// The pass ended short (copy cuts on keyframes); one pass aimed at the segment writes its tail.
-		if !s.running() && !fileReady(path) {
+		// The pass ended short (copy cuts on keyframes, or a read failed); one pass aimed at the segment writes it.
+		if !s.running() {
 			if restarted {
 				return "", fmt.Errorf("segment %d was not produced", n)
 			}
@@ -654,6 +658,39 @@ func (s *Session) produced() []string {
 func fileReady(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Size() > 0
+}
+
+// cutShort: a stream stopped before its end; a file on disk can't arrive later, so its pass stands as it ended.
+func cutShort(source, detail string) bool { return remote(source) && endedEarly(detail) }
+
+// endedEarly: ffmpeg's word that its input stopped before its end (a cut HTTP body, a failed read).
+func endedEarly(detail string) bool {
+	for _, sign := range []string{"ends prematurely", "Error during demuxing", "I/O error", "Input/output error"} {
+		if strings.Contains(detail, sign) {
+			return true
+		}
+	}
+	return false
+}
+
+// segmentReady: a segment holding media, not the bare styp a pass cut off at a segment's start leaves.
+func segmentReady(path string) bool {
+	f, err := openShared(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(f, head)
+	return bytes.Contains(head[:n], []byte("moof"))
+}
+
+// wroteWhole: path came from the last finished pass, which left only whole files.
+func (s *Session) wroteWhole(path string) bool {
+	s.mu.Lock()
+	r := s.ended
+	s.mu.Unlock()
+	return r != nil && r.wrote(path)
 }
 
 func (s *Session) running() bool {
@@ -698,6 +735,8 @@ func (s *Session) nextStarted(n int) bool {
 // ensureHead starts or moves the encoder when segment n is out of the current
 // pass's reach (see shouldRestart). Finished segments never get here.
 func (s *Session) ensureHead(n int) error {
+	// A stale head reads a pass waiting on data as left behind, and restarting it drops a whole segment.
+	s.advanceHead()
 	s.mu.Lock()
 	active := s.run != nil
 	from, to := s.headFrom, s.headTo
@@ -793,8 +832,8 @@ func (s *Session) startLocked(from int) error {
 
 	// The pass just killed was most likely half way through a segment, and a
 	// file that exists but is short is served as though it were whole.
-	if head, killed := s.stop(); killed {
-		s.dropTail(head)
+	if killed := s.stop(); killed != nil {
+		s.dropTail(killed)
 	}
 
 	// Segments an earlier pass left from here on would read as this pass's
@@ -866,6 +905,12 @@ func (s *Session) await(r *run) {
 		if detail != "" {
 			s.log.Warn("encoder output", "session", s.ID, "detail", detail)
 		}
+		// ffmpeg exits cleanly on a stream cut short too, its last segment short; the next ask rewrites it.
+		if cutShort(s.Source, detail) {
+			s.log.Warn("encoder ended before the source did", "session", s.ID, "fromSegment", r.from)
+			s.dropTail(r)
+		}
+		s.ended = r
 		return
 	}
 	r.stopSubtitles()
@@ -874,8 +919,10 @@ func (s *Session) await(r *run) {
 
 	retry := s.canFallBack(r.from, detail)
 	// A crash mid-segment leaves a short file that would be served as whole.
-	s.dropTail(r.from)
+	s.dropTail(r)
 	if !retry || s.closed {
+		// Its cut tail gone, what it wrote is whole; a retry instead rewrites from where it began.
+		s.ended = r
 		return
 	}
 
@@ -933,13 +980,13 @@ func encoderInitFailed(detail string) bool {
 	return false
 }
 
-// dropTail removes the killed pass's last segment: the top of the run from `from`, not one past a gap.
-func (s *Session) dropTail(from int) {
-	last := from - 1
-	for n := from; fileReady(s.SegmentPath(n)); n++ {
+// dropTail removes the last segment r wrote, likely cut short; an older pass's files right after it stay.
+func (s *Session) dropTail(r *run) {
+	last := -1
+	for n := r.from; r.wrote(s.SegmentPath(n)); n++ {
 		last = n
 	}
-	if last >= from {
+	if last >= 0 {
 		os.Remove(s.SegmentPath(last))
 	}
 }
@@ -959,11 +1006,11 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, " | ")
 }
 
-// stop kills the running pass and returns its start segment, once the process has gone.
-func (s *Session) stop() (head int, killed bool) {
+// stop kills the running pass and returns it, nil when none ran, once the process has gone.
+func (s *Session) stop() *run {
 	s.mu.Lock()
 	r := s.run
-	s.run = nil
+	s.run, s.ended = nil, nil
 	if done := s.finished; done != nil {
 		done.stopSubtitles()
 		s.finished = nil
@@ -971,7 +1018,7 @@ func (s *Session) stop() (head int, killed bool) {
 	s.mu.Unlock()
 
 	if r == nil {
-		return 0, false
+		return nil
 	}
 	r.cmd.Process.Kill()
 	r.stopSubtitles()
@@ -979,5 +1026,5 @@ func (s *Session) stop() (head int, killed bool) {
 	case <-r.exited:
 	case <-time.After(3 * time.Second):
 	}
-	return r.from, true
+	return r
 }

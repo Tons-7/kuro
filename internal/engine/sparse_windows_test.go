@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/sys/windows"
+	"kuro/internal/bt/metainfo"
+	"kuro/internal/bt/storage"
 	"syscall"
 	"unsafe"
 )

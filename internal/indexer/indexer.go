@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,8 @@ type Torrent struct {
 	Published    time.Time `json:"published"`
 	Link         string    `json:"link"`
 	Indexer      string    `json:"indexer"`
+	// Trackers: the release's own, from its magnet, where most of its swarm announces.
+	Trackers []string `json:"trackers,omitempty"`
 }
 
 type Query struct {
@@ -58,13 +61,16 @@ type Source interface {
 	Search(ctx context.Context, q Query) ([]Torrent, error)
 }
 
-// Public trackers, added because a feed carries only an infohash and a magnet has to be rebuilt from it.
+// Public trackers, after the release's own: a feed may carry only an infohash.
 var trackers = []string{
 	"udp://open.stealth.si:80/announce",
 	"udp://tracker.opentrackr.org:1337/announce",
 	"udp://exodus.desync.com:6969/announce",
 	"udp://tracker.torrent.eu.org:451/announce",
 }
+
+// nyaaTracker is where Nyaa's and Sukebei's swarms announce first; the RSS feed names no tracker at all.
+const nyaaTracker = "http://nyaa.tracker.wf:7777/announce"
 
 func (t Torrent) Magnet() string {
 	if t.InfoHash == "" {
@@ -75,10 +81,31 @@ func (t Torrent) Magnet() string {
 	if t.Title != "" {
 		fmt.Fprintf(&b, "&dn=%s", url.QueryEscape(t.Title))
 	}
-	for _, tr := range trackers {
+	var first []string
+	if t.Indexer == "nyaa" {
+		first = []string{nyaaTracker}
+	}
+	seen := map[string]bool{}
+	// A new slice: appending to t.Trackers could write into its spare room while another magnet is built.
+	for _, tr := range slices.Concat(first, t.Trackers, trackers) {
+		if tr == "" || seen[tr] {
+			continue
+		}
+		seen[tr] = true
 		fmt.Fprintf(&b, "&tr=%s", url.QueryEscape(tr))
 	}
 	return b.String()
+}
+
+// trackersOf reads a magnet's tr= trackers, in its order.
+func trackersOf(magnet string) []string {
+	_, query, ok := strings.Cut(magnet, "?")
+	if !ok {
+		return nil
+	}
+	// A bad part elsewhere (a raw % in the name) fails the parse but not the trackers it read.
+	values, _ := url.ParseQuery(query)
+	return values["tr"]
 }
 
 // Multi returns results from every source, deduplicated by infohash. A failing

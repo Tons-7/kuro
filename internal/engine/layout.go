@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
+	"kuro/internal/bt"
+	"kuro/internal/bt/metainfo"
 )
 
 // layout is where each torrent's files live: under its name, or with its hash appended when another
@@ -60,7 +60,7 @@ func (l *layout) forget(hash metainfo.Hash) {
 }
 
 // folder is where a torrent's files go: the cache for one file, a folder named after the torrent for several.
-func (l *layout) folder(t *atorrent.Torrent) string {
+func (l *layout) folder(t *bt.Torrent) string {
 	info := t.Info()
 	if info == nil || !info.IsDir() {
 		return filepath.Clean(l.base)
@@ -68,7 +68,7 @@ func (l *layout) folder(t *atorrent.Torrent) string {
 	return filepath.Join(l.base, l.top(info.BestName(), t.InfoHash()))
 }
 
-func (l *layout) filePath(t *atorrent.Torrent, f *atorrent.File) string {
+func (l *layout) filePath(t *bt.Torrent, f *bt.File) string {
 	info := t.Info()
 	if !info.IsDir() {
 		return filepath.Join(l.base, l.top(info.BestName(), t.InfoHash()))
@@ -77,7 +77,7 @@ func (l *layout) filePath(t *atorrent.Torrent, f *atorrent.File) string {
 }
 
 // shared reports a path another held torrent also maps to, which a delete must leave alone.
-func (l *layout) shared(path string, hash metainfo.Hash, others []*atorrent.Torrent) bool {
+func (l *layout) shared(path string, hash metainfo.Hash, others []*bt.Torrent) bool {
 	for _, o := range others {
 		if o.InfoHash() == hash || o.Info() == nil {
 			continue

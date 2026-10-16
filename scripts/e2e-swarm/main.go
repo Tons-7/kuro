@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/bencode"
-	"github.com/anacrolix/torrent/metainfo"
+	"kuro/internal/bt"
+	"kuro/internal/bt/bencode"
+	"kuro/internal/bt/metainfo"
 )
 
 type seeded struct {
@@ -51,7 +51,7 @@ func run(src, dir, title string, count, listen int, peer, httpAddr string) error
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	cfg := atorrent.NewDefaultClientConfig()
+	cfg := bt.NewDefaultClientConfig()
 	cfg.DataDir = dir
 	cfg.Seed = true
 	cfg.NoDHT = true
@@ -60,13 +60,13 @@ func run(src, dir, title string, count, listen int, peer, httpAddr string) error
 	cfg.DisableIPv6 = true
 	cfg.NoDefaultPortForwarding = true
 	cfg.ListenPort = listen
-	cl, err := atorrent.NewClient(cfg)
+	cl, err := bt.NewClient(cfg)
 	if err != nil {
 		return fmt.Errorf("seeder: %w", err)
 	}
 	defer cl.Close()
 
-	var torrents []*atorrent.Torrent
+	var torrents []*bt.Torrent
 	var listing []seeded
 	for i := 1; i <= count; i++ {
 		name := fmt.Sprintf("[E2E] %s - %02d [1080p]", title, i)
@@ -104,7 +104,7 @@ func run(src, dir, title string, count, listen int, peer, httpAddr string) error
 	go func() {
 		for {
 			for _, t := range torrents {
-				t.AddPeers([]atorrent.PeerInfo{{Addr: addr, Trusted: true}})
+				t.AddPeers([]bt.PeerInfo{{Addr: addr, Trusted: true}})
 			}
 			time.Sleep(1500 * time.Millisecond)
 		}

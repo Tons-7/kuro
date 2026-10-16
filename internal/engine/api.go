@@ -36,7 +36,7 @@ func (e *Engine) guard(addr string, next http.Handler) http.Handler {
 func (e *Engine) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]any{"engine": "anacrolix"})
+		reply(w, map[string]any{"engine": "kuro"})
 	})
 	mux.HandleFunc("GET /torrents", e.started(e.handleList))
 	mux.HandleFunc("POST /torrents", e.started(e.handleAdd))
@@ -161,11 +161,13 @@ func (e *Engine) handleStream(w http.ResponseWriter, r *http.Request, en *entry)
 		return
 	}
 	f := files[idx]
-	reader := f.NewReader()
-	defer reader.Close()
-	reader.SetContext(r.Context())
-	reader.SetReadahead(streamReadahead)
-	reader.SetResponsive()
+	inner := f.NewReader()
+	defer inner.Close()
+	inner.SetContext(r.Context())
+	inner.SetReadahead(streamReadahead)
+	inner.SetResponsive()
+	reader := &watched{Reader: inner, e: e, en: en, offset: f.Offset(), pieceLen: en.t.Info().PieceLength}
+	defer reader.done()
 
 	name := filepath.Base(fileName(en.t, f))
 	// Set, so ServeContent doesn't read the head to sniff it on every seek.

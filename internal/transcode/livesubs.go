@@ -29,6 +29,9 @@ func (s *Session) subtitleArgs(offset float64, from int) []string {
 	a = append(a,
 		"-readrate", fmt.Sprintf("%.1f", readRate),
 		"-readrate_initial_burst", fmt.Sprintf("%.0f", initialBurstSeconds),
+	)
+	a = append(a, reconnectArgs(s.Source)...)
+	a = append(a,
 		"-i", s.Source,
 		// The episode's own times, as in the pass: lines are placed by them.
 		"-copyts",

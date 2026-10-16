@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	atorrent "github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
+	"kuro/internal/bt"
+	"kuro/internal/bt/metainfo"
 
 	"kuro/internal/torrent"
 )
@@ -26,7 +26,7 @@ func hashOf(magnet string) (metainfo.Hash, []string, error) {
 	return m.InfoHash, m.Trackers, nil
 }
 
-func (e *Engine) awaitInfo(ctx context.Context, t *atorrent.Torrent) error {
+func (e *Engine) awaitInfo(ctx context.Context, t *bt.Torrent) error {
 	select {
 	case <-t.GotInfo():
 		return nil
@@ -63,6 +63,9 @@ func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, er
 	}
 	in.expires = time.Now().Add(inspectionTTL)
 	e.mu.Unlock()
+	if !ok {
+		e.refocus()
+	}
 
 	if err := e.awaitInfo(ctx, in.t); err != nil {
 		return torrent.Detail{}, err
@@ -72,7 +75,7 @@ func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, er
 	en, managed := e.byHash[hash]
 	if !managed {
 		for _, f := range in.t.Files() {
-			f.SetPriority(atorrent.PiecePriorityNone)
+			f.SetPriority(bt.PiecePriorityNone)
 		}
 	}
 	e.mu.Unlock()
@@ -98,7 +101,7 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	e.mu.Lock()
 	en, ok := e.byHash[hash]
 	if !ok {
-		var t *atorrent.Torrent
+		var t *bt.Torrent
 		if in, inspected := e.inspected[hash]; inspected {
 			t = in.t
 			delete(e.inspected, hash)
@@ -111,6 +114,9 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 		en = e.track(t, trackers)
 	}
 	e.mu.Unlock()
+	if !ok {
+		e.refocus()
+	}
 
 	if err := e.awaitInfo(ctx, en.t); err != nil {
 		return nil, err
@@ -126,12 +132,13 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	}
 	e.mu.Unlock()
 	e.apply(en)
+	e.refocus()
 	e.saveSession()
 	return en, nil
 }
 
 // forgetMissing clears records of deleted files' pieces, or a regrown file would pass zero-filled holes.
-func (e *Engine) forgetMissing(t *atorrent.Torrent) {
+func (e *Engine) forgetMissing(t *bt.Torrent) {
 	for _, f := range t.Files() {
 		if _, err := os.Stat(e.names.filePath(t, f)); err == nil {
 			continue
@@ -143,9 +150,8 @@ func (e *Engine) forgetMissing(t *atorrent.Torrent) {
 }
 
 // track registers a torrent under a new id. Caller holds the lock.
-func (e *Engine) track(t *atorrent.Torrent, trackers []string) *entry {
-	// The stall clock starts now: an inspected torrent already has peers and a zero start fired it at once.
-	en := &entry{id: e.nextID, t: t, trackers: trackers, selected: map[int]bool{}, quietSince: time.Now()}
+func (e *Engine) track(t *bt.Torrent, trackers []string) *entry {
+	en := &entry{id: e.nextID, t: t, trackers: trackers, selected: map[int]bool{}}
 	e.nextID++
 	e.byID[en.id] = en
 	e.byHash[t.InfoHash()] = en
@@ -165,10 +171,11 @@ func (e *Engine) apply(en *entry) {
 	paused := en.paused
 	e.mu.Unlock()
 	for i, f := range en.t.Files() {
-		if selected[i] {
-			f.SetPriority(atorrent.PiecePriorityNormal)
+		// Paused wants nothing: a torrent wanting pieces keeps dialing peers, taking a download's budget.
+		if selected[i] && !paused {
+			f.SetPriority(bt.PiecePriorityNormal)
 		} else {
-			f.SetPriority(atorrent.PiecePriorityNone)
+			f.SetPriority(bt.PiecePriorityNone)
 		}
 	}
 	if paused {
@@ -176,6 +183,7 @@ func (e *Engine) apply(en *entry) {
 	} else {
 		en.t.AllowDataDownload()
 	}
+	e.quieten(en)
 }
 
 func (e *Engine) setPaused(en *entry, paused bool) {
@@ -183,6 +191,7 @@ func (e *Engine) setPaused(en *entry, paused bool) {
 	en.paused = paused
 	e.mu.Unlock()
 	e.apply(en)
+	e.refocus()
 	e.saveSession()
 }
 
@@ -210,6 +219,7 @@ func (e *Engine) remove(en *entry, data bool) error {
 	folder := e.names.folder(en.t)
 	en.t.Drop()
 	<-en.t.Closed()
+	e.refocus()
 
 	os.Remove(filepath.Join(e.opts.SessionDir, hash.HexString()+".torrent"))
 	e.saveSession()
@@ -238,10 +248,10 @@ func (e *Engine) remove(en *entry, data bool) error {
 }
 
 // held lists the torrents the engine manages.
-func (e *Engine) held() []*atorrent.Torrent {
+func (e *Engine) held() []*bt.Torrent {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make([]*atorrent.Torrent, 0, len(e.byID))
+	out := make([]*bt.Torrent, 0, len(e.byID))
 	for _, en := range e.byID {
 		out = append(out, en.t)
 	}
@@ -263,12 +273,12 @@ func removeEmptyDirs(dir string) {
 }
 
 // fileName is a file's path inside the torrent, "/"-joined.
-func fileName(t *atorrent.Torrent, f *atorrent.File) string {
+func fileName(t *bt.Torrent, f *bt.File) string {
 	parts := components(t, f)
 	return strings.Join(parts, "/")
 }
 
-func components(t *atorrent.Torrent, f *atorrent.File) []string {
+func components(t *bt.Torrent, f *bt.File) []string {
 	info := t.Info()
 	if !info.IsDir() {
 		return []string{info.BestName()}
@@ -284,7 +294,7 @@ func (e *Engine) detail(en *entry) torrent.Detail {
 	return detailOf(en.t, e.names, selected)
 }
 
-func detailOf(t *atorrent.Torrent, names *layout, selected map[int]bool) torrent.Detail {
+func detailOf(t *bt.Torrent, names *layout, selected map[int]bool) torrent.Detail {
 	d := torrent.Detail{InfoHash: t.InfoHash().HexString(), Name: t.Name(), OutputFolder: names.folder(t)}
 	if t.Info() == nil {
 		return d
@@ -326,7 +336,7 @@ func (e *Engine) stats(en *entry) torrent.Stats {
 				s.TotalBytes += f.Length()
 			}
 		}
-		s.Finished = s.TotalBytes > 0 && s.ProgressBytes >= s.TotalBytes
+		s.Finished = s.TotalBytes > 0 && s.ProgressBytes >= s.TotalBytes && verified(en.t, selected)
 	}
 
 	ts := en.t.Stats()
@@ -355,7 +365,22 @@ func (e *Engine) stats(en *entry) torrent.Stats {
 }
 
 // fileRanges merges a file's complete pieces into the stretches of it that are on disk.
-func fileRanges(f *atorrent.File) torrent.FileRanges {
+// verified: the selected files' pieces all passed their hash; BytesCompleted also counts chunks awaiting one.
+func verified(t *bt.Torrent, selected map[int]bool) bool {
+	for i, f := range t.Files() {
+		if !selected[i] {
+			continue
+		}
+		for _, p := range f.State() {
+			if !p.Complete {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func fileRanges(f *bt.File) torrent.FileRanges {
 	out := torrent.FileRanges{Length: f.Length(), Ranges: []torrent.ByteRange{}}
 	var at int64
 	for _, p := range f.State() {

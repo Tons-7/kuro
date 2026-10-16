@@ -142,7 +142,8 @@ func (t *TokyoTosho) torrent(item tokyoItem) (Torrent, bool) {
 	if magnet == nil {
 		return Torrent{}, false
 	}
-	hash := infoHashFromMagnet(html.UnescapeString(magnet[1]))
+	link := html.UnescapeString(magnet[1])
+	hash := infoHashFromMagnet(link)
 	if hash == "" {
 		return Torrent{}, false
 	}
@@ -154,6 +155,7 @@ func (t *TokyoTosho) torrent(item tokyoItem) (Torrent, bool) {
 		Published: parseTime(item.PubDate),
 		Link:      strings.TrimSpace(item.GUID),
 		Indexer:   t.Name(),
+		Trackers:  trackersOf(link),
 	}
 	if m := tokyoSize.FindStringSubmatch(item.Description); m != nil {
 		out.Size = ParseSize(m[1])

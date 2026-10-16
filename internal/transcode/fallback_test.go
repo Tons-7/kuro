@@ -154,13 +154,20 @@ func TestDetectEncoderSkipsOneThatCannotEncode(t *testing.T) {
 // being served as whole. Only the last one a pass wrote can be short.
 func TestDropTailRemovesOnlyTheLastSegmentOfThePass(t *testing.T) {
 	s := &Session{dir: t.TempDir()}
+	// An earlier pass's segments, right after where this one will stop.
+	for _, n := range []int{13, 14} {
+		os.WriteFile(s.SegmentPath(n), []byte("x"), 0o644)
+		old := time.Now().Add(-time.Hour)
+		os.Chtimes(s.SegmentPath(n), old, old)
+	}
+	r := &run{from: 10, began: time.Now().Add(-time.Minute)}
 	for _, n := range []int{3, 10, 11, 12} {
 		os.WriteFile(s.SegmentPath(n), []byte("x"), 0o644)
 	}
 
-	s.dropTail(10)
+	s.dropTail(r)
 
-	for _, n := range []int{3, 10, 11} {
+	for _, n := range []int{3, 10, 11, 13, 14} {
 		if !fileReady(s.SegmentPath(n)) {
 			t.Errorf("segment %d should have been kept", n)
 		}
